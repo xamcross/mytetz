@@ -1,0 +1,29 @@
+# Brainstorming companion mockups
+.superpowers/
+
+# Gradle / Kotlin
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+*.class
+
+# Angular / Node
+node_modules/
+dist/
+.angular/
+*.tsbuildinfo
+
+# Secrets & local config
+.env
+.env.*
+!.env.example
+*.local
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
