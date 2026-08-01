@@ -72,7 +72,7 @@ class ExplanationValidatorTest {
 
         // ... and the length helper has to be honest for the boundary tests to mean anything:
         // the right length, AND trim-stable, or it probes a boundary one off from the named one.
-        listOf(39, 40, 99, 100, 120, 121, 600, 601).forEach {
+        listOf(24, 25, 99, 100, 120, 121, 600, 601).forEach {
             assertEquals(it, bodyOfLength(it).length, "bodyOfLength($it) is the wrong length")
             assertEquals(bodyOfLength(it), bodyOfLength(it).trim(), "bodyOfLength($it) is not trim-stable")
         }
@@ -99,10 +99,29 @@ class ExplanationValidatorTest {
 
     @Test
     fun `rejects at the minimum length boundary`() {
-        // 40 in, 39 out. Without both sides a `<` mutated to `<=` is invisible, and so is a
+        // 25 in, 24 out. Without both sides a `<` mutated to `<=` is invisible, and so is a
         // threshold that quietly drifted.
-        assertEquals(bodyOfLength(40), valid(bodyOfLength(40)))
-        assertContains(invalid(bodyOfLength(39)), "short", ignoreCase = true)
+        assertEquals(bodyOfLength(25), valid(bodyOfLength(25)))
+        assertContains(invalid(bodyOfLength(24)), "short", ignoreCase = true)
+    }
+
+    @Test
+    fun `accepts a correct answer that is simply terse`() {
+        // Why the floor is 25 and not 40. Both of these are complete, correct answers of exactly
+        // the shape the system prompt asks for, and both were rejected by the original 40. That
+        // is the costly direction: nothing in the retry path asks the model to write at greater
+        // length, so the retry produces another short answer and the learner sees a question the
+        // model answered perfectly well fail over and over.
+        assertEquals(25, "Gravity curves spacetime.".length)
+        assertEquals(38, "Photosynthesis makes sugar from light.".length)
+
+        valid("Gravity curves spacetime.")
+        valid("Photosynthesis makes sugar from light.")
+
+        // The floor still does its actual job: empty responses, single words and fragments.
+        invalid("Yes.")
+        invalid("Gravity.")
+        invalid("Gravity curves")
     }
 
     @Test
@@ -114,9 +133,9 @@ class ExplanationValidatorTest {
 
     @Test
     fun `length is measured on the trimmed body, so padding buys nothing`() {
-        // Measured on the raw string, four spaces of padding would lift a 39-character body over
+        // Measured on the raw string, four spaces of padding would lift a 24-character body over
         // the minimum and shove a legal 600-character body over the maximum. Both are wrong.
-        invalid("  ${bodyOfLength(39)}  ")
+        invalid("  ${bodyOfLength(24)}  ")
         assertEquals(600, valid("  ${bodyOfLength(600)}  ").length)
     }
 
@@ -131,9 +150,9 @@ class ExplanationValidatorTest {
         assertIs<ValidationResult.Valid>(tight.validate(bodyOfLength(120), "end_turn"))
         assertIs<ValidationResult.Invalid>(tight.validate(bodyOfLength(121), "end_turn"))
 
-        // ... and the defaults really are 40 and 600.
-        invalid(bodyOfLength(39))
-        valid(bodyOfLength(40))
+        // ... and the defaults really are 25 and 600.
+        invalid(bodyOfLength(24))
+        valid(bodyOfLength(25))
         valid(bodyOfLength(600))
         invalid(bodyOfLength(601))
     }

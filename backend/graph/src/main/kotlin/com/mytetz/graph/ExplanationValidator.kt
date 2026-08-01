@@ -16,8 +16,16 @@ sealed interface ValidationResult {
  * is permanent. Every rule below therefore errs toward rejection, and the checks are ordered so
  * that the cheapest, most certain evidence of a bad generation is consulted first.
  */
+/**
+ * [minChars] defends against empty responses, single-word answers and truncated fragments — and
+ * 25 catches every one of those. It is deliberately not higher: "Gravity curves spacetime." is 25
+ * characters and is a correct, complete answer of exactly the shape the system prompt asks for.
+ * Nothing in the retry path asks the model to write at greater length, so a floor that rejects a
+ * good terse answer makes the retry reproduce a similarly short one, and the learner sees a
+ * repeated failure on a question the model answered perfectly well.
+ */
 class ExplanationValidator(
-    private val minChars: Int = 40,
+    private val minChars: Int = 25,
     private val maxChars: Int = 600,
 ) {
 

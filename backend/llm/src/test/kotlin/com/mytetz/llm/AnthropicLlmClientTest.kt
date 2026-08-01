@@ -17,6 +17,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -59,11 +60,18 @@ class AnthropicLlmClientTest {
 
     private fun sse(vararg blocks: String) = blocks.joinToString("\n\n", postfix = "\n\n")
 
-    /** Starts an SSE endpoint on a free loopback port; [respond] writes the body. */
-    private fun sseServer(respond: (OutputStream) -> Unit): HttpServer =
+    /**
+     * Starts an SSE endpoint on a free loopback port; [respond] writes the body. [onRequest]
+     * receives the outbound request body, which is how a test can assert on what was *sent*
+     * rather than only on what came back.
+     */
+    private fun sseServer(
+        onRequest: (String) -> Unit = {},
+        respond: (OutputStream) -> Unit,
+    ): HttpServer =
         HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
             createContext("/v1/messages") { exchange ->
-                exchange.requestBody.use { it.readBytes() }
+                onRequest(exchange.requestBody.use { it.readBytes() }.decodeToString())
                 exchange.responseHeaders.add("Content-Type", "text/event-stream")
                 exchange.sendResponseHeaders(200, 0)
                 try {
@@ -122,6 +130,45 @@ class AnthropicLlmClientTest {
             val message = failure.message.orEmpty()
             assertTrue("stop reason" in message, "message should name what was missing, was: $message")
             assertTrue("claude-opus-5" in message, "message should name the model, was: $message")
+        } finally {
+            server.stop(0)
+        }
+    }
+
+    @Test
+    fun `the outbound request sets no stop sequences`() = runBlocking {
+        // ExplanationValidator accepts ONLY "end_turn" and rejects "stop_sequence" as an
+        // unrecognised stop reason. That exclusion is correct precisely because this adapter never
+        // asks for a stop sequence, so the API can never end a completion that way -- but nothing
+        // enforced it. Add one here, even conditionally, and every completion ending on it is
+        // silently discarded as unrecognised: the same permanent-loss failure this gate exists to
+        // prevent, wearing a different value. This test breaks the moment that stops being true.
+        val captured = CompletableDeferred<String>()
+        val server = sseServer(onRequest = { captured.complete(it) }) { out ->
+            out.write(sse(messageStart, contentBlockStart, textDelta("x"), contentBlockStop, messageDelta, messageStop).toByteArray())
+        }
+
+        try {
+            withTimeout(30_000) {
+                AnthropicLlmClient(clientFor(server))
+                    .stream(LlmRequest("SYSTEM-SENTINEL", "USERPROMPT-SENTINEL"))
+                    .toList()
+            }
+            val request = withTimeout(5_000) { captured.await() }
+
+            // Prove the capture is real first. Without this, an empty or unread body would make
+            // the assertion below pass for the wrong reason -- the check would be free.
+            assertTrue("SYSTEM-SENTINEL" in request, "captured no real request body: $request")
+            assertTrue("USERPROMPT-SENTINEL" in request, "captured no real request body: $request")
+
+            // Substring, not an exact field name: this catches "stop_sequences" and "stopSequences"
+            // and any singular spelling the SDK might serialise.
+            assertFalse(
+                request.contains("stop_sequence", ignoreCase = true) ||
+                    request.contains("stopSequence", ignoreCase = true),
+                "the adapter now sets a stop sequence, so ExplanationValidator must stop treating " +
+                    "'stop_sequence' as an unrecognised stop reason. Request was: $request",
+            )
         } finally {
             server.stop(0)
         }
