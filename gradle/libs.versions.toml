@@ -6,7 +6,7 @@ coroutines = "1.10.1"
 serialization = "1.8.0"
 anthropic = "2.34.0"
 logback = "1.5.16"
-testcontainers = "1.20.4"
+testcontainers = "1.21.4"
 
 [libraries]
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
