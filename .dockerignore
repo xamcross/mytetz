@@ -1,0 +1,36 @@
+# Keep the build context small and, above all, keep secrets out of it. Anything
+# listed here is never uploaded to the daemon and so can never end up in a layer.
+
+# --- secrets ---
+.env
+.env.*
+
+# --- version control & editor state ---
+.git
+.gitattributes
+.gitignore
+.github
+.idea
+.vscode
+.superpowers
+
+# --- Gradle / Kotlin build state (the image compiles from source) ---
+.gradle
+.kotlin
+build
+**/build
+
+# --- Node / Angular build state (the frontend stage runs npm ci + ng build itself) ---
+frontend/node_modules
+frontend/dist
+frontend/.angular
+
+# --- docs and local artefacts ---
+docs
+*.docx
+*.log
+
+# --- container config itself ---
+Dockerfile
+.dockerignore
+fly.toml
