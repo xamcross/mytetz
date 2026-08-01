@@ -1,0 +1,17 @@
+# Normalize line endings for text files so a Windows checkout with
+# core.autocrlf=true (or any other local autocrlf setting) can never turn a
+# committed LF script into a CRLF one — that breaks `#!/bin/sh` interpreters
+# on Linux (CI) and in Git Bash.
+* text=auto eol=lf
+
+# Shell scripts must stay LF regardless of platform.
+gradlew text eol=lf
+*.sh text eol=lf
+
+# Windows batch scripts are conventionally CRLF.
+gradlew.bat text eol=crlf
+*.bat text eol=crlf
+
+# Explicit binaries: never let `text=auto` misclassify these.
+*.jar binary
+*.docx binary
