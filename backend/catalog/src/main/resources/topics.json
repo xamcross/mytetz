@@ -1,0 +1,263 @@
+[
+  {
+    "_id": "quantum-physics",
+    "title": "Quantum Physics",
+    "category": "Physics",
+    "summary": "How matter and light behave at and below the scale of atoms.",
+    "aliases": ["quantum mechanics", "quantum theory", "quantum"],
+    "status": "PUBLISHED",
+    "sortWeight": 10
+  },
+  {
+    "_id": "general-relativity",
+    "title": "General Relativity",
+    "category": "Physics",
+    "summary": "Gravity as the curvature of spacetime by mass and energy.",
+    "aliases": ["relativity", "einstein gravity", "curved spacetime"],
+    "status": "PUBLISHED",
+    "sortWeight": 11
+  },
+  {
+    "_id": "special-relativity",
+    "title": "Special Relativity",
+    "category": "Physics",
+    "summary": "Why two people moving differently can disagree about time and distance and both be right.",
+    "aliases": ["relativity", "time dilation", "speed of light"],
+    "status": "PUBLISHED",
+    "sortWeight": 12
+  },
+  {
+    "_id": "thermodynamics",
+    "title": "Thermodynamics",
+    "category": "Physics",
+    "summary": "The rules governing heat and energy, and why some changes can never run backwards.",
+    "aliases": ["heat", "entropy", "laws of thermodynamics"],
+    "status": "PUBLISHED",
+    "sortWeight": 13
+  },
+  {
+    "_id": "microbiology",
+    "title": "Microbiology",
+    "category": "Biology",
+    "summary": "The study of organisms too small to see with the naked eye.",
+    "aliases": ["microbes", "bacteriology", "germs"],
+    "status": "PUBLISHED",
+    "sortWeight": 20
+  },
+  {
+    "_id": "evolution-by-natural-selection",
+    "title": "Evolution by Natural Selection",
+    "category": "Biology",
+    "summary": "How living things change across generations when some inherited traits survive better than others.",
+    "aliases": ["evolution", "natural selection", "darwin"],
+    "status": "PUBLISHED",
+    "sortWeight": 21
+  },
+  {
+    "_id": "genetics",
+    "title": "Genetics",
+    "category": "Biology",
+    "summary": "How the instructions for building a living thing are stored in DNA and passed on to offspring.",
+    "aliases": ["dna", "genes", "heredity"],
+    "status": "PUBLISHED",
+    "sortWeight": 22
+  },
+  {
+    "_id": "neuroscience",
+    "title": "Neuroscience",
+    "category": "Biology",
+    "summary": "How the brain and nervous system turn electrical signals into sensation, movement and thought.",
+    "aliases": ["brain science", "neurobiology", "the brain"],
+    "status": "PUBLISHED",
+    "sortWeight": 23
+  },
+  {
+    "_id": "immunology",
+    "title": "Immunology",
+    "category": "Biology",
+    "summary": "How the body recognises invaders it has never met before and learns to fight them off.",
+    "aliases": ["immune system", "immunity", "antibodies"],
+    "status": "PUBLISHED",
+    "sortWeight": 24
+  },
+  {
+    "_id": "cryptography",
+    "title": "Cryptography",
+    "category": "Computer Science",
+    "summary": "Keeping information secret and verifiable in the presence of adversaries.",
+    "aliases": ["encryption", "ciphers", "codes"],
+    "status": "PUBLISHED",
+    "sortWeight": 30
+  },
+  {
+    "_id": "machine-learning",
+    "title": "Machine Learning",
+    "category": "Computer Science",
+    "summary": "Getting computers to learn patterns from examples instead of being told every rule in advance.",
+    "aliases": ["ai", "artificial intelligence", "neural networks"],
+    "status": "PUBLISHED",
+    "sortWeight": 31
+  },
+  {
+    "_id": "algorithms",
+    "title": "Algorithms",
+    "category": "Computer Science",
+    "summary": "Step-by-step recipes for solving problems, and what makes one of them faster than another.",
+    "aliases": ["algorithm", "computational complexity", "big o"],
+    "status": "PUBLISHED",
+    "sortWeight": 32
+  },
+  {
+    "_id": "game-theory",
+    "title": "Game Theory",
+    "category": "Economics",
+    "summary": "Mathematical models of strategic interaction between rational agents.",
+    "aliases": ["strategic games", "prisoners dilemma", "nash equilibrium"],
+    "status": "PUBLISHED",
+    "sortWeight": 40
+  },
+  {
+    "_id": "supply-and-demand",
+    "title": "Supply and Demand",
+    "category": "Economics",
+    "summary": "How what buyers want and what sellers will part with settle together on a price.",
+    "aliases": ["prices", "markets", "market equilibrium"],
+    "status": "PUBLISHED",
+    "sortWeight": 41
+  },
+  {
+    "_id": "inflation",
+    "title": "Inflation",
+    "category": "Economics",
+    "summary": "Why the same money buys less over time, and what makes that speed up or slow down.",
+    "aliases": ["rising prices", "cost of living", "deflation"],
+    "status": "PUBLISHED",
+    "sortWeight": 42
+  },
+  {
+    "_id": "chemical-bonding",
+    "title": "Chemical Bonding",
+    "category": "Chemistry",
+    "summary": "Why atoms hold on to each other, and how that decides what a substance is like.",
+    "aliases": ["chemical bonds", "covalent bond", "ionic bond"],
+    "status": "PUBLISHED",
+    "sortWeight": 50
+  },
+  {
+    "_id": "the-periodic-table",
+    "title": "The Periodic Table",
+    "category": "Chemistry",
+    "summary": "Why the chemical elements fall into a repeating pattern, and what that pattern lets you predict.",
+    "aliases": ["periodic table", "elements", "mendeleev"],
+    "status": "PUBLISHED",
+    "sortWeight": 51
+  },
+  {
+    "_id": "plate-tectonics",
+    "title": "Plate Tectonics",
+    "category": "Earth Science",
+    "summary": "How the Earth's outer shell drifts in slow-moving slabs that raise mountains and cause earthquakes.",
+    "aliases": ["continental drift", "tectonic plates", "earthquakes"],
+    "status": "PUBLISHED",
+    "sortWeight": 60
+  },
+  {
+    "_id": "climate-systems",
+    "title": "Climate Systems",
+    "category": "Earth Science",
+    "summary": "How air, oceans, land and ice work together to set the long-run weather of the planet.",
+    "aliases": ["climate", "climate change", "global warming"],
+    "status": "PUBLISHED",
+    "sortWeight": 61
+  },
+  {
+    "_id": "black-holes",
+    "title": "Black Holes",
+    "category": "Astronomy",
+    "summary": "Places where gravity is so strong that nothing, not even light, can get back out.",
+    "aliases": ["black hole", "event horizon", "singularity"],
+    "status": "PUBLISHED",
+    "sortWeight": 70
+  },
+  {
+    "_id": "cosmology",
+    "title": "Cosmology",
+    "category": "Astronomy",
+    "summary": "The story of the universe as a whole: how it began, how it grew, and where it is heading.",
+    "aliases": ["big bang", "origin of the universe", "expanding universe"],
+    "status": "PUBLISHED",
+    "sortWeight": 71
+  },
+  {
+    "_id": "probability",
+    "title": "Probability",
+    "category": "Mathematics",
+    "summary": "Measuring how likely something is, so you can reason carefully when you cannot be certain.",
+    "aliases": ["chance", "odds", "randomness"],
+    "status": "PUBLISHED",
+    "sortWeight": 80
+  },
+  {
+    "_id": "stoicism",
+    "title": "Stoicism",
+    "category": "Philosophy",
+    "summary": "An ancient Greek and Roman practice of separating what you control from what you do not.",
+    "aliases": ["stoics", "marcus aurelius", "epictetus"],
+    "status": "PUBLISHED",
+    "sortWeight": 90
+  },
+  {
+    "_id": "epistemology",
+    "title": "Epistemology",
+    "category": "Philosophy",
+    "summary": "The study of what knowledge is, and when believing something is actually justified.",
+    "aliases": ["theory of knowledge", "how we know things", "justified belief"],
+    "status": "PUBLISHED",
+    "sortWeight": 91
+  },
+  {
+    "_id": "the-scientific-revolution",
+    "title": "The Scientific Revolution",
+    "category": "History",
+    "summary": "The period when Europe began settling questions about nature by experiment rather than by authority.",
+    "aliases": ["scientific revolution", "galileo", "newton"],
+    "status": "PUBLISHED",
+    "sortWeight": 100
+  },
+  {
+    "_id": "the-industrial-revolution",
+    "title": "The Industrial Revolution",
+    "category": "History",
+    "summary": "The shift to machines, factories and fossil fuel that reshaped how people work and live.",
+    "aliases": ["industrial revolution", "industrialisation", "steam engine"],
+    "status": "PUBLISHED",
+    "sortWeight": 101
+  },
+  {
+    "_id": "cognitive-biases",
+    "title": "Cognitive Biases",
+    "category": "Psychology",
+    "summary": "The predictable ways human judgement goes wrong, even when we are trying to be careful.",
+    "aliases": ["bias", "heuristics", "irrationality"],
+    "status": "PUBLISHED",
+    "sortWeight": 110
+  },
+  {
+    "_id": "human-memory",
+    "title": "Human Memory",
+    "category": "Psychology",
+    "summary": "How the brain stores experience, and why remembering is closer to rebuilding than to replaying.",
+    "aliases": ["memory", "remembering", "forgetting"],
+    "status": "PUBLISHED",
+    "sortWeight": 111
+  },
+  {
+    "_id": "historical-linguistics",
+    "title": "Historical Linguistics",
+    "category": "Linguistics",
+    "summary": "How languages drift over centuries, and how we work out which ones share an ancestor.",
+    "aliases": ["language change", "etymology", "language families"],
+    "status": "PUBLISHED",
+    "sortWeight": 120
+  }
+]
