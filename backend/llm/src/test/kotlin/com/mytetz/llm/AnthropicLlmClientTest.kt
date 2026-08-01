@@ -128,6 +128,21 @@ class AnthropicLlmClientTest {
     }
 
     @Test
+    fun `the request timeout defaults to 120s and refuses unusable overrides`() {
+        // Bounds how long a stalled read can hold an IO thread. Asserting the resolved value is
+        // cheap; actually waiting one out would cost two minutes of runtime, so this does not.
+        assertEquals(120, AnthropicLlmClient.DEFAULT_TIMEOUT_SECONDS)
+        assertEquals(120, AnthropicLlmClient.resolveTimeoutSeconds(null))
+        assertEquals(300, AnthropicLlmClient.resolveTimeoutSeconds("300"))
+        assertEquals(300, AnthropicLlmClient.resolveTimeoutSeconds("  300  "))
+        // A typo or a nonsense value must not silently remove the bound.
+        assertEquals(120, AnthropicLlmClient.resolveTimeoutSeconds("not-a-number"))
+        assertEquals(120, AnthropicLlmClient.resolveTimeoutSeconds(""))
+        assertEquals(120, AnthropicLlmClient.resolveTimeoutSeconds("0"))
+        assertEquals(120, AnthropicLlmClient.resolveTimeoutSeconds("-5"))
+    }
+
+    @Test
     fun `a cancelling collector stops a stream of events that emit nothing`() = runBlocking {
         // After one text delta the server sends an endless run of content_block_stop events. The
         // adapter emits nothing for those, so `emit` — the loop's other suspension point — is never

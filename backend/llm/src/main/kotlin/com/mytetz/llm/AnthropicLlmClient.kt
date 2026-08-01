@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.runInterruptible
+import java.time.Duration
 
 /**
  * Kotlin uses the Anthropic Java SDK, which is blocking/OkHttp. The blocking stream is consumed
@@ -37,13 +38,17 @@ import kotlinx.coroutines.runInterruptible
  * read, and `StreamResponse.close()` cannot be used to break it either — close() contends with the
  * in-progress read and blocks until that read returns on its own (measured: a close() issued
  * against a stalled stream returned only when the peer finally sent data, 15s later). Neither
- * `StreamResponse` nor `AsyncStreamResponse` exposes an abort. A stalled read therefore holds its
- * IO thread until the SDK's request timeout fires — for maxTokens=4000 that bound is 10 minutes.
- * Tightening that bound is a client-construction concern (`AnthropicOkHttpClient.builder().timeout`),
- * not something this adapter can do to an injected client.
+ * `StreamResponse` nor `AsyncStreamResponse` exposes an abort.
+ *
+ * A stalled read therefore holds its IO thread until the request timeout fires. The default client
+ * built here caps that at [DEFAULT_TIMEOUT_SECONDS] seconds (override with
+ * `MYTETZ_LLM_TIMEOUT_SECONDS`) instead of leaving the SDK's 10-minute default in place: an
+ * explanation is one to three sentences at effort LOW, so a healthy response completes in seconds
+ * and 120s is roughly twenty times that — generous enough that adaptive thinking on a hard span
+ * never trips it. A client passed in by a caller governs its own timeout.
  */
 class AnthropicLlmClient(
-    private val client: AnthropicClient = AnthropicOkHttpClient.fromEnv(),
+    private val client: AnthropicClient = defaultClient(),
     override val modelId: String = System.getenv("MYTETZ_MODEL_ID") ?: "claude-opus-5",
     override val modelFamily: String = System.getenv("MYTETZ_MODEL_FAMILY") ?: "claude-opus-5",
 ) : LlmClient {
@@ -127,5 +132,25 @@ class AnthropicLlmClient(
         LlmEffort.LOW -> OutputConfig.Effort.LOW
         LlmEffort.MEDIUM -> OutputConfig.Effort.MEDIUM
         LlmEffort.HIGH -> OutputConfig.Effort.HIGH
+    }
+
+    companion object {
+
+        /** Ceiling on a single streamed request, and so on how long a stalled read holds a thread. */
+        const val DEFAULT_TIMEOUT_SECONDS = 120L
+
+        /**
+         * The safe value is the default, so it applies unless a caller deliberately supplies their
+         * own client — correctness must not depend on every future construction site remembering to
+         * configure it. A missing, unparseable or non-positive override falls back to the default
+         * rather than silently disabling the bound.
+         */
+        internal fun resolveTimeoutSeconds(raw: String?): Long =
+            raw?.trim()?.toLongOrNull()?.takeIf { it > 0 } ?: DEFAULT_TIMEOUT_SECONDS
+
+        private fun defaultClient(): AnthropicClient = AnthropicOkHttpClient.builder()
+            .fromEnv()
+            .timeout(Duration.ofSeconds(resolveTimeoutSeconds(System.getenv("MYTETZ_LLM_TIMEOUT_SECONDS"))))
+            .build()
     }
 }
