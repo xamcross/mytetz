@@ -70,17 +70,26 @@ class ExplanationRepositoryTest {
 
     @Test
     fun `concurrent inserts of the same key leave exactly one document`() = runTest {
-        coroutineScope {
+        val results = coroutineScope {
             (1..12).map { i ->
                 async { repository.insertIfAbsent(explanation("race", "body-$i")) }
             }.awaitAll()
         }
+
+        // Counting documents alone is nearly free once insertOne (not upsert) is used: Mongo's
+        // own _id uniqueness already guarantees exactly one document regardless of whether
+        // insertIfAbsent's contract is honoured. What actually needs proving is the contract
+        // itself — "returns the stored document, which is the existing one if another writer
+        // won" — so every one of the 12 callers must have received the SAME body (the winner's),
+        // not a mix of stale reads or their own losing copy.
+        assertEquals(1, results.map { it.body }.toSet().size, "callers disagreed on the stored body")
 
         val stored = database.getCollection<Explanation>("explanations")
             .find(com.mongodb.client.model.Filters.eq("_id", "race"))
             .count()
 
         assertEquals(1, stored)
+        assertEquals(repository.findByKey("race")?.body, results.first().body, "agreed body must be what actually persisted")
     }
 
     @Test
