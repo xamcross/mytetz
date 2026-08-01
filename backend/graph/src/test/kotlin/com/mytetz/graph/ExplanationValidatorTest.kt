@@ -172,6 +172,18 @@ class ExplanationValidatorTest {
     }
 
     @Test
+    fun `an absurd stop reason is rejected without echoing all of it back`() {
+        // The reason lands in logs and in whatever failure a caller surfaces, and the stop reason
+        // is provider-controlled, so only a bounded amount of it is quoted back. Tested rather
+        // than merely written: the brief's own `take(40)` on the refusal check was unreachable
+        // dead code precisely because nothing exercised it.
+        val reason = invalid(validBody, "z".repeat(5_000))
+
+        assertContains(reason, "zzz")
+        assertTrue(reason.length < 200, "reason echoed an unbounded provider string: ${reason.length} chars")
+    }
+
+    @Test
     fun `rejects a refusal stop reason before it looks at the body at all`() {
         // A refusal arrives as HTTP 200 with empty or PARTIAL content, not as an error. A partial
         // refusal body can be long enough, tag-free and plausible enough to clear every body
