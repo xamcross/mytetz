@@ -128,6 +128,45 @@ class AnthropicLlmClientTest {
     }
 
     @Test
+    fun `every stop reason crosses the SDK boundary as its bare wire string`() {
+        // ExplanationValidator -- the last gate before an explanation is persisted immutably --
+        // decides on these exact strings, and until this test nothing in the project had ever
+        // round-tripped anything but "end_turn". The hazard is concrete: an earlier draft of this
+        // adapter unwrapped the Optional with `stopReason()?.toString()`, which yields
+        // "Optional[refusal]". That compiles, streams, and matches no branch downstream -- so a
+        // model refusal would have been cached as a legitimate explanation and later published.
+        //
+        // `StopReason` is an SDK "open enum", so `toString()` is the wrapped wire string and an
+        // unrecognised value does not break deserialization. Note that SDK 2.34.0 ships no
+        // constant for `model_context_window_exceeded`: it round-trips fine here, but
+        // `StopReason.known()` would throw on it, which is why the adapter must keep using
+        // `toString()` rather than switching on `known()`.
+        listOf(
+            "end_turn", "max_tokens", "refusal",
+            "stop_sequence", "tool_use", "pause_turn", "model_context_window_exceeded",
+        ).forEach { wire ->
+            val delta = """
+                event: message_delta
+                data: {"type":"message_delta","delta":{"stop_reason":"$wire","stop_sequence":null},"usage":{"output_tokens":57}}
+            """.trimIndent()
+            val server = sseServer { out ->
+                out.write(sse(messageStart, contentBlockStart, textDelta("partial"), contentBlockStop, delta, messageStop).toByteArray())
+            }
+
+            try {
+                val chunks = runBlocking {
+                    withTimeout(30_000) {
+                        AnthropicLlmClient(clientFor(server)).stream(LlmRequest("system", "prompt")).toList()
+                    }
+                }
+                assertEquals(wire, chunks.filterIsInstance<LlmChunk.Done>().single().stopReason)
+            } finally {
+                server.stop(0)
+            }
+        }
+    }
+
+    @Test
     fun `the request timeout defaults to 120s and refuses unusable overrides`() {
         // Bounds how long a stalled read can hold an IO thread. Asserting the resolved value is
         // cheap; actually waiting one out would cost two minutes of runtime, so this does not.
