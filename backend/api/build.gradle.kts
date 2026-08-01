@@ -21,3 +21,50 @@ dependencies {
     implementation(libs.logback.classic)
     testImplementation(libs.ktor.server.test.host)
 }
+
+val frontendDir = rootProject.file("frontend")
+val isWindows = System.getProperty("os.name").startsWith("Windows")
+val npm = if (isWindows) "npm.cmd" else "npm"
+
+// node_modules holds tens of thousands of files; fingerprinting it as a task output costs far
+// more than the install itself. Track the install with a stamp file instead, keyed on the
+// manifests, and fall out of date whenever node_modules has been removed by hand.
+val frontendInstallStamp = layout.buildDirectory.file("frontend/install.stamp")
+
+val installFrontend = tasks.register<Exec>("installFrontend") {
+    workingDir = frontendDir
+    commandLine(npm, "ci")
+    inputs.file(File(frontendDir, "package.json"))
+    inputs.file(File(frontendDir, "package-lock.json"))
+    outputs.file(frontendInstallStamp)
+    outputs.upToDateWhen { File(frontendDir, "node_modules").isDirectory }
+    doLast {
+        frontendInstallStamp.get().asFile.apply {
+            parentFile.mkdirs()
+            writeText("ok\n")
+        }
+    }
+}
+
+val buildFrontend = tasks.register<Exec>("buildFrontend") {
+    dependsOn(installFrontend)
+    workingDir = frontendDir
+    commandLine(npm, "run", "build")
+    inputs.dir(File(frontendDir, "src"))
+    inputs.dir(File(frontendDir, "public"))
+    inputs.files(
+        File(frontendDir, "angular.json"),
+        File(frontendDir, "package.json"),
+        File(frontendDir, "package-lock.json"),
+        File(frontendDir, "tsconfig.json"),
+        File(frontendDir, "tsconfig.app.json"),
+    )
+    outputs.dir(File(frontendDir, "dist"))
+}
+
+// angular.json sets no explicit outputPath, so the @angular/build:application builder emits
+// browser assets to dist/<project>/browser, i.e. frontend/dist/frontend/browser.
+tasks.named<ProcessResources>("processResources") {
+    dependsOn(buildFrontend)
+    from(File(frontendDir, "dist/frontend/browser")) { into("static") }
+}
