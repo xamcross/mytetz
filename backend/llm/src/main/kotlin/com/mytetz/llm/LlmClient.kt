@@ -23,6 +23,13 @@ sealed interface LlmChunk {
     data class Done(val usage: LlmUsage, val stopReason: String?) : LlmChunk
 }
 
+/**
+ * A provider stream ended without the terminal metadata that proves the generation completed,
+ * so its output token count — and therefore its cost — is unknown. Callers must treat this as a
+ * failed generation and persist nothing: a silent zero-cost result would under-report spend.
+ */
+class LlmStreamTruncatedException(message: String) : RuntimeException(message)
+
 /** Vendor-agnostic port. One adapter behind it; swapping providers touches one file. */
 interface LlmClient {
     val modelId: String
