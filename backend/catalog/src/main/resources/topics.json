@@ -39,7 +39,7 @@
     "_id": "microbiology",
     "title": "Microbiology",
     "category": "Biology",
-    "summary": "The study of organisms too small to see with the naked eye.",
+    "summary": "Life too small to see, and how much of the world it quietly runs: the soil, the oceans, and you.",
     "aliases": ["microbes", "bacteriology", "germs"],
     "status": "PUBLISHED",
     "sortWeight": 20
@@ -111,7 +111,7 @@
     "_id": "game-theory",
     "title": "Game Theory",
     "category": "Economics",
-    "summary": "Mathematical models of strategic interaction between rational agents.",
+    "summary": "What your best move becomes once you know everyone else is choosing theirs at the same time.",
     "aliases": ["strategic games", "prisoners dilemma", "nash equilibrium"],
     "status": "PUBLISHED",
     "sortWeight": 40
@@ -210,7 +210,7 @@
     "_id": "epistemology",
     "title": "Epistemology",
     "category": "Philosophy",
-    "summary": "The study of what knowledge is, and when believing something is actually justified.",
+    "summary": "How to tell the difference between knowing something and merely being very sure of it.",
     "aliases": ["theory of knowledge", "how we know things", "justified belief"],
     "status": "PUBLISHED",
     "sortWeight": 91

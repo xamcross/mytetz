@@ -82,6 +82,35 @@ class CatalogServiceTest {
     }
 
     @Test
+    fun `draft topics are hidden from browsing and from search`() = runTest {
+        service.seedFromResource()
+        val draft = Topic(
+            slug = "unreviewed-draft-topic",
+            title = "Unreviewed Draft Topic",
+            category = "Physics",
+            summary = "Not yet reviewed, and must never reach a reader.",
+            aliases = listOf("unreviewed alias"),
+            // sortWeight 1 puts it ahead of every seeded topic, so a leak shows up first, not last.
+            sortWeight = 1,
+            status = TopicStatus.DRAFT,
+        )
+        repository.upsert(draft)
+
+        // The row really is stored — findBySlug deliberately does not filter on status — so any
+        // absence below is the status filter doing its job and not an upsert that silently failed.
+        assertEquals(TopicStatus.DRAFT, repository.findBySlug(draft.slug)?.status)
+
+        val browsed = service.listPublished(category = null, query = null)
+        assertTrue(browsed.none { it.slug == draft.slug }, "a DRAFT topic leaked into browsing")
+        assertTrue(browsed.all { it.status == TopicStatus.PUBLISHED })
+
+        // Search must not be a back door: "unreviewed" appears in no published topic, so without
+        // the status filter this query returns the draft and nothing else.
+        val searched = service.listPublished(category = null, query = "unreviewed")
+        assertTrue(searched.none { it.slug == draft.slug }, "a DRAFT topic leaked into search results")
+    }
+
+    @Test
     fun `unknown slug returns null`() = runTest {
         service.seedFromResource()
 
