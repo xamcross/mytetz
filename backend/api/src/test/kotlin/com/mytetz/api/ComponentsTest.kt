@@ -5,6 +5,7 @@ import com.mytetz.llm.FakeLlmClient
 import com.mytetz.persistence.Mongo
 import com.mytetz.persistence.MongoConfig
 import io.ktor.client.request.get
+import io.ktor.client.request.head
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.testing.testApplication
@@ -173,6 +174,27 @@ class ComponentsTest {
         // unmapped not-found would surface as a bodyless 404 or a 500.
         assertEquals(HttpStatusCode.NotFound, missing.status)
         assertTrue(missing.bodyAsText().contains("NOT_FOUND"))
+    }
+
+    @Test
+    fun `HEAD on a real endpoint is not swallowed by the api catch-all`() = testApplication {
+        application { module(components("head")) }
+        awaitReady(client)
+
+        val response = client.head("/api/health")
+
+        // Regression introduced by the `/api/{...}` tailcard: `get { }` does not answer HEAD, so
+        // HEAD /api/health fell through to the catch-all and 404'd. Uptime monitors routinely use
+        // HEAD, so the endpoint would have looked down while being perfectly healthy.
+        assertEquals(HttpStatusCode.OK, response.status)
+    }
+
+    @Test
+    fun `HEAD on an unknown api path is still a 404`() = testApplication {
+        application { module(components("head_404")) }
+        awaitReady(client)
+
+        assertEquals(HttpStatusCode.NotFound, client.head("/api/nope").status)
     }
 
     @Test

@@ -21,23 +21,41 @@ import io.ktor.server.plugins.origin
  * Anycast -> machine in fra -> Ktor :8080`. Every hop rewrites who the caller appears to be, and
  * they are not equally trustworthy:
  *
- * - **The socket peer** (`origin.remoteAddress`) is the fly proxy, not the visitor. Unforgeable, and
- *   nearly useless alone: it groups much of the internet into one bucket.
- * - **`Fly-Client-IP`** is written by fly's proxy from the peer *it* saw. Unforgeable, but behind
- *   Cloudflare that peer is a Cloudflare edge, so it groups everyone sharing an edge.
+ * - **The socket peer** (`origin.remoteAddress`) is the fly proxy on the machine host — neither
+ *   `ForwardedHeaders` nor `XForwardedHeaders` is installed, so this really is the raw peer. It is
+ *   unforgeable and **useless**: it is a single address for the entire internet.
+ * - **`Fly-Client-IP`** is *set* by fly's proxy — fly's own documentation calls it "the IP address
+ *   of the client from the perspective of Fly Proxy", and says that with another reverse proxy in
+ *   front it reflects that proxy's address. So it is unforgeable, and behind Cloudflare it is the CF
+ *   edge: coarse, one bucket per edge.
  * - **`CF-Connecting-IP`** is the visitor's real address and is what you actually want — but it is
- *   trustworthy only for traffic that came through Cloudflare. `mytetz.fly.dev` is reachable
- *   directly, and a request arriving that way can set the header to anything.
+ *   trustworthy only for traffic that came through Cloudflare, and `mytetz.fly.dev` is reachable
+ *   directly, so a request arriving that way can set it to anything.
  *
- * No header here is both accurate and unforgeable, so this does not pretend otherwise. The header is
- * **opt-in by name** ([ClientAddressConfig.trustedHeader]) and the default is the peer — because a
- * wrong default is worse than a coarse one: it would hand every caller a switch for choosing its own
- * rate-limit bucket. The operator opts in once they have decided which proxy they are behind.
+ * ## The default is `Fly-Client-IP`, and the reasoning that got this wrong once
+ *
+ * The first version of this class defaulted to trusting **no** header, on the grounds that no header
+ * is both accurate and unforgeable. That is a true statement and the wrong dichotomy, because it
+ * quietly treats "the socket peer" as the safe fallback — and the socket peer is one key for
+ * everybody. With a 10-per-day allowance that is ten topic requests per day *for the whole
+ * internet*, spendable by one stranger in a second, and it does not self-heal because the window
+ * only rolls after 24 hours. The ceiling below is irrelevant when there is exactly one key. Trading
+ * the feature's entire usefulness for safety that the fallback did not actually provide.
+ *
+ * `Fly-Client-IP` dominates the socket peer on every axis: equally unforgeable, strictly finer. So it
+ * is the default. `CF-Connecting-IP` is finer still and is what this deployment sets in `fly.toml`,
+ * accepting that someone reaching fly directly can forge it — an evasion bounded by the ceiling here
+ * and by the eviction cap in `TopicRequestRepository`, and one that costs honest visitors nothing.
+ * "Trust nothing" remains available for a deployment behind neither, by setting the variable to
+ * `none`; it is simply no longer what you get by saying nothing.
  *
  * **This is why the ceiling in [FixedWindowRateLimiter] is not optional.** The memory bound must not
- * depend on this resolution being right, because on a direct-to-fly request it can be wrong.
+ * depend on this resolution being right, because a forged header makes it wrong.
  */
 object ClientAddress {
+
+    /** Set by fly's proxy, so a caller cannot choose it. See the note above. */
+    const val FLY_CLIENT_IP: String = "Fly-Client-IP"
 
     /**
      * Long enough for an IPv6 address with a zone and a port, short enough that a caller cannot use
@@ -59,10 +77,11 @@ object ClientAddress {
 }
 
 /**
- * Which header, if any, carries the real client address on this deployment.
+ * Which header carries the real client address on this deployment.
  *
- * Null — the default — means "trust nothing the caller sent". See [ClientAddress] for why that is
- * the safe default rather than the timid one.
+ * Defaults to [ClientAddress.FLY_CLIENT_IP]. Null means "trust nothing the caller sent", and has to
+ * be asked for explicitly with `none` — see [ClientAddress] for why that is not the default, and
+ * what it cost when it was.
  */
 data class ClientAddressConfig(
     val trustedHeader: String? = resolveTrustedHeader(System.getenv(CLIENT_IP_HEADER_ENV)),
@@ -71,8 +90,22 @@ data class ClientAddressConfig(
 
         const val CLIENT_IP_HEADER_ENV: String = "MYTETZ_CLIENT_IP_HEADER"
 
-        /** Unset or blank means no header is trusted. There is deliberately no default header name. */
-        internal fun resolveTrustedHeader(raw: String?): String? = raw?.trim()?.takeIf { it.isNotEmpty() }
+        /** The one value that means "no header at all". Anything else is taken as a header name. */
+        const val NO_TRUSTED_HEADER: String = "none"
+
+        /**
+         * Unset or blank gives [ClientAddress.FLY_CLIENT_IP] — the coarsest key that is still a key,
+         * rather than the socket peer, which is not one. A deployment that is behind neither fly nor
+         * a proxy it controls sets `none`.
+         */
+        internal fun resolveTrustedHeader(raw: String?): String? {
+            val value = raw?.trim().orEmpty()
+            return when {
+                value.isEmpty() -> ClientAddress.FLY_CLIENT_IP
+                value.equals(NO_TRUSTED_HEADER, ignoreCase = true) -> null
+                else -> value
+            }
+        }
     }
 }
 

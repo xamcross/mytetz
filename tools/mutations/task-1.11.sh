@@ -15,8 +15,11 @@ RL=backend/api/src/main/kotlin/com/mytetz/api/RateLimit.kt
 HR=backend/api/src/main/kotlin/com/mytetz/api/HealthRoutes.kt
 CS=backend/catalog/src/main/kotlin/com/mytetz/catalog/CatalogService.kt
 TR=backend/catalog/src/main/kotlin/com/mytetz/catalog/TopicRequestRepository.kt
+MO=backend/persistence/src/main/kotlin/com/mytetz/persistence/Mongo.kt
+MC=backend/persistence/src/main/kotlin/com/mytetz/persistence/MongoConfig.kt
 API=:backend:api:test
 CAT=:backend:catalog:test
+PERSIST=:backend:persistence:test
 
 # --------------------------------------------------------------- error mapping
 
@@ -118,11 +121,14 @@ mutate M29-limiter-table-unbounded $RL \
 mutate M30-eviction-by-insertion-order-not-lru $RL \
   "s=s.replace('LinkedHashMap<String, Int>(INITIAL_CAPACITY, LOAD_FACTOR, true)','LinkedHashMap<String, Int>(INITIAL_CAPACITY, LOAD_FACTOR, false)',1)" $API
 
-mutate M31-trust-a-forwarded-header-by-default $RL \
-  "s=s.replace('internal fun resolveTrustedHeader(raw: String?): String? = raw?.trim()?.takeIf { it.isNotEmpty() }','internal fun resolveTrustedHeader(raw: String?): String? = raw?.trim()?.takeIf { it.isNotEmpty() } ?: \"X-Forwarded-For\"',1)" $API
+mutate M31-default-trusts-no-header-collapsing-all-callers $RL \
+  "s=s.replace('value.isEmpty() -> ClientAddress.FLY_CLIENT_IP','value.isEmpty() -> null',1)" $API
 
 mutate M32-client-address-not-truncated $RL \
   "s=s.replace('.take(MAX_ADDRESS_LENGTH)','',1)" $API
+
+mutate M39-default-trusts-a-forgeable-header $RL \
+  "s=s.replace('value.isEmpty() -> ClientAddress.FLY_CLIENT_IP','value.isEmpty() -> \"X-Forwarded-For\"',1)" $API
 
 # --------------------------------------------------------------- catalogue storage
 
@@ -143,3 +149,14 @@ mutate M37-countFor-stops-normalising $TR \
 
 mutate M38-length-checked-before-normalisation $TR \
   "s=s.replace('if (normalized.isEmpty() || normalized.length > MAX_TEXT_LENGTH)','if (rawText.isEmpty() || rawText.length > MAX_TEXT_LENGTH)',1)" $CAT
+
+# --------------------------------------------------------------- HEAD, and the health timeout
+
+mutate M40-head-not-answered $AP \
+  "s=s.replace('    install(AutoHeadResponse)\n','',1)" $API
+
+mutate M41-server-selection-timeout-not-applied $MO \
+  "s=s.replace('            .applyToClusterSettings {\n                it.serverSelectionTimeout(config.serverSelectionTimeoutMillis, TimeUnit.MILLISECONDS)\n            }\n','',1)" $PERSIST
+
+mutate M42-server-selection-timeout-defaults-to-the-drivers $MC \
+  "s=s.replace('const val DEFAULT_SERVER_SELECTION_TIMEOUT_MILLIS: Long = 3_000','const val DEFAULT_SERVER_SELECTION_TIMEOUT_MILLIS: Long = 30_000',1)" $PERSIST

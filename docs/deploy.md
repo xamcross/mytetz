@@ -54,18 +54,38 @@ Non-sensitive values are checked in, in `fly.toml`'s `[env]` block:
 [env]
   PORT = "8080"
   MONGODB_DATABASE = "mytetz"
+  MYTETZ_CLIENT_IP_HEADER = "CF-Connecting-IP"
 ```
+
+`MYTETZ_CLIENT_IP_HEADER` decides which header the topic-request rate limiter
+keys on, and it is a security setting rather than a tuning one. Because
+Cloudflare proxies this app (section 5), `CF-Connecting-IP` is the visitor's
+real address and gives one bucket per visitor. The trade: anyone reaching
+`mytetz.fly.dev` **directly**, bypassing Cloudflare, can set that header to
+whatever they like and so escape their own rate limit. That evasion is bounded
+by the limiter's key ceiling and by the eviction cap on the `topicRequests`
+collection, and it costs honest visitors nothing.
+
+The code default is `Fly-Client-IP`, which fly's proxy sets and a caller cannot
+forge — but behind Cloudflare it resolves to the Cloudflare *edge*, so everyone
+sharing an edge would share a single daily allowance. Set this to `none` only
+for a deployment behind no proxy you control: with no trusted header the key
+falls back to the socket peer, which on a proxied deployment is one address for
+every visitor.
 
 Sensitive values are fly secrets. `fly secrets list` shows names and digests only.
 
 | Secret | Required | Notes |
 | --- | --- | --- |
 | `MONGODB_URI` | yes — the app calls `error("MONGODB_URI is not set")` and refuses to boot without it | full `mongodb+srv://` string including the database user's password |
+| `MYTETZ_COOKIE_SIGNING_KEY` | yes — the app refuses to boot without it, deliberately | signs the anonymous principal cookie. There is no safe default: a known key lets anyone mint any principal. 32 characters minimum |
+| `ANTHROPIC_API_KEY` | for explanation generation only | the model client is built lazily, so the catalogue serves without it |
 
-Set it from the git-ignored `.env` at the repo root, without ever echoing it:
+Set them from the git-ignored `.env` at the repo root, without ever echoing them:
 
 ```bash
 fly secrets set MONGODB_URI="$(grep '^MONGODB_URI=' .env | cut -d= -f2- | tr -d '\r\n')" --app mytetz
+fly secrets set MYTETZ_COOKIE_SIGNING_KEY="$(openssl rand -base64 32)" --app mytetz
 ```
 
 Setting a secret triggers a rolling restart. Use `--stage` to queue it for the

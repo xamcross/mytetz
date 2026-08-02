@@ -16,6 +16,9 @@ dependencies {
     implementation(libs.ktor.serialization.json)
     implementation(libs.ktor.server.sse)
     implementation(libs.ktor.server.status.pages)
+    // HEAD is what uptime monitors send. Without this, `get { }` answers only GET and every HEAD
+    // falls through to the /api/{...} catch-all as a 404.
+    implementation(libs.ktor.server.auto.head.response)
     implementation(libs.ktor.server.cors)
     implementation(libs.ktor.server.call.logging)
     implementation(libs.logback.classic)

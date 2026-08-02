@@ -11,6 +11,7 @@ import io.ktor.server.testing.testApplication
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -162,18 +163,20 @@ class ClientAddressTest {
     }
 
     @Test
-    fun `with no trusted header configured, a caller-supplied header is ignored`() = route(
+    fun `with trust explicitly disabled, a caller-supplied header is ignored`() = route(
         ClientAddressConfig(trustedHeader = null)
     ) { client ->
         val body = client.get("/who") {
             headers.append(HttpHeaders.XForwardedFor, "9.9.9.9")
             headers.append("CF-Connecting-IP", "9.9.9.9")
+            headers.append(ClientAddress.FLY_CLIENT_IP, "9.9.9.9")
         }.bodyAsText()
 
-        // The whole point of the default. A header the caller controls must never become a rate
-        // limiter's key unless a proxy we trust is known to overwrite it — otherwise the caller
-        // simply picks a fresh bucket per request, which is the defect keying on IP was meant to fix.
-        assertFalse(body.contains("9.9.9.9"), "an unconfigured header was trusted: $body")
+        // A header no proxy is known to overwrite must not become a rate limiter's key, because then
+        // the caller picks its own bucket per request. This mode is still available; it is just no
+        // longer the default, since on this deployment it collapses everyone onto the fly proxy's
+        // address. See `the DEFAULT configuration puts two callers in two buckets`.
+        assertFalse(body.contains("9.9.9.9"), "a header was trusted while trust was disabled: $body")
     }
 
     @Test
@@ -221,9 +224,48 @@ class ClientAddressTest {
     }
 
     @Test
-    fun `the trusted header name is resolved from the environment and blank means none`() {
-        assertNull(ClientAddressConfig.resolveTrustedHeader(null))
-        assertNull(ClientAddressConfig.resolveTrustedHeader("   "))
+    fun `the trusted header name is resolved from the environment`() {
+        assertEquals(ClientAddress.FLY_CLIENT_IP, ClientAddressConfig.resolveTrustedHeader(null))
+        assertEquals(ClientAddress.FLY_CLIENT_IP, ClientAddressConfig.resolveTrustedHeader("   "))
         assertEquals("CF-Connecting-IP", ClientAddressConfig.resolveTrustedHeader(" CF-Connecting-IP "))
+    }
+
+    @Test
+    fun `trusting nothing has to be asked for explicitly`() {
+        // Still reachable, because a deployment that is behind neither fly nor a proxy it controls
+        // genuinely should trust no header. But it is no longer what you get by saying nothing.
+        assertNull(ClientAddressConfig.resolveTrustedHeader("none"))
+        assertNull(ClientAddressConfig.resolveTrustedHeader(" NONE "))
+    }
+
+    // ------------------------------------------------------------------ the shipped default
+
+    @Test
+    fun `the DEFAULT configuration puts two callers in two buckets`() = route(ClientAddressConfig()) { client ->
+        // The defect this closes, and it was introduced by the fix for the previous round. Defaulting
+        // to "trust no header" left `origin.remoteAddress` as the key — and neither ForwardedHeaders
+        // nor XForwardedHeaders is installed, so that is the raw socket peer: the fly proxy on the
+        // machine host. **One address for the entire internet.** The 10-per-day allowance became ten
+        // per day for everybody, one stranger could spend it in a second, and unlike the storage cap
+        // it does not self-heal because the window only rolls after a full 24 hours.
+        //
+        // Note the fixture: this test configures NOTHING. Every other test here names a header, and
+        // the route-level test that certified the fix asserted `trackedKeys == 1` — which the
+        // in-process client grants for free, for exactly the same reason production would.
+        val first = client.get("/who") { headers.append(ClientAddress.FLY_CLIENT_IP, "203.0.113.1") }.bodyAsText()
+        val second = client.get("/who") { headers.append(ClientAddress.FLY_CLIENT_IP, "203.0.113.2") }.bodyAsText()
+
+        assertEquals("203.0.113.1", first)
+        assertNotEquals(first, second, "the shipped default collapsed two callers onto one key")
+    }
+
+    @Test
+    fun `the default header is one the caller cannot forge`() {
+        // Fly's proxy SETS Fly-Client-IP rather than passing it through — "the IP address of the
+        // client from the perspective of Fly Proxy" — so a caller cannot choose its own bucket with
+        // it. It is coarse behind Cloudflare (it resolves to the CF edge, which fly's own docs say
+        // explicitly), and coarse-but-unforgeable beats a single global bucket on every axis:
+        // equally unforgeable, strictly finer. That is the trade the previous round got backwards.
+        assertEquals(ClientAddress.FLY_CLIENT_IP, ClientAddressConfig().trustedHeader)
     }
 }

@@ -9,6 +9,7 @@ import io.ktor.server.engine.embeddedServer
 import io.ktor.server.http.content.default
 import io.ktor.server.http.content.staticResources
 import io.ktor.server.netty.Netty
+import io.ktor.server.plugins.autohead.AutoHeadResponse
 import io.ktor.server.plugins.calllogging.CallLogging
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.response.respond
@@ -33,6 +34,10 @@ fun main() {
 fun Application.module(components: Components = Components()) {
     install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) }
     install(CallLogging)
+    // Answers HEAD by running the matching GET and discarding the body. Without it `get { }` matches
+    // GET only, so every HEAD falls through to the `/api/{...}` catch-all below and 404s — and HEAD
+    // is what uptime monitors send at a health endpoint.
+    install(AutoHeadResponse)
     installErrorMapping()
 
     val ready = bootstrap(components)
@@ -78,11 +83,13 @@ fun Application.module(components: Components = Components()) {
  *
  * That matters twice, and the second is not an edge case:
  *
- * - **During a Mongo outage.** `MongoConfig` sets no `serverSelectionTimeoutMS`, so the driver's
- *   30-second default applies and the first `ensureIndexes()` hangs for that long. `fly.toml`'s
- *   health check has a 10 s grace and a 5 s timeout, so it fails throughout — the endpoint that
- *   exists to say "the database is unreachable" is itself unreachable for exactly as long as the
- *   database is.
+ * - **During a Mongo outage.** The first `ensureIndexes()` blocks until server selection gives up.
+ *   `fly.toml`'s health check has a 10 s grace and a 5 s timeout, so a blocking bootstrap fails it
+ *   throughout — the endpoint that exists to say "the database is unreachable" would be itself
+ *   unreachable for exactly as long as the database is. Note that
+ *   [com.mytetz.persistence.MongoConfig.serverSelectionTimeoutMillis] now bounds that wait to 3 s;
+ *   it is the *second* half of the same fix, not a substitute for this one, because a blocking
+ *   bootstrap also delays a healthy cold start by every round trip the seed makes.
  * - **On every cold start.** `seedFromResource` puts every seeded topic through
  *   `TopicRepository.upsertPreservingStatus`, which is a read *and* a write each: dozens of
  *   sequential round trips plus five `createIndex` calls before the first byte. With

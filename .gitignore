@@ -29,3 +29,5 @@ dist/
 # OS
 .DS_Store
 Thumbs.db
+# Cygwin/Git-bash crash dumps, e.g. from force-killing a long-running script.
+*.stackdump

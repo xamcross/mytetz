@@ -210,21 +210,54 @@ class CatalogRoutesTest {
     }
 
     @Test
-    fun `cookie-less requests do not each create a rate limiter entry`() = testApplication {
+    fun `cookie-less requests from one caller share one rate limiter entry`() = testApplication {
         val limiter = FixedWindowRateLimiter(limit = 500, windowMillis = 60_000)
         catalogApp(limiter)
 
         repeat(40) {
             client.post("/api/topic-requests") {
+                // Named explicitly. The first version of this test sent no address at all and
+                // asserted the same `1` — which the in-process test client grants for free, because
+                // its peer address is constant. It therefore passed just as happily against a
+                // configuration that collapsed EVERY caller onto one key, which is exactly the
+                // defect the next test exists to catch. The `1` has to be earned by the requests
+                // genuinely coming from one caller.
+                header(ClientAddress.FLY_CLIENT_IP, "203.0.113.9")
                 contentType(ContentType.Application.Json)
                 setBody("""{"text":"${uniqueText("flood")}"}""")
             }
         }
 
-        // The Critical this replaces: one map entry per request, cleared only when the 24h window
-        // rolled. 40 requests is nothing; the shape is what matters — the table must be keyed on
-        // something the caller cannot re-mint at will.
+        // The Critical this pins: one map entry per request, cleared only when the 24h window
+        // rolled, because the key was a principal minted fresh for every cookie-less request.
         assertEquals(1, limiter.trackedKeys, "each cookie-less request created its own limiter key")
+    }
+
+    @Test
+    fun `the shipped default does not put every caller in one bucket`() = testApplication {
+        val limiter = FixedWindowRateLimiter(limit = 1, windowMillis = 60_000)
+        // ClientAddressConfig() — the production default, configured with nothing.
+        catalogApp(limiter, ClientAddressConfig())
+
+        fun post(ip: String) = runBlocking {
+            client.post("/api/topic-requests") {
+                header(ClientAddress.FLY_CLIENT_IP, ip)
+                contentType(ContentType.Application.Json)
+                setBody("""{"text":"${uniqueText("default")}"}""")
+            }
+        }
+
+        // With the previous default ("trust no header") the key was the socket peer, so these three
+        // requests were one caller: the second would 429 and the third would too. Ten requests per
+        // day, for the entire internet, spendable by one stranger in under a second — and no
+        // self-healing, because the window only rolls after 24 hours.
+        assertEquals(HttpStatusCode.Accepted, post("203.0.113.1").status)
+        assertEquals(HttpStatusCode.TooManyRequests, post("203.0.113.1").status)
+        assertEquals(
+            HttpStatusCode.Accepted,
+            post("203.0.113.2").status,
+            "the shipped default charged one caller for another's traffic",
+        )
     }
 
     @Test
