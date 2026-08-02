@@ -4,6 +4,8 @@
 # Gradle / Kotlin
 .gradle/
 build/
+# Kotlin compiler daemon session files, written into the project root on every build.
+.kotlin/
 !gradle/wrapper/gradle-wrapper.jar
 *.class
 

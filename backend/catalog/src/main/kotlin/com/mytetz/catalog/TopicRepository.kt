@@ -23,12 +23,38 @@ class TopicRepository(database: MongoDatabase) {
         )
     }
 
+    /** Writes [topic] whole, publication status included. The admin-shaped write. */
     suspend fun upsert(topic: Topic) {
         collection.replaceOne(
             Filters.eq("_id", topic.slug),
             topic,
             ReplaceOptions().upsert(true),
         )
+    }
+
+    /**
+     * [upsert], except that an existing row keeps the [Topic.status] it already has.
+     *
+     * This is the write `CatalogService.seedFromResource` uses, and the difference matters because
+     * Task 1.11 made seeding run on **every boot** — including every scale-from-zero wake, which on
+     * this deployment is any request after an idle period. A plain [upsert] takes `status` straight
+     * back from `topics.json`, so an operator who withdrew a topic would find it republished by the
+     * next request to arrive, with nothing in the logs to say so and no admin API to do it again.
+     *
+     * The division of authority it establishes: **`topics.json` owns a topic's content, the stored
+     * row owns its publication.** So a typo in a summary is still fixed by editing the seed file and
+     * redeploying, and withdrawing a topic is still done once. Adding a *new* topic naturally takes
+     * the file's status, because there is no stored row to preserve.
+     *
+     * Read-then-write, and deliberately unguarded. The alternative — a field-by-field `$set` with
+     * `$setOnInsert` on `status` — has to list every property of [Topic] and silently stops writing
+     * any property added later. The race it leaves needs an operator to change a topic's status in
+     * the microseconds between this read and its write, during a boot; the same operator can simply
+     * do it again. Nothing else in the system writes `status`.
+     */
+    suspend fun upsertPreservingStatus(topic: Topic) {
+        val storedStatus = findBySlug(topic.slug)?.status
+        upsert(if (storedStatus == null) topic else topic.copy(status = storedStatus))
     }
 
     suspend fun findBySlug(slug: String): Topic? =

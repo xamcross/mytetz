@@ -20,6 +20,13 @@ dependencies {
     implementation(libs.ktor.server.call.logging)
     implementation(libs.logback.classic)
     testImplementation(libs.ktor.server.test.host)
+    // The API tests drive the real CatalogService and SessionService against a real Mongo, so this
+    // module needs a container of its own. FakeLlmClient is the client every test in this project
+    // uses: nothing in the test path may construct AnthropicLlmClient, which calls `fromEnv()` and
+    // would both demand a key and put a real API call one mistake away.
+    testImplementation(testFixtures(project(":backend:llm")))
+    testImplementation(libs.testcontainers.mongodb)
+    testImplementation(libs.testcontainers.junit)
 }
 
 val frontendDir = rootProject.file("frontend")

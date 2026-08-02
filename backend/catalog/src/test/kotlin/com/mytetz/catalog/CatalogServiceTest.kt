@@ -1,8 +1,6 @@
 package com.mytetz.catalog
 
-import com.mongodb.kotlin.client.coroutine.MongoClient
 import kotlinx.coroutines.test.runTest
-import org.testcontainers.containers.MongoDBContainer
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -11,12 +9,7 @@ import kotlin.test.assertTrue
 
 class CatalogServiceTest {
 
-    companion object {
-        private val container = MongoDBContainer("mongo:7").apply { start() }
-        private val client = MongoClient.create(container.connectionString)
-    }
-
-    private val database = client.getDatabase("test_catalog")
+    private val database = MongoTestSupport.database("catalog")
     private val repository = TopicRepository(database)
     private val service = CatalogService(repository)
 
@@ -115,5 +108,38 @@ class CatalogServiceTest {
         service.seedFromResource()
 
         assertNull(service.findBySlug("not-a-real-topic"))
+    }
+
+    @Test
+    fun `re-seeding does not republish a topic an operator unpublished`() = runTest {
+        service.seedFromResource()
+        val slug = "quantum-physics"
+        // The only way to withdraw a topic in this slice: there is no admin API, so an operator
+        // edits the row. Until Task 1.11 wired `seedFromResource` into `Components.bootstrap`,
+        // seeding had no production caller at all and this could not happen.
+        repository.upsert(requireNotNull(service.findBySlug(slug)).copy(status = TopicStatus.DRAFT))
+
+        service.seedFromResource()
+
+        // A plain replace-by-slug would take `status` straight back from topics.json, so the next
+        // deploy — or the next scale-from-zero boot, which happens on any request after an idle
+        // period — would silently put the withdrawn topic back in front of learners.
+        assertEquals(TopicStatus.DRAFT, service.findBySlug(slug)?.status, "seeding republished a withdrawn topic")
+        assertTrue(service.listPublished(null, null).none { it.slug == slug })
+    }
+
+    @Test
+    fun `re-seeding still refreshes the content of a topic`() = runTest {
+        service.seedFromResource()
+        val slug = "quantum-physics"
+        repository.upsert(requireNotNull(service.findBySlug(slug)).copy(title = "Stale Title", summary = "stale"))
+
+        service.seedFromResource()
+
+        // The other half of the trade. topics.json remains the source of truth for CONTENT; the
+        // stored row is the source of truth only for PUBLICATION. Preserving everything would make
+        // the seed file unable to fix a typo.
+        assertEquals("Quantum Physics", service.findBySlug(slug)?.title)
+        assertEquals(TopicStatus.PUBLISHED, service.findBySlug(slug)?.status)
     }
 }
