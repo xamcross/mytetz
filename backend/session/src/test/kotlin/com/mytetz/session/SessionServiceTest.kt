@@ -606,9 +606,11 @@ class SessionServiceTest {
         assertEquals(callsBefore, llm.calls.size)
         assertEquals(1, sessions.findById(session.id)!!.nodes.size)
 
-        // 0 is still permitted: this is a bound, not a ban on the original answer.
+        // 0 is still permitted: this is a bound, not a ban on the original answer. The SIZE is what
+        // pins that — `nodes.last().variant == 0` would hold even if nothing had been appended at
+        // all, because the seed node sitting there is variant 0 too.
         service.explain(session.id, session.rootNodeId, selection, Verb.EXPLAIN, 0).toList()
-        assertEquals(0, sessions.findById(session.id)!!.nodes.last().variant)
+        assertEquals(2, sessions.findById(session.id)!!.nodes.size, "variant 0 must still be admitted")
     }
 
     @Test
@@ -714,6 +716,69 @@ class SessionServiceTest {
         llm.calls.clear()
         service.explain(second).toList()
         assertEquals(0, llm.calls.size)
+    }
+
+    @Test
+    fun `a plan that said it would generate can become free before it runs, and must still run free`() = runTest {
+        // The fact underneath the KDoc's instruction to Task 1.12, and the only reason refusing a
+        // stale `cached = false` plan on a tripped spend breaker is WRONG rather than merely
+        // cautious. The sentence in the KDoc is not testable; this is, it lives in this module, and
+        // nothing else pinned it.
+        val (first, _) = newSession()
+        val selection = selectionOf(seedBody, "behavior of matter")
+
+        val plan = service.prepare(first.id, first.rootNodeId, selection, Verb.EXPLAIN, null)
+        assertFalse(plan.cached, "the store really is empty for this key at the moment the plan is made")
+
+        // A second learner, on the same topic, drills into the same span. A seed is keyed by its
+        // topic, so both sessions' roots hold the SAME explanation key, so both plans derive the
+        // same content key — which is the entire premise of the store being a cache.
+        val (second, _) = service.create("anon:bob", "quantum-physics")
+        val other = service.prepare(second.id, second.rootNodeId, selection, Verb.EXPLAIN, null)
+        assertEquals(
+            plan.contentKey, other.contentKey,
+            "two learners who reached one span by one path must land on one document",
+        )
+        service.explain(other).toList()
+
+        // The first plan still SAYS it will generate — it is a snapshot and nothing refreshes it.
+        assertFalse(plan.cached)
+
+        val callsBefore = llm.calls.size
+        val chunks = service.explain(plan).toList()
+
+        assertEquals(
+            callsBefore, llm.calls.size,
+            "a stale `cached = false` plan is a cache hit by the time it runs: refusing it during a " +
+                "spend incident refuses a request that costs nothing, which is exactly what " +
+                "QuotaService says must not happen",
+        )
+        assertTrue(
+            chunks.filterIsInstance<GraphChunk.Meta>().single().cached,
+            "and the graph agrees it was a hit, because it asks the store rather than the snapshot",
+        )
+        assertEquals(2, sessions.findById(first.id)!!.nodes.size, "the first learner still gets their node")
+    }
+
+    @Test
+    fun `a plan is burned by collecting it, not by building the flow`() = runTest {
+        val (session, _) = newSession()
+        val selection = selectionOf(seedBody, "behavior of matter")
+
+        // Built once, collected twice. `claim()` sits INSIDE the flow builder, so it fires per
+        // collection; taken in the function body instead, both collections would run and both would
+        // append, and every assertion in the single-use test above would still pass.
+        val stream = service.explain(service.prepare(session.id, session.rootNodeId, selection, Verb.EXPLAIN, null))
+        stream.toList()
+        assertFailsWith<IllegalStateException> { stream.toList() }
+        assertEquals(2, sessions.findById(session.id)!!.nodes.size, "the second collection must append nothing")
+
+        // The other half, and the reason the claim is not simply taken as early as possible: a flow
+        // that is built and never collected has spent nothing and must not burn its plan.
+        val unused = service.prepare(session.id, session.rootNodeId, selection, Verb.EXPLAIN, null)
+        service.explain(unused)
+        service.explain(unused).toList()
+        assertEquals(3, sessions.findById(session.id)!!.nodes.size, "building a flow must not consume the plan")
     }
 
     @Test
