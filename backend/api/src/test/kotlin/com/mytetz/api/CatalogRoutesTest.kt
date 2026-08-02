@@ -22,6 +22,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class CatalogRoutesTest {
@@ -34,6 +35,7 @@ class CatalogRoutesTest {
 
     private fun ApplicationTestBuilder.catalogApp(
         limiter: FixedWindowRateLimiter = FixedWindowRateLimiter(limit = 100, windowMillis = 60_000),
+        clientAddresses: ClientAddressConfig = ClientAddressConfig(trustedHeader = null),
     ) {
         application {
             install(ContentNegotiation) { json() }
@@ -43,6 +45,7 @@ class CatalogRoutesTest {
                     catalog = TestFixtures.seededCatalog(),
                     topicRequests = TestFixtures.topicRequests(),
                     cookies = TestFixtures.cookieConfig,
+                    clientAddresses = clientAddresses,
                     topicRequestLimiter = limiter,
                 )
             }
@@ -175,35 +178,89 @@ class CatalogRoutesTest {
             setBody("""{"text":"${uniqueText("thermodynamics")}"}""")
         }
 
-        // The endpoint was unauthenticated AND anonymous: with no principal there is nothing to
-        // rate-limit on and nothing to name in a log when somebody starts abusing it.
+        // Continuity, not authorisation and not the rate-limit key: a browser that submits a topic
+        // request and later starts a session must carry the same principal into it rather than be
+        // issued a second one.
         val cookie = assertNotNull(response.headers[HttpHeaders.SetCookie], "no principal was established")
         assertTrue(cookie.startsWith("mytetz_pid=anon:"))
     }
 
     @Test
-    fun `one principal cannot spend more than its daily allowance`() = testApplication {
+    fun `one caller cannot spend more than its allowance, without presenting any cookie`() = testApplication {
         val limiter = FixedWindowRateLimiter(limit = 2, windowMillis = 60_000)
         catalogApp(limiter)
 
-        val first = client.post("/api/topic-requests") {
-            contentType(ContentType.Application.Json); setBody("""{"text":"${uniqueText("a")}"}""")
-        }
-        val cookie = assertNotNull(first.headers[HttpHeaders.SetCookie]).substringBefore(";")
-
         fun post(text: String) = runBlocking {
             client.post("/api/topic-requests") {
-                header(HttpHeaders.Cookie, cookie)
                 contentType(ContentType.Application.Json)
                 setBody("""{"text":"$text"}""")
             }
         }
 
+        // Note what is NOT here: no cookie is carried between these calls. The limit used to be
+        // keyed on the principal, and `Principals.resolve` mints a fresh one for every cookie-less
+        // request — so this sequence was allowed through for ever, and the limit only ever applied
+        // to honest browsers that returned their cookie.
+        assertEquals(HttpStatusCode.Accepted, post(uniqueText("a")).status)
         assertEquals(HttpStatusCode.Accepted, post(uniqueText("b")).status)
         val refused = post(uniqueText("c"))
 
         assertEquals(HttpStatusCode.TooManyRequests, refused.status)
         assertTrue(refused.bodyAsText().contains("RATE_LIMITED"))
+    }
+
+    @Test
+    fun `cookie-less requests do not each create a rate limiter entry`() = testApplication {
+        val limiter = FixedWindowRateLimiter(limit = 500, windowMillis = 60_000)
+        catalogApp(limiter)
+
+        repeat(40) {
+            client.post("/api/topic-requests") {
+                contentType(ContentType.Application.Json)
+                setBody("""{"text":"${uniqueText("flood")}"}""")
+            }
+        }
+
+        // The Critical this replaces: one map entry per request, cleared only when the 24h window
+        // rolled. 40 requests is nothing; the shape is what matters — the table must be keyed on
+        // something the caller cannot re-mint at will.
+        assertEquals(1, limiter.trackedKeys, "each cookie-less request created its own limiter key")
+    }
+
+    @Test
+    fun `the limiter table stays bounded even when every caller looks different`() = testApplication {
+        val limiter = FixedWindowRateLimiter(limit = 5, windowMillis = 60_000, maxTrackedKeys = 8)
+        catalogApp(limiter, ClientAddressConfig(trustedHeader = "CF-Connecting-IP"))
+
+        repeat(60) { i ->
+            client.post("/api/topic-requests") {
+                header("CF-Connecting-IP", "203.0.113.$i")
+                contentType(ContentType.Application.Json)
+                setBody("""{"text":"${uniqueText("spread")}"}""")
+            }
+        }
+
+        // Even a caller that can forge the trusted header cannot spend memory: the ceiling holds
+        // regardless of whether the address resolution is right, which is exactly why it exists.
+        assertEquals(8, limiter.trackedKeys, "the ceiling did not hold under key churn")
+    }
+
+    @Test
+    fun `distinct callers get distinct allowances when a trusted header is configured`() = testApplication {
+        val limiter = FixedWindowRateLimiter(limit = 1, windowMillis = 60_000)
+        catalogApp(limiter, ClientAddressConfig(trustedHeader = "CF-Connecting-IP"))
+
+        fun post(ip: String) = runBlocking {
+            client.post("/api/topic-requests") {
+                header("CF-Connecting-IP", ip)
+                contentType(ContentType.Application.Json)
+                setBody("""{"text":"${uniqueText("who")}"}""")
+            }
+        }
+
+        assertEquals(HttpStatusCode.Accepted, post("203.0.113.1").status)
+        assertEquals(HttpStatusCode.TooManyRequests, post("203.0.113.1").status)
+        assertEquals(HttpStatusCode.Accepted, post("203.0.113.2").status, "one caller spent another's allowance")
     }
 
     @Test
@@ -219,6 +276,23 @@ class CatalogRoutesTest {
 
         assertEquals(HttpStatusCode.PayloadTooLarge, response.status)
         assertTrue(response.bodyAsText().contains("PAYLOAD_TOO_LARGE"))
+    }
+
+    @Test
+    fun `the browse routes do not mint a principal cookie`() = testApplication {
+        catalogApp()
+
+        val listing = client.get("/api/catalog/topics")
+        val detail = client.get("/api/catalog/topics/quantum-physics")
+        val missing = client.get("/api/catalog/topics/nope")
+
+        // Browsing is anonymous and nothing about it needs an identity. Setting a cookie here would
+        // hand every crawler and every cache a `Set-Cookie` on a public GET — and, since the browse
+        // routes are the first thing any visitor touches, it would make the principal a
+        // tracking identifier for people who never interact with the site at all.
+        assertNull(listing.headers[HttpHeaders.SetCookie], "the listing route minted a principal")
+        assertNull(detail.headers[HttpHeaders.SetCookie], "the detail route minted a principal")
+        assertNull(missing.headers[HttpHeaders.SetCookie], "the 404 path minted a principal")
     }
 
     @Test

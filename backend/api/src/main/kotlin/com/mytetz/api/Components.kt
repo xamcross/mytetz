@@ -15,6 +15,9 @@ import com.mytetz.quota.QuotaRepository
 import com.mytetz.quota.QuotaService
 import com.mytetz.session.SessionRepository
 import com.mytetz.session.SessionService
+import org.slf4j.LoggerFactory
+
+private val log = LoggerFactory.getLogger("com.mytetz.api.Components")
 
 /**
  * The whole object graph, wired by hand.
@@ -25,16 +28,27 @@ import com.mytetz.session.SessionService
  *
  * ## Everything is a constructor parameter with a production default
  *
- * [mongo], [cookies] and [llm] all default to the production thing and can all be replaced. [llm] in
- * particular: `AnthropicLlmClient()` calls `AnthropicOkHttpClient.fromEnv()` **during construction**,
- * which demands `ANTHROPIC_API_KEY` and, once built, is one call away from real spend. A default
- * parameter is not evaluated when the caller supplies one, so a test that passes `FakeLlmClient()`
- * never constructs it — which is the only reason `ComponentsTest` can exercise this class at all.
+ * [mongo], [cookies], [clientAddresses] and [llmFactory] all default to the production thing and can
+ * all be replaced.
+ *
+ * ## The model client is a factory, and is built lazily
+ *
+ * `AnthropicLlmClient()` calls `AnthropicOkHttpClient.fromEnv()` **during construction**, which
+ * demands `ANTHROPIC_API_KEY` there and then. Taking it as a `LlmClient` parameter — even a defaulted
+ * one — therefore builds it while `Application.module()` is evaluating its own default argument, so
+ * a missing or freshly-rotated key takes down **topic browsing**, which needs no model at all.
+ * Nothing this slice registers uses it: [sessions], [graph] and [quota] are wired for Task 1.12.
+ *
+ * A factory plus `by lazy` makes the coupling match the dependency: the client is built the first
+ * time something actually needs a model, and a catalogue-only deployment never builds one. It also
+ * removes structurally, rather than by convention, the "one mistake away from a paid call" hazard
+ * that otherwise has to be policed in every test.
  */
-class Components(
+open class Components(
     val mongo: Mongo = Mongo(MongoConfig.fromEnv()),
     val cookies: PrincipalCookieConfig = PrincipalCookieConfig(),
-    llm: LlmClient = AnthropicLlmClient(),
+    val clientAddresses: ClientAddressConfig = ClientAddressConfig(),
+    llmFactory: () -> LlmClient = { AnthropicLlmClient() },
 ) {
 
     private val topics = TopicRepository(mongo.database)
@@ -43,17 +57,36 @@ class Components(
     private val quotaRepository = QuotaRepository(mongo.database)
 
     val catalog = CatalogService(topics)
-    val topicRequests = TopicRequestRepository(mongo.database)
-    val quota = QuotaService(quotaRepository)
 
-    private val graph = ExplanationGraph(
-        repository = explanations,
-        llm = llm,
-        validator = ExplanationValidator(),
-        config = GraphConfig(),
+    val topicRequests = TopicRequestRepository(
+        database = mongo.database,
+        // The repository recycles its own oldest, least-wanted rows once full. That is deliberate
+        // (see its KDoc) but it is still data disappearing, so it is visible rather than silent.
+        evictionListener = { evicted ->
+            log.info(
+                "evicted topic request '{}' (count={}) to make room; the backlog is at its cap",
+                evicted.normalizedText,
+                evicted.count,
+            )
+        },
     )
 
-    val sessions = SessionService(sessionRepository, catalog, graph, explanations)
+    val quota = QuotaService(quotaRepository)
+
+    private val llm: LlmClient by lazy(llmFactory)
+
+    private val graph by lazy {
+        ExplanationGraph(
+            repository = explanations,
+            llm = llm,
+            validator = ExplanationValidator(),
+            config = GraphConfig(),
+        )
+    }
+
+    val sessions: SessionService by lazy {
+        SessionService(sessionRepository, catalog, graph, explanations)
+    }
 
     /**
      * Creates every index in the system and seeds the catalogue.
@@ -69,8 +102,12 @@ class Components(
      * specification is a no-op, and `seedFromResource` upserts by slug while preserving each topic's
      * stored publication status — see `TopicRepository.upsertPreservingStatus`, which exists
      * precisely because wiring seeding into every boot is what this task did.
+     *
+     * `open` — with the class — only so a test can hold this method open on a latch and prove that
+     * `/api/health` answers while it is still running. There is no production subclass. Same
+     * reasoning, and the same note, as `QuotaRepository.incrementCounter`.
      */
-    suspend fun bootstrap() {
+    open suspend fun bootstrap() {
         topics.ensureIndexes()
         topicRequests.ensureIndexes()
         explanations.ensureIndexes()

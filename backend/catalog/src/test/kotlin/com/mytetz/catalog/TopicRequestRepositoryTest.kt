@@ -125,15 +125,44 @@ class TopicRequestRepositoryTest {
     // ------------------------------------------------------------------ the growth bound
 
     @Test
-    fun `a new distinct request is refused once the collection is full`() = runTest {
+    fun `the collection never grows past its cap`() = runTest {
         val bounded = TopicRequestRepository(database, maxDistinctRequests = 3)
 
-        repeat(3) { assertEquals(RecordOutcome.RECORDED, bounded.record("topic $it")) }
+        // The defect the endpoint had: every distinct normalised string minted a new document, so
+        // the collection grew without limit under trivial spam.
+        repeat(50) { bounded.record("topic $it") }
 
-        // This is the defect the endpoint had: every distinct normalised string minted a new
-        // document, so the collection grew without limit under trivial spam.
-        assertEquals(RecordOutcome.CAPACITY_REACHED, bounded.record("topic 4"))
-        assertEquals(0, bounded.countFor("topic 4"))
+        assertEquals(3, bounded.countDistinct())
+    }
+
+    @Test
+    fun `a new request is still accepted once the collection is full, by evicting the weakest row`() = runTest {
+        val bounded = TopicRequestRepository(database, maxDistinctRequests = 2)
+        bounded.record("first")
+        bounded.record("second")
+
+        // A permanent ceiling means a stranger sending 5000 junk phrases switches off the only
+        // demand signal the product has, until a human triages the backlog by hand. Evicting the
+        // least-demanded row instead makes the collection a bounded top-N by demand, which is what
+        // a demand signal wanted to be anyway, and it self-heals the moment the flood stops.
+        assertEquals(RecordOutcome.RECORDED, bounded.record("third"))
+
+        assertEquals(2, bounded.countDistinct())
+        assertEquals(1, bounded.countFor("third"), "the new request was refused rather than admitted")
+    }
+
+    @Test
+    fun `a popular request survives a flood of one-off requests`() = runTest {
+        val bounded = TopicRequestRepository(database, maxDistinctRequests = 3)
+        repeat(5) { bounded.record("organic chemistry") }
+
+        repeat(30) { bounded.record("junk $it") }
+
+        // Eviction is by demand first, so the row everybody asked for outlives the flood. Without
+        // that ordering the cap would be worse than useless: it would preferentially discard the
+        // signal and keep the noise.
+        assertEquals(5, bounded.countFor("organic chemistry"), "the most-requested row was evicted")
+        assertEquals(3, bounded.countDistinct())
     }
 
     @Test
@@ -186,11 +215,14 @@ class TopicRequestRepositoryTest {
     }
 
     @Test
-    fun `the demand index exists so the top requests can be read cheaply`() = runTest {
+    fun `the demand and eviction indexes exist so both reads are cheap`() = runTest {
         val names = database.getCollection<TopicRequest>("topicRequests")
             .listIndexes()
             .let { flow -> mutableListOf<String>().also { names -> flow.collect { names += it.getString("name") } } }
 
         assertTrue("demand" in names, "expected a demand index, found $names")
+        // Eviction sorts by (count asc, lastSeen asc) on every new row once full — under exactly the
+        // flood that makes it run, an unindexed sort is a collection scan per request.
+        assertTrue("weakest" in names, "expected an eviction index, found $names")
     }
 }

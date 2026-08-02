@@ -165,9 +165,13 @@ object Principals {
         // too, and checked by RECONSTRUCTING the value through PrincipalId.anonymous rather than by
         // matching a prefix literal — the namespace is quota's to define, and a copy of it here
         // would be free to drift.
+        // Exact, not case-insensitive. `UUID.randomUUID().toString()` is lower case, so that is the
+        // only form this code ever mints; accepting the upper-case spelling too would admit two
+        // distinct principal strings — two Mongo `_id`s and two quota buckets — per UUID, for a
+        // cookie we never issued. Nothing gains anything from the laxity.
         val uuid = value.substringAfter(':', missingDelimiterValue = "")
         val parsed = runCatching { UUID.fromString(uuid) }.getOrNull() ?: return null
-        if (!parsed.toString().equals(uuid, ignoreCase = true)) return null
+        if (parsed.toString() != uuid) return null
 
         return PrincipalId.anonymous(uuid).takeIf { it.value == value }
     }

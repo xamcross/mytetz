@@ -6,7 +6,6 @@ import com.mytetz.catalog.Topic
 import com.mytetz.catalog.TopicRequestRepository
 import com.mytetz.catalog.TopicStatus
 import io.ktor.http.HttpStatusCode
-import io.ktor.server.plugins.NotFoundException
 import io.ktor.server.request.contentLength
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
@@ -33,8 +32,8 @@ private fun Topic.toSummary() = TopicSummary(slug, title, category, summary)
 
 private val log = LoggerFactory.getLogger("com.mytetz.api.CatalogRoutes")
 
-/** How many topic requests one principal may submit per [TOPIC_REQUEST_WINDOW_MILLIS]. */
-const val TOPIC_REQUESTS_PER_PRINCIPAL: Int = 10
+/** How many topic requests one caller address may submit per [TOPIC_REQUEST_WINDOW_MILLIS]. */
+const val TOPIC_REQUESTS_PER_CALLER: Int = 10
 
 const val TOPIC_REQUEST_WINDOW_MILLIS: Long = 24L * 60 * 60 * 1000
 
@@ -58,16 +57,20 @@ const val MAX_TOPIC_REQUEST_BODY_BYTES: Long = 2_048
  * bounds, at three different layers, because no single one of them is sufficient:
  *
  * 1. **Body size**, here, before `receive`. Nothing else stops an arbitrary allocation.
- * 2. **A principal**, here, via [Principals.resolve]. Not authentication — it is the identity that
- *    makes rate limiting and log attribution possible at all. The endpoint previously had none, so
- *    there was nothing to limit *on* and nothing to name when abuse started.
- * 3. **A per-principal rate**, here, via [FixedWindowRateLimiter] — whose KDoc states plainly what
- *    it does not cover (per instance, resets on restart, and a determined attacker can mint fresh
- *    cookies).
- * 4. **Storage**, in `TopicRequestRepository`: text length, and a hard cap on the number of distinct
- *    rows. That one is the backstop, it is the only bound an attacker cannot dodge by changing
- *    identity, and it is enforced in the repository precisely so that a future second write path
- *    cannot forget it.
+ * 2. **A per-caller rate**, here, via [FixedWindowRateLimiter] keyed on [ClientAddress] — whose KDoc
+ *    states plainly what it does not cover. It is keyed on the **address and not the principal**,
+ *    and that distinction is the whole point: `Principals.resolve` mints a fresh principal for any
+ *    request without a valid cookie, so a per-principal limit limits only callers polite enough to
+ *    return their cookie, while growing the limiter's table by one entry per request.
+ * 3. **A principal**, here, via [Principals.resolve] — *not* as the rate-limit key, and not for
+ *    attribution either: the log line names the address, because that is the thing a limit is
+ *    enforced against. It is here purely for continuity, so that a real browser which submits a
+ *    request and later starts a session carries the same principal into it rather than being issued
+ *    a second one. Established after the limiter, so a refused request costs no cookie.
+ * 4. **Storage**, in `TopicRequestRepository`: text length, and a cap on the number of distinct rows
+ *    that evicts the least-demanded row rather than refusing new ones. That is the backstop, it is
+ *    the only bound a caller cannot dodge by changing identity, and it is enforced in the repository
+ *    precisely so that a future second write path cannot forget it.
  *
  * Validation of the text itself is **not** duplicated here. The repository owns it, this route maps
  * the outcome to a status, and there is exactly one place where the rule can be wrong.
@@ -76,8 +79,9 @@ fun Route.catalogRoutes(
     catalog: CatalogService,
     topicRequests: TopicRequestRepository,
     cookies: PrincipalCookieConfig,
+    clientAddresses: ClientAddressConfig = ClientAddressConfig(),
     topicRequestLimiter: FixedWindowRateLimiter = FixedWindowRateLimiter(
-        limit = TOPIC_REQUESTS_PER_PRINCIPAL,
+        limit = TOPIC_REQUESTS_PER_CALLER,
         windowMillis = TOPIC_REQUEST_WINDOW_MILLIS,
     ),
 ) {
@@ -102,7 +106,7 @@ fun Route.catalogRoutes(
         // raises one type for both: a distinguishable answer is an oracle for what is in the
         // pipeline.
         val topic = catalog.findBySlug(slug)?.takeIf { it.status == TopicStatus.PUBLISHED }
-            ?: throw NotFoundException("no topic with slug '$slug'")
+            ?: throw ResourceNotFoundException("no topic with slug '$slug'")
 
         call.respond(topic.toSummary())
     }
@@ -117,9 +121,12 @@ fun Route.catalogRoutes(
             return@post
         }
 
-        val principal = Principals.resolve(call, cookies)
-        if (!topicRequestLimiter.tryAcquire(principal.value)) {
-            log.info("rate limited topic requests from {}", principal.value)
+        // Keyed on the caller's address, NOT on the principal. See the note on this function and on
+        // ClientAddress: a principal is free to re-mint, so keying on one limits nobody and grows a
+        // table by one entry per request.
+        val caller = ClientAddress.of(call, clientAddresses)
+        if (!topicRequestLimiter.tryAcquire(caller)) {
+            log.info("rate limited topic requests from {}", caller)
             call.respond(
                 HttpStatusCode.TooManyRequests,
                 ApiError(
@@ -130,6 +137,10 @@ fun Route.catalogRoutes(
             )
             return@post
         }
+
+        // After the limiter, so a refused request costs no cookie. Continuity only — never the
+        // bound. See the note on this function.
+        Principals.resolve(call, cookies)
 
         val payload = call.receive<TopicRequestPayload>()
         when (topicRequests.record(payload.text)) {
@@ -142,17 +153,6 @@ fun Route.catalogRoutes(
                     "text must be 1-${TopicRequestRepository.MAX_TEXT_LENGTH} characters",
                 ),
             )
-
-            // Deliberately the same 429 a rate-limited caller gets, and deliberately not a 500: the
-            // request was fine, we are simply not accepting new distinct topics right now. An
-            // operator working through the backlog is what clears it.
-            RecordOutcome.CAPACITY_REACHED -> {
-                log.warn("the topic request collection is at capacity; the backlog needs triaging")
-                call.respond(
-                    HttpStatusCode.TooManyRequests,
-                    ApiError("RATE_LIMITED", "the topic request backlog is full; try again later"),
-                )
-            }
         }
     }
 }

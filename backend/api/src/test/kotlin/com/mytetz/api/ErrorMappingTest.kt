@@ -172,8 +172,8 @@ class ErrorMappingTest {
     }
 
     @Test
-    fun `a not-found raised by the API layer is 404`() = testApplication {
-        throwing { NotFoundException("no topic with slug 'nope'") }
+    fun `a not-found raised by the API layer is 404 and echoes its message`() = testApplication {
+        throwing { ResourceNotFoundException("no topic with slug 'nope'") }
 
         val response = client.get("/boom")
 
@@ -181,6 +181,22 @@ class ErrorMappingTest {
         assertEquals("NOT_FOUND", response.apiError().code)
         // API-authored, so it may be echoed — it names only what the client already sent.
         assertTrue(response.bodyAsText().contains("nope"))
+    }
+
+    @Test
+    fun `a not-found raised by the framework is 404 but its message is not echoed`() = testApplication {
+        // The echo allowlist has to key on AUTHORSHIP, not on a framework class. Keyed on Ktor's
+        // NotFoundException, the moment Task 1.12 — or any plugin — raises one carrying a session id
+        // and a principal, the disclosure policy this task exists to establish is undone and no test
+        // notices. A type of our own makes "we wrote this message" checkable.
+        throwing { NotFoundException("session s-42 for principal anon:9c1f not found") }
+
+        val response = client.get("/boom")
+
+        assertEquals(HttpStatusCode.NotFound, response.status)
+        assertEquals("NOT_FOUND", response.apiError().code)
+        assertFalse(response.bodyAsText().contains("s-42"), "a framework message was echoed")
+        assertFalse(response.bodyAsText().contains("anon:9c1f"), "a principal leaked to the client")
     }
 
     // ------------------------------------------------------- the domain families

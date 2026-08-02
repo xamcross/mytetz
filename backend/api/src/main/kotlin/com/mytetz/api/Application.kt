@@ -1,5 +1,6 @@
 package com.mytetz.api
 
+import io.ktor.http.HttpStatusCode
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
 import io.ktor.server.application.install
@@ -10,9 +11,12 @@ import io.ktor.server.http.content.staticResources
 import io.ktor.server.netty.Netty
 import io.ktor.server.plugins.calllogging.CallLogging
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.server.response.respond
+import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
+import java.util.concurrent.atomic.AtomicBoolean
 
 fun main() {
     val port = System.getenv("PORT")?.toInt() ?: 8080
@@ -31,15 +35,32 @@ fun Application.module(components: Components = Components()) {
     install(CallLogging)
     installErrorMapping()
 
-    bootstrap(components)
+    val ready = bootstrap(components)
 
     routing {
-        healthRoutes(mongoPing = { components.mongo.ping() })
+        healthRoutes(mongoPing = { components.mongo.ping() }, ready = { ready.get() })
         catalogRoutes(
             catalog = components.catalog,
             topicRequests = components.topicRequests,
             cookies = components.cookies,
+            clientAddresses = components.clientAddresses,
         )
+
+        // Every unmatched `/api/**` path, answered as JSON.
+        //
+        // Without this the static handler below catches them, because `default("index.html")` makes
+        // it match everything — so a typo'd or withdrawn endpoint returns the SPA shell with
+        // **200 OK**. A client parsing that as `ApiError` gets a syntax error rather than a 404, and
+        // a monitor watching status codes sees a perfectly healthy API.
+        route("/api/{...}") {
+            handle {
+                call.respond(
+                    HttpStatusCode.NotFound,
+                    ApiError("NOT_FOUND", "no such endpoint"),
+                )
+            }
+        }
+
         staticResources("/", "static") {
             default("index.html")
         }
@@ -47,36 +68,53 @@ fun Application.module(components: Components = Components()) {
 }
 
 /**
- * Index creation and catalogue seeding, run once at startup.
+ * Starts index creation and catalogue seeding, and returns a flag that flips when they finish.
  *
- * ## Why a failure here does not stop the server
+ * ## Why this does not block startup
  *
- * `runBlocking` on the startup path is deliberate — this must finish before the first request — but
- * the `catch` is the decision worth recording, because letting the failure propagate is the more
- * obvious choice and it is the wrong one *for this deployment*:
+ * `Application.module()` runs to completion **before** the engine accepts a single connection, so
+ * anything blocking in here is time during which nothing is served — not even `/api/health`, whose
+ * entire purpose is to report the state of the database.
  *
- * - `fly.toml` sets `min_machines_running = 0` with `auto_start_machines`, so the machine boots on
- *   the first request after an idle period. A throw here exits the process, so every arriving
- *   request would trigger a boot, a crash, and nothing served — a traffic-triggered crash loop
- *   during precisely the incident (Mongo unreachable) when someone needs the site to say so.
- * - `/api/health` already answers that question honestly: it pings Mongo per request and reports
- *   503 `degraded`, and the health check in `fly.toml` reads it. Refusing to start would make the
- *   endpoint that exists to report a database outage unreachable during a database outage.
+ * That matters twice, and the second is not an edge case:
  *
- * The cost, stated plainly rather than glossed: an instance that fails here serves an **empty
- * catalogue with 200 OK**, and runs without indexes until its next boot. That is why it is logged at
- * ERROR with a greppable token and the failure attached rather than swallowed — a silent version of
- * this trade-off would be indefensible, and missing indexes going unnoticed for ten tasks is the
- * very defect this function was added to close.
+ * - **During a Mongo outage.** `MongoConfig` sets no `serverSelectionTimeoutMS`, so the driver's
+ *   30-second default applies and the first `ensureIndexes()` hangs for that long. `fly.toml`'s
+ *   health check has a 10 s grace and a 5 s timeout, so it fails throughout — the endpoint that
+ *   exists to say "the database is unreachable" is itself unreachable for exactly as long as the
+ *   database is.
+ * - **On every cold start.** `seedFromResource` puts every seeded topic through
+ *   `TopicRepository.upsertPreservingStatus`, which is a read *and* a write each: dozens of
+ *   sequential round trips plus five `createIndex` calls before the first byte. With
+ *   `min_machines_running = 0`, every idle period ends in a cold start that a real user waits for.
+ *
+ * So it runs on the application's own scope and the routes go up immediately.
+ *
+ * ## What that costs, stated rather than glossed
+ *
+ * There is a window — normally well under a second — in which the catalogue is queryable but not yet
+ * seeded, so a request landing inside it can see an empty or partial topic list. That is why
+ * `/api/health` reports [HealthResponse.ready]: the window is visible rather than mysterious. It is
+ * the better trade, because the failure is transient and self-corrects on the next request, whereas
+ * blocking makes every cold start slower and every outage silent.
+ *
+ * A failure is logged at ERROR with a greppable token and does **not** stop the server, for the same
+ * reason: `/api/health` already reports the database state honestly, and a crash on a machine that
+ * boots on demand turns every arriving request into a boot-crash loop serving nothing at all.
  */
-private fun Application.bootstrap(components: Components) {
-    try {
-        runBlocking { components.bootstrap() }
-    } catch (e: Exception) {
-        log.error(
-            "BOOTSTRAP_FAILED — indexes and the catalogue seed did not complete. This instance is " +
-                "serving without them; /api/health reports the database state.",
-            e,
-        )
+private fun Application.bootstrap(components: Components): AtomicBoolean {
+    val ready = AtomicBoolean(false)
+    launch {
+        try {
+            components.bootstrap()
+            ready.set(true)
+        } catch (e: Exception) {
+            log.error(
+                "BOOTSTRAP_FAILED — indexes and the catalogue seed did not complete. This instance " +
+                    "is serving without them; /api/health reports the database state and readiness.",
+                e,
+            )
+        }
     }
+    return ready
 }

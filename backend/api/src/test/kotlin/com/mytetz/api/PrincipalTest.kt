@@ -211,6 +211,23 @@ class PrincipalTest {
     }
 
     @Test
+    fun `a correctly signed cookie whose uuid is upper case is rejected`() = testApplication {
+        whoAmI()
+
+        // `UUID.randomUUID().toString()` is lower case, so that is the only spelling this code ever
+        // mints. Accepting the upper-case one too would admit two distinct principal strings — two
+        // Mongo `_id`s and two quota buckets — per UUID, for a cookie we never issued.
+        val shouted = "anon:${UUID.randomUUID().toString().uppercase()}"
+
+        val body = client.get("/who") {
+            headers.append(HttpHeaders.Cookie, "$COOKIE=${sign(shouted, key)}")
+        }.bodyAsText()
+
+        assertNotEquals(shouted, body, "an upper-case spelling of a UUID was accepted as a second principal")
+        assertFreshAnonymousPrincipal(body)
+    }
+
+    @Test
     fun `a correctly signed cookie in an invented namespace is rejected`() = testApplication {
         whoAmI()
 

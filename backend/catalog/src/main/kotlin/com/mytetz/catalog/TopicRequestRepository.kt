@@ -1,6 +1,7 @@
 package com.mytetz.catalog
 
 import com.mongodb.client.model.Filters
+import com.mongodb.client.model.FindOneAndDeleteOptions
 import com.mongodb.client.model.IndexOptions
 import com.mongodb.client.model.Indexes
 import com.mongodb.client.model.UpdateOptions
@@ -33,9 +34,6 @@ enum class RecordOutcome {
 
     /** Empty after normalisation, or longer than [TopicRequestRepository.MAX_TEXT_LENGTH]. */
     INVALID_TEXT,
-
-    /** The collection already holds its maximum number of distinct requests. */
-    CAPACITY_REACHED,
 }
 
 /**
@@ -63,9 +61,26 @@ enum class RecordOutcome {
  * exactly when the signal starts to matter, and it would hand a spammer a way to silence everyone
  * else's votes as well as their own.
  *
+ * ### Full means evict the weakest, not refuse the newest
+ *
+ * A permanent ceiling bounds storage and then hands a stranger a second lever: ~[maxDistinctRequests]
+ * junk phrases fill every slot, and from then on every genuine request is refused until a human
+ * triages the backlog by hand. For the *only* demand signal a curated catalogue has, "switchable off
+ * by anyone" is not an acceptable resting state.
+ *
+ * So a full collection evicts its weakest row — **lowest [TopicRequest.count] first, oldest
+ * [TopicRequest.lastSeenAtEpochMillis] to break the tie** — and admits the new one. That ordering is
+ * the point: the row everybody asked for outlives a flood of one-shot rows, so what survives is a
+ * bounded top-N by demand, which is what this collection wanted to be anyway. It self-heals the
+ * moment the flood stops, with no operator involved.
+ *
+ * The cost, stated rather than glossed: a sustained flood does erase genuine requests that only ever
+ * had one vote. Nothing here can prevent that — the storage is finite — and preferring to discard
+ * count-1 rows is the least-bad rule available.
+ *
  * ### What the cap does not promise
  *
- * The count-then-insert in [record] is two round trips with no transaction between them, so N
+ * The count-then-insert in [record] is several round trips with no transaction between them, so N
  * concurrent first-sightings of N distinct new strings can each see room and each insert, leaving
  * the collection up to N over. The overshoot is bounded by the API layer's concurrency and not by
  * this class — the same honest bound `QuotaService` documents for its own check-then-record pair.
@@ -79,13 +94,28 @@ class TopicRequestRepository(
     database: MongoDatabase,
     private val maxDistinctRequests: Long = resolveMaxDistinctRequests(System.getenv(MAX_DISTINCT_ENV)),
     private val clock: () -> Long = System::currentTimeMillis,
+    /**
+     * Called with each row [record] discards to make room. This module has no logger of its own, and
+     * a collection quietly recycling itself is something an operator should be able to see — the API
+     * layer supplies one that logs.
+     */
+    private val evictionListener: (TopicRequest) -> Unit = {},
 ) {
 
     private val collection = database.getCollection<TopicRequest>("topicRequests")
 
-    /** Serves "what is most asked for", which is the only question anyone asks of this collection. */
+    /**
+     * `demand` serves "what is most asked for", the only question anyone asks of this collection.
+     * `weakest` serves [record]'s eviction sort, which runs on every new row once the collection is
+     * full — that is, under exactly the flood that makes it run, where a collection scan per request
+     * is the difference between a bounded cost and a self-inflicted outage.
+     */
     suspend fun ensureIndexes() {
         collection.createIndex(Indexes.descending("count"), IndexOptions().name("demand"))
+        collection.createIndex(
+            Indexes.compoundIndex(Indexes.ascending("count"), Indexes.ascending("lastSeenAtEpochMillis")),
+            IndexOptions().name("weakest"),
+        )
     }
 
     /**
@@ -115,9 +145,21 @@ class TopicRequestRepository(
         val matched = collection.updateOne(Filters.eq("_id", normalized), update).matchedCount
         if (matched > 0L) return RecordOutcome.RECORDED
 
-        // Only a genuinely new row costs capacity. See "What the cap does not promise" above for
-        // the race this leaves and why it is accepted.
-        if (collection.countDocuments() >= maxDistinctRequests) return RecordOutcome.CAPACITY_REACHED
+        // Only a genuinely new row costs capacity. Evict rather than refuse — see "Full means evict
+        // the weakest" above — and loop, because a concurrent writer can have taken the slot this
+        // one just freed. Bounded by construction: each pass deletes a row.
+        while (collection.countDocuments() >= maxDistinctRequests) {
+            val evicted = collection.findOneAndDelete(
+                Filters.empty(),
+                FindOneAndDeleteOptions().sort(
+                    Indexes.compoundIndex(
+                        Indexes.ascending("count"),
+                        Indexes.ascending("lastSeenAtEpochMillis"),
+                    )
+                ),
+            ) ?: break // Nothing left to evict; the cap must be 0-ish. Admit rather than spin.
+            evictionListener(evicted)
+        }
 
         collection.updateOne(
             Filters.eq("_id", normalized),
@@ -126,6 +168,9 @@ class TopicRequestRepository(
         )
         return RecordOutcome.RECORDED
     }
+
+    /** How many distinct requests are stored. The cap is on this number. */
+    suspend fun countDistinct(): Long = collection.countDocuments()
 
     /**
      * How many times [text] has been asked for, in **any** spelling.

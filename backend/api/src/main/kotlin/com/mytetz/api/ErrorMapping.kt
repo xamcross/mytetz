@@ -32,6 +32,19 @@ import org.slf4j.LoggerFactory
 @Serializable
 data class ApiError(val code: String, val message: String, val retryAfter: Long? = null)
 
+/**
+ * A resource this API looked for and did not find, with a message written **by us** and safe to
+ * return.
+ *
+ * A type of our own rather than Ktor's `NotFoundException`, and the difference is the echo policy
+ * below. That policy is an allowlist of "messages this codebase authored for the caller's benefit",
+ * and keying it on a *framework* type gets the property wrong: any plugin, and Task 1.12's session
+ * routes, can raise a `NotFoundException` carrying whatever they like — for instance
+ * `"session $id for principal $p not found"` — and the disclosure rule this task exists to establish
+ * would be undone with no test noticing. Authorship is exactly the thing the type should encode.
+ */
+class ResourceNotFoundException(message: String) : Exception(message)
+
 /** The name an operator alerts on. Present in the log line and nowhere in any response body. */
 internal const val CORRUPT_SESSION_ALERT: String = "CORRUPT_SESSION"
 
@@ -83,9 +96,10 @@ private val INVALID_REQUEST = ApiError("INVALID_REQUEST", "the request was not v
  * - **Echoed** — [SpanMismatchException] and the three ceiling types. Every one of these is raised
  *   *at* the caller, describes the caller's own input or the limit it crossed, and is the only way a
  *   client can explain the refusal to the learner.
- * - **Echoed** — [NotFoundException], which this API layer raises itself and populates with nothing
- *   the client did not already send.
- * - **Not echoed** — everything else. The full detail goes to the log, where it belongs.
+ * - **Echoed** — [ResourceNotFoundException], which exists precisely so that "this API wrote this
+ *   message" is a property of the *type* rather than an assumption about a framework class.
+ * - **Not echoed** — everything else, including Ktor's own `NotFoundException`. The full detail goes
+ *   to the log, where it belongs.
  *
  * ## Handler selection
  *
@@ -139,7 +153,12 @@ fun Application.installErrorMapping() {
          *                              conversion as, so this is the live path for malformed JSON.
          * - ContentConvertException  : Exception — the converter's own type, in case it ever
          *                              reaches the pipeline unwrapped.
-         * - ContentTransformationException : IOException — no converter could handle the body.
+         * - ContentTransformationException — no converter could handle the body.
+         *
+         * The published API reference gives `ContentTransformationException`'s supertype as
+         * `IOException`; that could not be confirmed against the artifact on the classpath and
+         * nothing here depends on it, since the type is registered directly. Recorded as unverified
+         * rather than asserted.
          */
         exception<BadRequestException> { call, cause ->
             log.info("rejected a malformed request body: {}", cause.message)
@@ -178,8 +197,16 @@ fun Application.installErrorMapping() {
             call.respond(HttpStatusCode.NotFound, ApiError("NOT_FOUND", "no such session"))
         }
 
+        // Ours, so the message is echoed: we wrote it, and it names only what the client sent.
+        exception<ResourceNotFoundException> { call, cause ->
+            call.respond(HttpStatusCode.NotFound, ApiError("NOT_FOUND", cause.message.orEmpty()))
+        }
+
+        // Ktor's, or a plugin's. Same status, but the message is NOT echoed — we did not write it
+        // and cannot vouch for what it names. See [ResourceNotFoundException].
         exception<NotFoundException> { call, cause ->
-            call.respond(HttpStatusCode.NotFound, ApiError("NOT_FOUND", cause.message ?: "not found"))
+            log.info("a framework not-found reached the mapping: {}", cause.message)
+            call.respond(HttpStatusCode.NotFound, ApiError("NOT_FOUND", "not found"))
         }
 
         // -------------------------------------------------- a ceiling was reached
