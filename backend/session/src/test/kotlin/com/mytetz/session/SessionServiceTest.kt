@@ -9,6 +9,7 @@ import com.mytetz.graph.ExplanationRepository
 import com.mytetz.graph.ExplanationValidator
 import com.mytetz.graph.GraphChunk
 import com.mytetz.graph.GraphConfig
+import com.mytetz.graph.GraphRequest
 import com.mytetz.graph.Verb
 import com.mytetz.llm.FakeLlmClient
 import kotlinx.coroutines.flow.first
@@ -55,7 +56,23 @@ class SessionServiceTest {
     private val firstSentence = "Quantum tunnelling lets a particle pass through a barrier it has too little energy to climb."
     private val secondSentence = "The odds fall away sharply with width, e.g. by roughly a factor of ten for each 0.1 nanometers added."
 
+    /**
+     * Three sentences ending, in turn, on a bare single letter, on a two-letter token shaped like a
+     * title, and on an ordinary word. The first two are the shapes a rule built only to prevent
+     * early splits will happily MERGE into the sentence after them — the error direction the
+     * implementation declares worse, so it needs its own fixture.
+     */
+    private val initialBody =
+        "A magnetic field has a strength at every point, and physicists write that strength as B. " +
+            "A pulse of it can rise and fall in under 20 ms. " +
+            "The letter is conventional and carries no meaning of its own."
+
+    private val msSentence = "A pulse of it can rise and fall in under 20 ms."
+    private val conventionSentence = "The letter is conventional and carries no meaning of its own."
+
     private var ids = 0
+
+    private val graph = ExplanationGraph(explanations, llm, ExplanationValidator(), GraphConfig(promptVersion = "v1"))
 
     private fun serviceWith(
         limits: SessionLimits = SessionLimits(),
@@ -63,7 +80,7 @@ class SessionServiceTest {
     ) = SessionService(
         sessions = sessions,
         catalog = catalog,
-        graph = ExplanationGraph(explanations, llm, ExplanationValidator(), GraphConfig(promptVersion = "v1")),
+        graph = graph,
         explanations = explanations,
         limits = limits,
         idFactory = { "id${ids++}" },
@@ -264,6 +281,84 @@ class SessionServiceTest {
         )
     }
 
+    @Test
+    fun `explain refuses Verb SEED, which is the create path and not a learner action`() = runTest {
+        val (session, seed) = newSession()
+        val selection = selectionOf(seedBody, "behavior of matter")
+        val callsBefore = llm.calls.size
+
+        assertFailsWith<IllegalArgumentException> {
+            service.explain(session.id, session.rootNodeId, selection, Verb.SEED, null).toList()
+        }
+
+        assertEquals(callsBefore, llm.calls.size)
+        assertEquals(1, sessions.findById(session.id)!!.nodes.size)
+
+        // Why it must be refused outright rather than merely discouraged: keyFor BRANCHES on SEED
+        // and ignores parentKey, span and variant entirely. The learner's request would therefore
+        // have resolved to the topic's opening paragraph — already in the store, because create put
+        // it there — and been handed back, free and instant, as the answer to their highlight.
+        assertEquals(
+            seed.key,
+            graph.keyFor(
+                GraphRequest(
+                    topicSlug = "quantum-physics",
+                    topicTitle = "Quantum Physics",
+                    parentKey = session.nodes.single().explanationKey,
+                    ancestors = emptyList(),
+                    span = "behavior of matter",
+                    spanSentence = seedBody,
+                    verb = Verb.SEED,
+                    variant = 2,
+                    depth = 7,
+                )
+            ),
+            "a SEED request collapses onto the topic's seed key whatever else it carries",
+        )
+    }
+
+    @Test
+    fun `the ancestry is labelled by root-ness, not by verb, so a SEED node at depth cannot erase a real span`() = runTest {
+        llm.bodyByPromptSubstring["fundamental physical theory"] = twoSentenceBody
+        val (session, _) = newSession()
+        service.explain(
+            session.id, session.rootNodeId,
+            selectionOf(seedBody, "fundamental physical theory"), Verb.EXPLAIN, null,
+        ).toList()
+        val child = sessions.findById(session.id)!!.nodes.last()
+
+        // `explain` now refuses to create one of these, but that closes only one of the two doors.
+        // `appendNode` is the write primitive and Task 1.9 documented that it validates nothing, and
+        // any session written before that refusal existed looks exactly like this.
+        val mislabelled = SessionNode(
+            nodeId = "seed-verb-at-depth",
+            parentNodeId = session.rootNodeId,
+            explanationKey = child.explanationKey,
+            span = "behavior of matter",
+            verb = Verb.SEED,
+            variant = 0,
+            depth = 1,
+            createdAtEpochMillis = FIXED_NOW,
+        )
+        sessions.appendNode(session.id, mislabelled, FIXED_NOW)
+
+        service.explain(
+            session.id, mislabelled.nodeId,
+            selectionOf(twoSentenceBody, "too little energy"), Verb.EXPLAIN, null,
+        ).toList()
+
+        val prompt = llm.calls.last().userPrompt
+        assertTrue(
+            prompt.contains("2. They highlighted \"behavior of matter\""),
+            "the learner's real span must survive: keying on the verb replaces it with the seed's label",
+        )
+        assertEquals(
+            1,
+            Regex("the topic introduction").findAll(prompt).count(),
+            "exactly one node in any chain is the topic introduction, and it is the one with no parent",
+        )
+    }
+
     // ------------------------------------------------------------------ the injection gate
 
     @Test
@@ -340,6 +435,23 @@ class SessionServiceTest {
             assertFailsWith<SpanMismatchException>("$selection must be refused") {
                 service.explain(session.id, session.rootNodeId, selection, Verb.EXPLAIN, null).toList()
             }
+        }
+    }
+
+    @Test
+    fun `a span of nothing but whitespace is rejected`() = runTest {
+        val (session, _) = newSession()
+
+        // This one really does sit where it says it does, so the offset and text checks both pass it
+        // — and the model is then asked to explain `" "`, under a content key minted forever.
+        val space = seedBody.indexOf(' ')
+        assertEquals(" ", seedBody.substring(space, space + 1), "the fixture must genuinely match")
+
+        assertFailsWith<SpanMismatchException> {
+            service.explain(
+                session.id, session.rootNodeId,
+                SpanSelection(" ", space, space + 1), Verb.EXPLAIN, null,
+            ).toList()
         }
     }
 
@@ -424,6 +536,35 @@ class SessionServiceTest {
         assertEquals(twoSentenceBody, sentenceFor("to climb. The odds"))
     }
 
+    @Test
+    fun `a sentence ending on a bare initial or an abbreviation-shaped word is not merged into the next`() = runTest {
+        // The other error direction, and the one the implementation calls worse: a rule 2 that is
+        // too eager does not shorten the context, it runs two sentences together and at the limit
+        // hands back the whole body — the very failure rule 1 exists to prevent, arriving through
+        // the door meant to fix it.
+        llm.bodyByPromptSubstring["fundamental physical theory"] = initialBody
+        val (session, _) = newSession()
+        service.explain(
+            session.id, session.rootNodeId,
+            selectionOf(seedBody, "fundamental physical theory"), Verb.EXPLAIN, null,
+        ).toList()
+        val child = sessions.findById(session.id)!!.nodes.last()
+
+        suspend fun sentenceFor(span: String): String? = service.explain(
+            session.id, child.nodeId,
+            selectionOf(initialBody, span), Verb.EXPLAIN, null,
+        ).toList().filterIsInstance<GraphChunk.Done>().single().explanation.spanSentence
+
+        // "…write that strength as B." — a bare single letter treated as an initial swallows the
+        // whole sentence that follows it. Physics and biology prose reaches for this shape freely.
+        assertEquals(msSentence, sentenceFor("rise and fall"))
+
+        // "…in under 20 ms." — here "ms" is milliseconds, not a title, and it ends the sentence.
+        // Same for "no.", "fig.", "ref." and "the 21st.": every one is an ordinary word, so none of
+        // them may be on the abbreviation list.
+        assertEquals(conventionSentence, sentenceFor("conventional"))
+    }
+
     // ------------------------------------------------------------------ the ceilings
 
     @Test
@@ -443,6 +584,31 @@ class SessionServiceTest {
         // assertion above would not notice.
         service.explain(session.id, session.rootNodeId, selection, Verb.SIDE_VIEW, ceiling).toList()
         assertEquals(ceiling, sessions.findById(session.id)!!.nodes.last().variant)
+    }
+
+    @Test
+    fun `a negative variant is rejected, so the ceiling cannot be walked around from below`() = runTest {
+        val (session, _) = newSession()
+        val selection = selectionOf(seedBody, "behavior of matter")
+        val callsBefore = llm.calls.size
+
+        listOf(-1, -2, Int.MIN_VALUE).forEach { variant ->
+            assertFailsWith<VariantLimitException>("variant $variant must be refused") {
+                service.explain(session.id, session.rootNodeId, selection, Verb.SIDE_VIEW, variant).toList()
+            }
+        }
+
+        // A ceiling tested only from above is not a ceiling. Every negative is <= maxVariants and
+        // every one is a distinct ContentKey.derive(…, variant.toString(), …), so each is a fresh
+        // PAID generation of the same span under the same verb, without bound. A stored negative
+        // would also break ContextChain.highestVariant, whose contract is that 0 back means
+        // "untouched".
+        assertEquals(callsBefore, llm.calls.size)
+        assertEquals(1, sessions.findById(session.id)!!.nodes.size)
+
+        // 0 is still permitted: this is a bound, not a ban on the original answer.
+        service.explain(session.id, session.rootNodeId, selection, Verb.EXPLAIN, 0).toList()
+        assertEquals(0, sessions.findById(session.id)!!.nodes.last().variant)
     }
 
     @Test
@@ -548,6 +714,37 @@ class SessionServiceTest {
         llm.calls.clear()
         service.explain(second).toList()
         assertEquals(0, llm.calls.size)
+    }
+
+    @Test
+    fun `a plan is single use, so replaying one cannot append past the node ceiling`() = runTest {
+        val (session, _) = newSession()
+        val plan = service.prepare(
+            session.id, session.rootNodeId,
+            selectionOf(seedBody, "behavior of matter"), Verb.EXPLAIN, null,
+        )
+
+        service.explain(plan).toList()
+        assertEquals(2, sessions.findById(session.id)!!.nodes.size)
+
+        // A plan carries the ceiling decisions prepare() took against the session as it was then,
+        // and explain(plan) re-checks none of them. Executed N times it appends N nodes and walks
+        // straight past maxNodes, on a cache hit, for free.
+        val replay = assertFailsWith<IllegalStateException> { service.explain(plan).toList() }
+        assertTrue(
+            "already been executed" in replay.message.orEmpty(),
+            "the failure must say what the caller did wrong: ${replay.message}",
+        )
+        assertEquals(2, sessions.findById(session.id)!!.nodes.size, "a replayed plan must append nothing")
+
+        // And the documented remedy works: prepare again.
+        service.explain(
+            service.prepare(
+                session.id, session.rootNodeId,
+                selectionOf(seedBody, "behavior of matter"), Verb.EXPLAIN, null,
+            )
+        ).toList()
+        assertEquals(3, sessions.findById(session.id)!!.nodes.size)
     }
 
     @Test
