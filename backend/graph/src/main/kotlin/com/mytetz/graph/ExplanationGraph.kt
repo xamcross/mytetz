@@ -40,10 +40,46 @@ data class GraphRequest(
     val depth: Int = 0,
 )
 
-/** The wire shape of one answer: what it is, then the text as it arrives, then the document. */
+/**
+ * The wire shape of one answer: what it is, then the text as it arrives, then the document.
+ *
+ * There are exactly two sequences, and a consumer must handle both:
+ * ```
+ * Meta → Delta* → Done                 a hit, or a generation that kept its key
+ * Meta → Delta* → Superseded → Done    a generation that lost its key to another instance
+ * ```
+ * The second is rare and never happens inside a single process; see [GraphChunk.Superseded].
+ */
 sealed interface GraphChunk {
     data class Meta(val contentKey: String, val cached: Boolean) : GraphChunk
+
+    /** Append this to what you have. */
     data class Delta(val text: String) : GraphChunk
+
+    /**
+     * Discard every [Delta] for this key and render [body] instead.
+     *
+     * Emitted only when this instance generated an answer and then lost the key: another machine
+     * had already persisted a document for it, so `insertIfAbsent` kept theirs and discarded ours.
+     * The deltas already sent are this instance's own sampling of the prompt and are *not* what was
+     * stored — two samplings are essentially never byte-identical.
+     *
+     * This is not cosmetic. Quiz and exam generation read the *stored* body, while the learner read
+     * the stream; a learner served a divergent stream and never told could be examined on material
+     * they were never shown. So the divergence is announced rather than left for a client to detect
+     * by diffing, and [body] carries the authoritative text so the correction is actionable on its
+     * own — an SSE writer can name it as one self-contained event.
+     *
+     * It is a separate chunk rather than a flag on [Done] deliberately. A flag is silently
+     * ignorable: the ordinary SSE reader renders deltas and treats the terminal event as "stop the
+     * spinner", so a correction riding on [Done] would be missed by exactly the client shape this
+     * exists to protect. An unhandled event type is a visible gap; an unread boolean is not.
+     *
+     * There is no such chunk on the ordinary path: a client that never races never re-renders.
+     */
+    data class Superseded(val body: String) : GraphChunk
+
+    /** The authoritative document — always the winner's, whether or not this caller generated it. */
     data class Done(val explanation: Explanation) : GraphChunk
 }
 
@@ -139,10 +175,16 @@ class ExplanationGraph(
      *
      * It exists for one reason: twelve learners highlighting the same phrase at the same moment
      * must cost one generation, not twelve. It is only an optimisation, and only within one
-     * process — the actual guarantee is the unique `_id` in Mongo, which makes a cross-instance
-     * race benign rather than merely unlikely: `insertIfAbsent` discards the loser's copy and
-     * returns the winner's document, so every caller still agrees on one immutable body. Wasteful,
-     * never wrong.
+     * process — the actual guarantee is the unique `_id` in Mongo: `insertIfAbsent` discards the
+     * loser's copy and returns the winner's document, so the *store* only ever holds one immutable
+     * body per key.
+     *
+     * That guarantee covers the store and not the stream. A loser has already sent its own prose
+     * downstream by the time it discovers it lost, and two samplings of one prompt are essentially
+     * never byte-identical, so its reader has text that disagrees with the document. Left silent
+     * that is a real defect, not a flicker — quiz and exam generation read the stored body. Hence
+     * [GraphChunk.Superseded], emitted before [GraphChunk.Done] on exactly that path. Wasteful,
+     * and visibly corrected.
      *
      * Entries are reference counted rather than dropped unconditionally on exit. Removing a mutex
      * while another caller is still queued on it hands the next arrival a *different* mutex, and
@@ -262,6 +304,17 @@ class ExplanationGraph(
             createdAtEpochMillis = clock(),
         )
 
-        return repository.insertIfAbsent(explanation)
+        val winner = repository.insertIfAbsent(explanation)
+
+        // We lost the key: another instance persisted first, so the prose already streamed above is
+        // not the prose that was stored. Say so, and hand over the text that was, before Done. The
+        // test is on the body and not on object identity, because a race whose two samplings landed
+        // on the same words has nothing to correct — and because reference equality would quietly
+        // become "always superseded" if the repository ever re-read after a successful insert.
+        if (winner.body != explanation.body) {
+            emit(GraphChunk.Superseded(winner.body))
+        }
+
+        return winner
     }
 }

@@ -86,6 +86,39 @@ class ExplanationGraphTest {
         depth = 2,
     )
 
+    /**
+     * The document another fly.io machine wrote for the same key, a moment earlier.
+     *
+     * Every number is distinctive and unlike anything this instance would produce (which uses
+     * 777/333 tokens, [FIXED_NOW] and `requestCount = 0`), so an assertion that the winner's
+     * document survived cannot be satisfied by the loser's.
+     */
+    private fun rivalDocument(
+        key: String,
+        body: String = "A RIVAL MACHINE'S ANSWER: the microscopic realm is the scale below roughly a " +
+            "tenth of a nanometre, where classical intuition stops predicting anything reliably.",
+    ) = Explanation(
+        key = key,
+        topicSlug = "quantum-physics",
+        parentKey = "parent-of-quantum",
+        span = "microscopic realm",
+        spanSentence = "…Quantum Mechanics governs the very small.",
+        verb = Verb.EXPLAIN,
+        variant = 0,
+        depth = 2,
+        body = body,
+        grounded = false,
+        sources = emptyList(),
+        promptVersion = "vTest",
+        modelFamily = "probe-family",
+        modelId = "claude-sonnet-5",
+        inputTokens = 111,
+        outputTokens = 222,
+        costMicros = 999,
+        requestCount = 7,
+        createdAtEpochMillis = FIXED_NOW - 5_000,
+    )
+
     private suspend fun documentCount(key: String): Int =
         database.getCollection<Explanation>("explanations")
             .find(com.mongodb.client.model.Filters.eq("_id", key))
@@ -127,6 +160,11 @@ class ExplanationGraphTest {
         assertEquals(GraphChunk.Done(stored!!), done, "the terminal chunk must be the document that was stored")
         assertEquals(1, documentCount(stored.key))
         assertEquals(1, llm.calls.size)
+        assertTrue(
+            chunks.none { it is GraphChunk.Superseded },
+            "the ordinary path must not carry a correction: every client would have to re-render " +
+                "every normal answer to honour a chunk that is only ever meaningful after a lost race",
+        )
     }
 
     @Test
@@ -394,6 +432,125 @@ class ExplanationGraphTest {
             "the eleven that lost the race must be served from the store, not regenerate",
         )
         assertEquals(0, graph.activeLockCount, "the per-key lock must not outlive the callers holding it")
+        assertTrue(
+            results.all { chunks -> chunks.none { it is GraphChunk.Superseded } },
+            "nobody's stream diverged: within one process the mutex means only one caller ever " +
+                "generated, and the eleven others were served the very document they were shown",
+        )
+    }
+
+    // ------------------------------------------------------------------ losing the key to another instance
+
+    @Test
+    fun `a generation that loses the key to another instance tells the caller its stream is stale`() = runTest {
+        // The scenario the in-process mutex cannot cover: two machines both miss the same key at the
+        // same moment. This one streams its own prose to a learner and then discovers, at insert
+        // time, that the other machine's document owns the key. Two samplings of one prompt are
+        // never byte-identical, so the learner has been shown text that is not what was stored —
+        // and quiz generation reads the *stored* body, so silence here means a learner can be
+        // examined on material they were never shown.
+        val probe = ProbeLlmClient(body = body)
+        val graph = graphWith(client = probe)
+        val key = graph.keyFor(request())
+
+        val rival = rivalDocument(key)
+        assertNotEquals(rival.body, body, "the two samplings must differ or the test proves nothing")
+
+        probe.afterFirstDelta = {
+            // Mid-stream, not pre-seeded: the store was empty when this caller looked, so this is
+            // genuinely the miss path and not the cache-hit path wearing a disguise.
+            assertNull(repository.findByKey(key), "the rival must land during generation, not before it")
+            repository.insertIfAbsent(rival)
+        }
+
+        val chunks = graph.getOrGenerate(request()).toList()
+
+        assertEquals(
+            GraphChunk.Meta(key, cached = false),
+            chunks.first(),
+            "the store really was empty when this caller asked",
+        )
+        assertEquals(
+            body,
+            chunks.filterIsInstance<GraphChunk.Delta>().joinToString("") { it.text },
+            "the learner was streamed this instance's own generation, which is the whole problem",
+        )
+
+        assertEquals(
+            1,
+            chunks.count { it is GraphChunk.Superseded },
+            "a caller whose stream is stale must be told exactly once",
+        )
+        val superseded = chunks.filterIsInstance<GraphChunk.Superseded>().single()
+        assertEquals(
+            GraphChunk.Superseded(rival.body),
+            superseded,
+            "the caller must be told its stream is stale AND handed the authoritative text, " +
+                "without diffing anything to work it out",
+        )
+        assertEquals(
+            chunks.size - 2,
+            chunks.indexOf(superseded),
+            "the correction must follow the last delta and immediately precede Done, so an SSE " +
+                "writer emits it as the last thing before the terminal event",
+        )
+
+        assertEquals(
+            GraphChunk.Done(rival),
+            chunks.last(),
+            "Done still carries the winner's document, field for field",
+        )
+        assertEquals(1, documentCount(key))
+        assertEquals(rival, repository.findByKey(key), "the loser's copy must not overwrite the winner's")
+        assertEquals(1, probe.calls.get())
+    }
+
+    @Test
+    fun `a race whose two samplings agreed needs no correction`() = runTest {
+        // The winner's document is not ours, but its prose is. Nothing the learner has read is
+        // wrong, so there is nothing to re-render. This pins that "superseded" means "the text you
+        // were shown is stale" and not merely "your insert lost" — the weaker reading would fire on
+        // object identity and teach clients to re-render on a chunk that often means nothing.
+        val probe = ProbeLlmClient(body = body)
+        val graph = graphWith(client = probe)
+        val key = graph.keyFor(request())
+        val twin = rivalDocument(key, body = body)
+
+        probe.afterFirstDelta = { repository.insertIfAbsent(twin) }
+
+        val chunks = graph.getOrGenerate(request()).toList()
+
+        assertTrue(
+            chunks.none { it is GraphChunk.Superseded },
+            "the streamed text and the stored text agree, so the caller has nothing to re-render",
+        )
+        assertEquals(
+            GraphChunk.Done(twin),
+            chunks.last(),
+            "Done carries the winner's document even when the prose happened to match",
+        )
+        assertEquals(twin, repository.findByKey(key), "the loser's copy must not overwrite the winner's")
+    }
+
+    @Test
+    fun `a generation that keeps the key says nothing about being superseded`() = runTest {
+        // The sibling of the test above: same mid-stream hook, but the rival writes a *different*
+        // key. Nothing about this generation is stale, so the correction must not fire — otherwise
+        // "superseded" degrades into a chunk clients learn to ignore.
+        val probe = ProbeLlmClient(body = body)
+        val graph = graphWith(client = probe)
+        val otherKey = graph.keyFor(request(span = "traditional laws of physics"))
+
+        probe.afterFirstDelta = { repository.insertIfAbsent(rivalDocument(otherKey)) }
+
+        val chunks = graph.getOrGenerate(request()).toList()
+
+        assertTrue(
+            chunks.none { it is GraphChunk.Superseded },
+            "a generation that kept its key was not superseded by anything",
+        )
+        assertEquals(body, chunks.filterIsInstance<GraphChunk.Done>().single().explanation.body)
+        assertEquals(body, repository.findByKey(graph.keyFor(request()))?.body)
     }
 
     // ------------------------------------------------------------------ rejection
@@ -512,6 +669,12 @@ class ExplanationGraphTest {
         assertEquals(2, chunks.size)
         assertTrue(chunks[0] is GraphChunk.Meta)
         assertTrue(chunks[1] is GraphChunk.Delta)
+        // Asserted, not assumed. Today this holds only because the persistence code is unreachable
+        // once the abort propagates — a structural accident, not a stated property. A half-received
+        // generation has no validated body and no token count, so storing it would put an
+        // unverified document behind an immutable key and a free generation in the spend ledger.
+        assertNull(repository.findByKey(graph.keyFor(request())), "an abandoned stream must persist nothing")
+        assertEquals(0, graph.activeLockCount, "the per-key lock must be released when the collector stops early")
     }
 
     @Test
@@ -523,6 +686,12 @@ class ExplanationGraphTest {
         }
 
         assertSame(boom, thrown, "the caller's own failure must not be relabelled as a failed generation")
+        assertNull(
+            repository.findByKey(graph.keyFor(request())),
+            "a stream the caller aborted must persist nothing — same property as the cancellation " +
+                "test above, and it must not depend on the exception's path staying unreachable",
+        )
+        assertEquals(0, graph.activeLockCount, "the per-key lock must be released when the collector raises")
     }
 
     // ------------------------------------------------------------------ config
@@ -551,8 +720,9 @@ class ExplanationGraphTest {
 
 /**
  * The cases [FakeLlmClient] cannot express: exact, distinctive token counts; a stream that stalls
- * until the test cancels it; a stream that ends without its terminal event; and a running record of
- * how many generations were ever in flight at the same moment.
+ * until the test cancels it; a stream that ends without its terminal event; a running record of how
+ * many generations were ever in flight at the same moment; and a seam for making the world change
+ * underneath a generation that is already running.
  */
 private class ProbeLlmClient(
     private val body: String,
@@ -568,13 +738,25 @@ private class ProbeLlmClient(
     val reachedStall = CompletableDeferred<Unit>()
     private val inFlight = AtomicInteger()
 
+    /**
+     * Runs once per stream, after the learner has already been shown some prose and while this
+     * generation is still open. A test that wants to simulate another instance winning the key must
+     * write through this: seeding the store *before* `getOrGenerate` is called would exercise the
+     * cache-hit path instead and prove nothing about a race.
+     *
+     * It is a `var` rather than a constructor parameter because the hook usually needs the content
+     * key, which is only known once the graph holding this client exists.
+     */
+    var afterFirstDelta: (suspend () -> Unit)? = null
+
     override fun stream(request: LlmRequest): Flow<LlmChunk> = flow {
         calls.incrementAndGet()
         val concurrent = inFlight.incrementAndGet()
         maxInFlight.getAndUpdate { maxOf(it, concurrent) }
         try {
-            body.chunked(16).forEach {
-                emit(LlmChunk.Delta(it))
+            body.chunked(16).forEachIndexed { index, text ->
+                emit(LlmChunk.Delta(text))
+                if (index == 0) afterFirstDelta?.invoke()
                 // Re-dispatch between deltas. Without this a second generation could sit in the
                 // dispatcher queue behind the first and never be observed as overlapping, so an
                 // implementation with no mutex at all might still record maxInFlight == 1.
