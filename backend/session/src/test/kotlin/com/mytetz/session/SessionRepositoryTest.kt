@@ -1,13 +1,11 @@
 package com.mytetz.session
 
 import com.mongodb.client.model.Filters
-import com.mongodb.kotlin.client.coroutine.MongoClient
 import com.mytetz.graph.Verb
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import org.bson.Document
-import org.testcontainers.containers.MongoDBContainer
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -16,12 +14,7 @@ import kotlin.test.assertNull
 
 class SessionRepositoryTest {
 
-    companion object {
-        private val container = MongoDBContainer("mongo:7").apply { start() }
-        private val client = MongoClient.create(container.connectionString)
-    }
-
-    private val database = client.getDatabase("test_session")
+    private val database = MongoTestSupport.database("session_repository")
     private val repository = SessionRepository(database)
     private val raw = database.getCollection<Document>("sessions")
 
