@@ -3,6 +3,23 @@ package com.mytetz.session
 import com.mytetz.graph.Verb
 
 /**
+ * The stored session no longer describes a tree: a node points at a parent that is not there, the
+ * parent links close into a loop, or two nodes share an id.
+ *
+ * Deliberately **not** an [IllegalArgumentException], and that is the whole point of the type. An
+ * unknown node id is the caller's mistake and belongs in a 400; this is a document that got written
+ * wrong and belongs in a 500 with somebody paged. Sharing one type with the caller error would
+ * leave Task 1.11 matching on message substrings to tell them apart — and the natural handler,
+ * `catch (e: IllegalArgumentException) -> 400`, would answer a data-corruption incident with "your
+ * request was invalid" and nobody would ever be told.
+ *
+ * [sessionId] is a field rather than only a message fragment so an alert can carry the document to
+ * go and look at.
+ */
+class CorruptSessionException(val sessionId: String, detail: String) :
+    IllegalStateException("session $sessionId is corrupt: $detail")
+
+/**
  * Assembles the ancestry a generation is answered against.
  *
  * This is the mechanism behind the product's one promise. A learner reading about *Quantum Physics*
@@ -21,9 +38,10 @@ object ContextChain {
     /**
      * Root-first path to the given node, inclusive.
      *
-     * Raises [IllegalArgumentException] rather than returning a partial answer when [nodeId] is not
-     * in the session, when any node on the way up names a parent the session does not contain, when
-     * the parent links close into a cycle, or when two nodes share an id.
+     * Raises [IllegalArgumentException] when [nodeId] is simply not in the session — the caller
+     * asked for a node that does not exist. Raises [CorruptSessionException] when the session
+     * itself is malformed: a dangling parent, a parent cycle, or a duplicate node id. The two are
+     * separate types because Task 1.11 has to answer them differently; see [CorruptSessionException].
      */
     fun pathTo(session: LearningSession, nodeId: String): List<SessionNode> {
         val byId = session.nodes.associateBy { it.nodeId }
@@ -32,9 +50,17 @@ object ContextChain {
         // one written, so the walk would climb whichever branch happened to be appended second and
         // report it as the learner's. Nothing enforces uniqueness on the way in — appendNode only
         // $pushes — so it is enforced here, where being wrong is expensive.
-        require(byId.size == session.nodes.size) {
+        //
+        // Note the scope: this checks the WHOLE session, not just the branch being walked, so a
+        // duplicate anywhere fails pathTo for every branch including healthy ones. That is
+        // deliberate, not an oversight — a duplicate id means the document has stopped describing
+        // one tree, and from here there is no way to know which of the two nodes any *other*
+        // branch was meant to climb through. A session that cannot be read correctly should not be
+        // read confidently. Anyone debugging "why did this unrelated call fail" has found the
+        // right behaviour, and the message names the duplicate.
+        if (byId.size != session.nodes.size) {
             val duplicates = session.nodes.groupingBy { it.nodeId }.eachCount().filterValues { it > 1 }.keys
-            "session ${session.id} has duplicate node ids: $duplicates"
+            throw CorruptSessionException(session.id, "duplicate node ids: $duplicates")
         }
 
         val target = byId[nodeId]
@@ -47,16 +73,17 @@ object ContextChain {
         while (true) {
             // Sessions come back from Mongo unvalidated, so a document whose parent links form a
             // loop is representable. Unbounded, this walk spins and takes a request thread with it.
-            require(visited.add(current.nodeId)) {
-                "session ${session.id} has a parent cycle through node ${current.nodeId}"
+            if (!visited.add(current.nodeId)) {
+                throw CorruptSessionException(session.id, "parent cycle through node ${current.nodeId}")
             }
             path.addFirst(current)
 
             val parentId = current.parentNodeId ?: break
             current = byId[parentId]
-                ?: throw IllegalArgumentException(
-                    "node ${current.nodeId} in session ${session.id} names parent $parentId, " +
-                        "which is not in the session — the chain would be missing its root"
+                ?: throw CorruptSessionException(
+                    session.id,
+                    "node ${current.nodeId} names parent $parentId, which is not in the session — " +
+                        "the chain would be missing its root",
                 )
         }
 

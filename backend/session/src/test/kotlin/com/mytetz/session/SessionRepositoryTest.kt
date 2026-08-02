@@ -82,6 +82,27 @@ class SessionRepositoryTest {
     }
 
     @Test
+    fun `session status is stored under its name, and a defaulted status is stored at all`() = runTest {
+        val completed = session.copy(id = "s2", status = SessionStatus.COMPLETED)
+        repository.insert(session)
+        repository.insert(completed)
+
+        // ACTIVE is this property's default value, and kotlinx omits defaults unless the codec asks
+        // for them. The driver's BsonConfiguration sets encodeDefaults = true, so it is written —
+        // but nothing enforced that, and a "my active sessions" listing is a Filters.eq on exactly
+        // this field, which would silently match nothing if it ever stopped being written.
+        assertEquals("ACTIVE", raw.find(Filters.eq("_id", "s1")).firstOrNull()!!.getString("status"))
+
+        // COMPLETED is the one that can actually discriminate. ACTIVE is simultaneously the default
+        // value AND ordinal 0, so every interesting regression — an ordinal encoding, or a decoder
+        // that shrugs and returns the default — round-trips ACTIVE to ACTIVE and stays invisible.
+        assertEquals("COMPLETED", raw.find(Filters.eq("_id", "s2")).firstOrNull()!!.getString("status"))
+        // Encode and decode are separate failures: the line above passes against a decoder that
+        // always answers ACTIVE, and this one is what catches it.
+        assertEquals(SessionStatus.COMPLETED, repository.findById("s2")?.status)
+    }
+
+    @Test
     fun `findById returns null for an unknown id`() = runTest {
         assertNull(repository.findById("nope"))
     }

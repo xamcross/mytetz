@@ -7,6 +7,7 @@ import java.util.concurrent.TimeoutException
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.test.fail
 
@@ -82,6 +83,34 @@ class ContextChainTest {
         assertTrue("nope" in raised.message.orEmpty(), "message must name the node: ${raised.message}")
     }
 
+    /** A node whose parent id resolves to nothing — the chain's root end is unreachable. */
+    private val dangling = session.copy(
+        nodes = listOf(
+            node("n1", "ghost", "fundamental physical theory", 1),
+            node("n2", "n1", "microscopic realm", 2),
+        ),
+    )
+
+    @Test
+    fun `a caller error and a corrupt session raise different types`() {
+        // Task 1.11 has to answer these differently: a node id the caller made up is a 400 and the
+        // client's problem, while a session whose tree no longer describes a tree is a 500 and an
+        // alert somebody must look at. It can only do that if the types differ. Were corruption
+        // catchable as IllegalArgumentException, the natural handler —
+        // `catch (e: IllegalArgumentException) -> 400` — would answer a data-corruption incident
+        // with "your request was invalid" and nobody would ever be told.
+        val callerError: Throwable = assertFailsWith<IllegalArgumentException> {
+            ContextChain.pathTo(session, "nope")
+        }
+        assertFalse(callerError is CorruptSessionException, "an unknown node id is the caller's mistake, not corruption")
+
+        val corruption: Throwable = assertFailsWith<CorruptSessionException> {
+            ContextChain.pathTo(dangling, "n2")
+        }
+        assertFalse(corruption is IllegalArgumentException, "corruption must not be catchable as a caller error")
+        assertEquals("s1", (corruption as CorruptSessionException).sessionId)
+    }
+
     @Test
     fun `a parent that is missing from the session raises rather than truncating the chain`() {
         // The dangerous end of the chain is the ROOT end. A walk that simply stops when a parent
@@ -89,14 +118,7 @@ class ContextChainTest {
         // cannot tell: it is a well-formed list of the right type. Downstream that is a prompt
         // with no topic, which is precisely the context bleed this product exists to prevent —
         // arriving silently and reading like a normal answer.
-        val dangling = session.copy(
-            nodes = listOf(
-                node("n1", "ghost", "fundamental physical theory", 1),
-                node("n2", "n1", "microscopic realm", 2),
-            ),
-        )
-
-        val raised = assertFailsWith<IllegalArgumentException> { ContextChain.pathTo(dangling, "n2") }
+        val raised = assertFailsWith<CorruptSessionException> { ContextChain.pathTo(dangling, "n2") }
 
         assertTrue("ghost" in raised.message.orEmpty(), "message must name the missing parent: ${raised.message}")
         assertTrue("n1" in raised.message.orEmpty(), "message must name the node holding it: ${raised.message}")
@@ -124,7 +146,7 @@ class ContextChainTest {
             fail("pathTo did not terminate on a session whose parent links form a cycle")
         }
 
-        assertFailsWith<IllegalArgumentException> { outcome.getOrThrow() }
+        assertFailsWith<CorruptSessionException> { outcome.getOrThrow() }
     }
 
     @Test
@@ -136,7 +158,7 @@ class ContextChainTest {
             nodes = session.nodes + node("n1", "n3", "wave function", 2),
         )
 
-        val raised = assertFailsWith<IllegalArgumentException> { ContextChain.pathTo(duplicated, "n2") }
+        val raised = assertFailsWith<CorruptSessionException> { ContextChain.pathTo(duplicated, "n2") }
 
         assertTrue("n1" in raised.message.orEmpty(), "message must name the duplicate: ${raised.message}")
     }

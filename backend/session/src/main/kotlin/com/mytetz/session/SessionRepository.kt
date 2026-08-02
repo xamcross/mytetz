@@ -13,6 +13,13 @@ import kotlinx.coroutines.flow.firstOrNull
  * A distinct type rather than [IllegalStateException] because this is an ordinary, expected outcome
  * of a stale client: Task 1.11's error mapping should turn it into a 404, and it cannot do that if
  * it is indistinguishable from a bug.
+ *
+ * That completes the three-way split this module hands Task 1.11, each keyed on type and none on
+ * message text:
+ *
+ * - [SessionNotFoundException] — gone or never existed. 404.
+ * - [IllegalArgumentException] from [ContextChain.pathTo] — a node id the caller made up. 400.
+ * - [CorruptSessionException] — the stored tree is broken. 500, and somebody should be paged.
  */
 class SessionNotFoundException(val sessionId: String) : NoSuchElementException("session $sessionId not found")
 
