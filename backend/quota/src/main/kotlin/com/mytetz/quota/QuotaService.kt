@@ -37,11 +37,28 @@ sealed interface QuotaDecision {
  * The overshoot is therefore bounded by the API layer's concurrency, not by this class; nothing
  * here can make it zero, and a version that claimed to would be lying.
  *
+ * It is taken at most once per day rather than accumulating: costs are non-negative (enforced by
+ * [recordGeneration]) so a day's spend is monotone, and the ceiling is therefore crossed once.
+ *
  * The same non-atomicity applies to [QuotaConfig.dailyExplains]: a principal issuing requests in
  * parallel can exceed their allowance by however many they get in flight before the first records.
  * What *is* guaranteed is that no generation is admitted once the ledger has crossed the ceiling,
  * and that N recorded generations are counted as exactly N — the recording side is atomic even
  * though the check-then-record pair is not.
+ *
+ * ## When Mongo is unavailable
+ *
+ * Nothing here catches anything: both methods propagate whatever the driver throws, and no
+ * transaction spans [recordGeneration]'s three writes. That leaves the API layer a decision this
+ * class deliberately does not make for it. The recommendation, so that Task 1.12 decides it rather
+ * than invents it:
+ *
+ * - **[checkGeneration] should fail closed.** A quota check that could not be evaluated is not
+ *   evidence that budget remains, and this component exists precisely to stop a runaway bill.
+ *   Refuse the generation and serve whatever the cache can still serve.
+ * - **[recordGeneration] should fail loudly but must not fail the request.** By the time it runs the
+ *   money is already spent, so withholding the explanation wastes it. Log it as a spend-accounting
+ *   gap — it is the one condition under which the ledger is known to understate reality.
  */
 class QuotaService(
     private val repository: QuotaRepository,
@@ -91,14 +108,30 @@ class QuotaService(
      * calls for the same principal leave a count of exactly N, whether they arrive on a fresh
      * counter or across a window rollover.
      *
-     * The rollover must be attempted before the increment, never after — [QuotaRepository.rollWindowIfExpired]
-     * explains why that ordering is what keeps a straggling reset from erasing a live count.
+     * **The order is load-bearing twice over**, because these are three independent round trips with
+     * no transaction between them and no error handling around them.
+     *
+     * The global ledger goes first. If a later write then fails — a blip, a step-down, a timeout —
+     * the money is already where the breaker will see it. This fails toward *over-reporting global
+     * spend and under-charging one principal's allowance*, and that is the cheaper error for a
+     * component whose whole job is to stop a runaway bill: the ledger is the artifact that protects
+     * the account, a lost principal increment costs at most one free explanation, and a lost ledger
+     * write is invisible until the invoice arrives. Writing the ledger last reverses that trade and
+     * fails open on money.
+     *
+     * Then the rollover must precede the increment and never follow it —
+     * [QuotaRepository.rollWindowIfExpired] explains why that is what keeps a straggling reset from
+     * erasing a live count.
      */
     suspend fun recordGeneration(principalId: PrincipalId, costMicros: Long) {
+        // A negative cost would walk the ledger backwards and un-trip a breaker that had already
+        // tripped. It is also the unstated premise of the class KDoc's "monotone within a UTC day".
+        require(costMicros >= 0) { "costMicros must not be negative, was $costMicros" }
+
         val now = clock()
+        repository.incrementLedger(today(), costMicros)
         repository.rollWindowIfExpired(principalId.value, now, config.windowMillis)
         repository.incrementCounter(principalId.value, now, config.windowMillis, costMicros)
-        repository.incrementLedger(today(), costMicros)
     }
 
     suspend fun dailySpendMicros(): Long = repository.ledgerFor(today())?.costMicros ?: 0

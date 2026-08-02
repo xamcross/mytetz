@@ -39,6 +39,11 @@ value class PrincipalId(val value: String) {
  * Encoding it as a Date rather than changing the Kotlin type keeps [QuotaService]'s window
  * comparison in epoch millis, where it belongs: TTL is a cleanup mechanism, not a correctness one,
  * because the monitor only runs about once a minute.
+ *
+ * Note which half runs in production. [QuotaRepository] writes exclusively through `Updates.set` /
+ * `Updates.setOnInsert` with a raw `java.util.Date`, so only [deserialize] is on a live path today;
+ * the Date-on-the-wire invariant is currently held by the repository, and [serialize] is here so
+ * that a future typed write cannot quietly reintroduce the no-op. Both halves are tested.
  */
 internal object EpochMillisAsBsonDateTime : KSerializer<Long> {
 

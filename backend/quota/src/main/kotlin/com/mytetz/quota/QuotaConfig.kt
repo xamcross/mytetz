@@ -10,6 +10,19 @@ data class QuotaConfig(
     val globalDailyCostCeilingMicros: Long = resolveCostCeilingMicros(System.getenv(COST_CEILING_ENV)),
 ) {
 
+    init {
+        // The resolvers below already reject a non-positive *override*, but a caller constructing
+        // this directly bypasses them, and each of the three silently removes a limit rather than
+        // tightening it. windowMillis <= 0 is the quiet one: every stored window is then already
+        // expired, so rollWindowIfExpired resets the counter on every single call and the
+        // per-principal allowance disappears with nothing in the logs to say so.
+        require(dailyExplains > 0) { "dailyExplains must be positive, was $dailyExplains" }
+        require(windowMillis > 0) { "windowMillis must be positive, was $windowMillis" }
+        require(globalDailyCostCeilingMicros > 0) {
+            "globalDailyCostCeilingMicros must be positive, was $globalDailyCostCeilingMicros"
+        }
+    }
+
     companion object {
 
         const val DAILY_EXPLAINS_ENV: String = "MYTETZ_DAILY_EXPLAINS"

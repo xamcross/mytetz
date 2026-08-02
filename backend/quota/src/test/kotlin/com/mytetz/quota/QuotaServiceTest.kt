@@ -15,11 +15,10 @@ import java.util.Date
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
-import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
-import kotlin.test.assertTrue
 
 class QuotaServiceTest {
 
@@ -31,6 +30,9 @@ class QuotaServiceTest {
         private const val T0 = 1_700_000_000_000L
         private const val DAY_MILLIS = 86_400_000L
         private const val CONCURRENCY = 16
+
+        /** 2100-01-01T00:00:00Z. Used where a stored expiry must not be reapable by a real-time TTL monitor. */
+        private const val FUTURE = 4_102_444_800_000L
     }
 
     private val database = client.getDatabase("test_quota")
@@ -51,7 +53,14 @@ class QuotaServiceTest {
     fun reset() = runTest {
         database.getCollection<PrincipalCounter>("principals").drop()
         database.getCollection<CostLedgerEntry>("costLedger").drop()
-        repository.ensureIndexes()
+        // ensureIndexes() is deliberately NOT called here. The container's TTL monitor runs on real
+        // time, so a live TTL index over counters stamped T0 (2023) makes every document this suite
+        // writes already expired and eligible for deletion; the suite would then be green only
+        // because the monitor sweeps about once a minute and a run fits inside one period. That
+        // cannot manufacture a false pass — a mid-test deletion fails red — but a red run here
+        // would look exactly like this machine's known container flake and be dismissed as one,
+        // burying a real regression. Only the test that needs the index creates it, and that test
+        // stamps its counter in the future. The drop above is what gives every test its isolation.
         now = T0
     }
 
@@ -62,12 +71,13 @@ class QuotaServiceTest {
 
     @Test
     fun `anonymous and user principals occupy separate id namespaces`() {
-        assertEquals("anon:7", PrincipalId.anonymous("7").value)
-        assertEquals("user:7", PrincipalId.user("7").value)
         // Not cosmetic. The anonymous id is a client-supplied UUID and the user id comes from the
         // account store; without the prefix a visitor who sends `7` as their "UUID" would spend a
-        // signed-in learner's allowance, and the counter is keyed on this string alone.
-        assertNotEquals(PrincipalId.anonymous("7"), PrincipalId.user("7"))
+        // signed-in learner's allowance, and the counter is keyed on this string alone. Asserting
+        // the two exact strings is the whole property — an `assertNotEquals` underneath them could
+        // not fail once both of these pass, and free assertions are what this task exists to remove.
+        assertEquals("anon:7", PrincipalId.anonymous("7").value)
+        assertEquals("user:7", PrincipalId.user("7").value)
     }
 
     // ------------------------------------------------------------------ per-principal allowance
@@ -239,6 +249,12 @@ class QuotaServiceTest {
 
     @Test
     fun `spend overshoots the ceiling by whatever generation was in flight`() = runTest {
+        // The ledger starts one micro-dollar short of the 1_000 ceiling, so this pins both terms of
+        // the bound in QuotaService's KDoc — `(ceiling - 1) + SUM(in flight)` — and not just the
+        // in-flight sum. Starting from an empty ledger would exercise `0 + SUM` and leave the
+        // `ceiling - 1` term, which is where the worst case actually lives, unasserted.
+        service.recordGeneration(PrincipalId.anonymous("earlier"), costMicros = 999)
+
         val inFlight = (1..4).map { PrincipalId.anonymous("flight-$it") }
 
         // Every one of these is admitted, because none of their cost exists yet: a generation's
@@ -247,14 +263,49 @@ class QuotaServiceTest {
 
         inFlight.forEach { service.recordGeneration(it, costMicros = 400) }
 
-        // 1_600 landed against a 1_000 ceiling. The overshoot is exactly the in-flight cost the
-        // check could not see, and it is the bound QuotaService's KDoc quantifies. Asserted so that
-        // any future code or comment claiming check-then-record is atomic breaks a test.
-        assertEquals(1_600, service.dailySpendMicros())
-        assertTrue(service.dailySpendMicros() > config.globalDailyCostCeilingMicros)
+        // 2_599 landed against a 1_000 ceiling: 999 already there, plus four generations x 400 that
+        // the check could not see. Asserted so that any future code or comment claiming
+        // check-then-record is atomic breaks a test.
+        assertEquals(999 + 1_600, service.dailySpendMicros())
 
         // What does hold: once the ledger has crossed, nothing further is admitted.
         assertIs<QuotaDecision.SpendLimitReached>(service.checkGeneration(PrincipalId.anonymous("late")))
+    }
+
+    @Test
+    fun `a counter write that fails mid-sequence still leaves the spend in the ledger`() = runTest {
+        val failing = object : QuotaRepository(database) {
+            override suspend fun incrementCounter(
+                principalId: String,
+                now: Long,
+                windowMillis: Long,
+                costMicros: Long,
+            ) = error("a step-down between round trips")
+        }
+
+        assertFailsWith<IllegalStateException> {
+            QuotaService(failing, config) { now }.recordGeneration(alice, costMicros = 700)
+        }
+
+        // recordGeneration is three independent round trips with no transaction. The ledger is
+        // written first precisely so that a failure after it leans the safe way: global spend is
+        // over-reported and the breaker still sees the money. Writing the ledger last would leave
+        // the principal charged and 700 micro-dollars invisible to the one artifact that protects
+        // the account — a spend guard failing open on money.
+        assertEquals(700, service.dailySpendMicros(), "the money must survive a later failure")
+        assertNull(repository.findCounter(alice.value), "the principal escaping the charge is the cheaper error")
+    }
+
+    @Test
+    fun `a negative cost is refused before it reaches the ledger`() = runTest {
+        service.recordGeneration(bob, costMicros = 900)
+
+        // $inc with a negative value walks the ledger backwards and un-trips a breaker that had
+        // already tripped. Non-negativity is also the premise of "spend is monotone within a UTC
+        // day, so the overshoot is taken at most once" in QuotaService's KDoc.
+        assertFailsWith<IllegalArgumentException> { service.recordGeneration(alice, costMicros = -500) }
+
+        assertEquals(900, service.dailySpendMicros(), "the ledger must not move")
     }
 
     // ------------------------------------------------------------------ concurrency
@@ -318,7 +369,11 @@ class QuotaServiceTest {
 
     @Test
     fun `the window expiry is stored as a BSON date under a TTL index`() = runTest {
-        service.recordGeneration(alice, costMicros = 1)
+        // The only test that creates the index — see the note in reset(). It also stamps its
+        // counter in the year 2100 rather than at T0, so the stored expiry is genuinely in the
+        // future and the container's real-time TTL monitor has no reason to touch it mid-test.
+        repository.ensureIndexes()
+        QuotaService(repository, config) { FUTURE }.recordGeneration(alice, costMicros = 1)
 
         val index = database.getCollection<Document>("principals").listIndexes().toList()
             .single { it.getString("name") == "window_ttl" }
@@ -332,11 +387,32 @@ class QuotaServiceTest {
         // would grow by one document per anonymous visitor and never shrink.
         // https://www.mongodb.com/docs/manual/core/index-ttl/
         assertIs<Date>(raw["windowExpiresAt"], "a non-Date here makes the TTL index a silent no-op")
-        assertEquals(T0 + DAY_MILLIS, (raw["windowExpiresAt"] as Date).time)
+        assertEquals(FUTURE + DAY_MILLIS, (raw["windowExpiresAt"] as Date).time)
 
         // ...and the value the service compares against is still epoch millis, because TTL is a
         // cleanup mechanism and not a correctness one: the monitor runs only about once a minute.
-        assertEquals(T0 + DAY_MILLIS, repository.findCounter(alice.value)?.windowExpiresAtEpochMillis)
+        assertEquals(FUTURE + DAY_MILLIS, repository.findCounter(alice.value)?.windowExpiresAtEpochMillis)
+    }
+
+    @Test
+    fun `a counter written through the typed collection also stores a BSON date`() = runTest {
+        // Every production write goes through Updates.set / Updates.setOnInsert with a raw Date, so
+        // only the decode half of EpochMillisAsBsonDateTime is on a live path and the invariant is
+        // really held by QuotaRepository. This exercises the encode half, because the first typed
+        // write path anyone adds would otherwise be the first to run it — in exactly the place
+        // where getting it wrong silently restores the TTL no-op.
+        database.getCollection<PrincipalCounter>("principals").insertOne(
+            PrincipalCounter(
+                principalId = alice.value,
+                windowStartEpochMillis = FUTURE,
+                windowExpiresAtEpochMillis = FUTURE + DAY_MILLIS,
+                explainCount = 1,
+                costMicros = 9,
+            )
+        )
+
+        assertIs<Date>(rawPrincipal(alice).firstOrNull()?.get("windowExpiresAt"), "encode must emit a BSON Date")
+        assertEquals(FUTURE + DAY_MILLIS, repository.findCounter(alice.value)?.windowExpiresAtEpochMillis)
     }
 
     // ------------------------------------------------------------------ config
@@ -362,5 +438,17 @@ class QuotaServiceTest {
         // one is meaningless. Both fall back rather than being honoured.
         assertEquals(50_000_000, QuotaConfig.resolveCostCeilingMicros("0"))
         assertEquals(50_000_000, QuotaConfig.resolveCostCeilingMicros("-1"))
+    }
+
+    @Test
+    fun `QuotaConfig refuses a setting that would silently remove a limit`() {
+        // The resolvers guard the env-var path; a caller constructing QuotaConfig directly bypasses
+        // them. windowMillis is the quiet one — at 0 every stored window is already expired, so the
+        // counter is reset on every single call and the per-principal allowance vanishes with
+        // nothing in the logs. All three fail loudly at construction instead.
+        assertFailsWith<IllegalArgumentException> { QuotaConfig(3, 0, 1_000) }
+        assertFailsWith<IllegalArgumentException> { QuotaConfig(3, -1, 1_000) }
+        assertFailsWith<IllegalArgumentException> { QuotaConfig(0, 86_400_000, 1_000) }
+        assertFailsWith<IllegalArgumentException> { QuotaConfig(3, 86_400_000, 0) }
     }
 }

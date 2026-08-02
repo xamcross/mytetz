@@ -16,7 +16,7 @@ import java.util.concurrent.TimeUnit
  * that shape loses concurrent updates, and on a spend counter a lost update is a generation nobody
  * paid for.
  */
-class QuotaRepository(database: MongoDatabase) {
+open class QuotaRepository(database: MongoDatabase) {
 
     private val principals = database.getCollection<PrincipalCounter>("principals")
     private val ledger = database.getCollection<CostLedgerEntry>("costLedger")
@@ -25,6 +25,14 @@ class QuotaRepository(database: MongoDatabase) {
      * `expireAfterSeconds: 0` means "expire at the instant stored in the field", so a counter is
      * reaped exactly when its window ends. The field must hold a BSON Date for the monitor to act
      * at all — see [EpochMillisAsBsonDateTime].
+     *
+     * **Do not add a unique index to either collection here.** [incrementCounter] and
+     * [incrementLedger] both rely on MongoDB resolving a concurrent upsert race by updating the
+     * freshly-inserted document instead of raising a duplicate key error, and that only holds when
+     * the update's equality predicate covers the key pattern of the unique index that would have
+     * been violated. Today that index is `_id` and the predicate is `_id`. A second unique index on
+     * any other field forfeits the guarantee and turns the race into dropped generations — spent
+     * money that never reaches the ledger. See the note on [incrementCounter].
      */
     suspend fun ensureIndexes() {
         principals.createIndex(
@@ -75,8 +83,10 @@ class QuotaRepository(database: MongoDatabase) {
      * The window fields use `$setOnInsert`, so they are written when the counter is created and
      * never touched again. A `$set` would re-anchor the window on every generation, turning a daily
      * allowance into a sliding one that a steady learner could never wait out.
+     *
+     * `open` only so a test can inject a mid-sequence failure; there is no production subclass.
      */
-    suspend fun incrementCounter(principalId: String, now: Long, windowMillis: Long, costMicros: Long) {
+    open suspend fun incrementCounter(principalId: String, now: Long, windowMillis: Long, costMicros: Long) {
         principals.updateOne(
             Filters.eq("_id", principalId),
             Updates.combine(
@@ -89,7 +99,15 @@ class QuotaRepository(database: MongoDatabase) {
         )
     }
 
-    suspend fun incrementLedger(day: String, costMicros: Long) {
+    /**
+     * The global spend ledger, one document per UTC calendar day. Relies on exactly the same five
+     * conditions as [incrementCounter] — bare `_id` equality, single-document upsert, no unique
+     * index beyond `_id` — because this is the write that has to survive a concurrent first
+     * generation of the day. Losing it loses money the breaker would otherwise have seen.
+     *
+     * `open` only so a test can inject a mid-sequence failure; there is no production subclass.
+     */
+    open suspend fun incrementLedger(day: String, costMicros: Long) {
         ledger.updateOne(
             Filters.eq("_id", day),
             Updates.combine(
