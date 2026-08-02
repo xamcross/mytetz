@@ -3500,10 +3500,25 @@ git commit -m "feat: session tree, context chain assembly and repository"
 
 **Interfaces:**
 - Consumes: everything from 1.2, 1.3, 1.7, 1.9.
+
+  > **Amended after Task 1.9 shipped.** `SessionLimits` is an injectable
+  > `data class SessionLimits(maxDepth, maxNodes, maxVariants)`, not the `object` with
+  > `MAX_*` constants this plan originally specified. A `const val` cannot read an
+  > environment variable, and an `object` that reads one at class-init cannot be varied
+  > by a test — which this task needs, because it must exercise the depth and node
+  > ceilings. Environment variable names and defaults are unchanged. Construct it as
+  > `SessionLimits()` for defaults, or with explicit small values to test a ceiling.
+  >
+  > Also from 1.9: `ContextChain.pathTo` now *raises* on a dangling parent, a parent
+  > cycle, or a duplicate node id rather than silently returning a truncated path, and
+  > `SessionRepository.appendNode` raises `SessionNotFoundException` on an unknown
+  > session id rather than silently doing nothing. Both change what this task must
+  > handle.
+
 - Produces:
   - `class SpanMismatchException(message: String)`, `class DepthLimitException`, `class SessionFullException`, `class VariantLimitException`
   - `data class SpanSelection(val text: String, val start: Int, val end: Int)`
-  - `class SessionService(sessions, catalog, graph, explanations, idFactory, clock)` with:
+  - `class SessionService(sessions, catalog, graph, explanations, limits, idFactory, clock)` with:
     - `suspend fun create(principalId: String, topicSlug: String): Pair<LearningSession, Explanation>`
     - `fun explain(sessionId: String, parentNodeId: String, selection: SpanSelection, verb: Verb, requestedVariant: Int?): Flow<GraphChunk>`
     - `suspend fun load(sessionId: String): Pair<LearningSession, Map<String, Explanation>>?`
@@ -3655,7 +3670,7 @@ class SessionServiceTest {
                 parentNodeId = session.rootNodeId,
                 selection = SpanSelection(span, start, start + span.length),
                 verb = Verb.SIDE_VIEW,
-                requestedVariant = SessionLimits.MAX_VARIANTS + 1,
+                requestedVariant = SessionLimits().maxVariants + 1,
             ).toList()
         }
     }
@@ -3715,6 +3730,7 @@ class SessionService(
     private val catalog: CatalogService,
     private val graph: ExplanationGraph,
     private val explanations: ExplanationRepository,
+    private val limits: SessionLimits = SessionLimits(),
     private val idFactory: () -> String = { UUID.randomUUID().toString() },
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
@@ -3763,15 +3779,15 @@ class SessionService(
         val session = sessions.findById(sessionId)
             ?: throw IllegalArgumentException("unknown session: $sessionId")
 
-        if (session.nodes.size >= SessionLimits.MAX_NODES) {
-            throw SessionFullException("session $sessionId has reached ${SessionLimits.MAX_NODES} nodes")
+        if (session.nodes.size >= limits.maxNodes) {
+            throw SessionFullException("session $sessionId has reached ${limits.maxNodes} nodes")
         }
 
         val path = ContextChain.pathTo(session, parentNodeId)
         val parent = path.last()
 
-        if (parent.depth + 1 > SessionLimits.MAX_DEPTH) {
-            throw DepthLimitException("depth ${SessionLimits.MAX_DEPTH} reached")
+        if (parent.depth + 1 > limits.maxDepth) {
+            throw DepthLimitException("depth ${limits.maxDepth} reached")
         }
 
         val variant = requestedVariant
@@ -3779,8 +3795,8 @@ class SessionService(
                 ContextChain.highestVariant(session, parentNodeId, selection.text, verb) + 1
             } else 0
 
-        if (variant > SessionLimits.MAX_VARIANTS) {
-            throw VariantLimitException("variant $variant exceeds ${SessionLimits.MAX_VARIANTS}")
+        if (variant > limits.maxVariants) {
+            throw VariantLimitException("variant $variant exceeds ${limits.maxVariants}")
         }
 
         val bodies = resolve(path)
