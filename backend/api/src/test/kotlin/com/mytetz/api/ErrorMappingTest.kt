@@ -342,7 +342,7 @@ class ErrorMappingTest {
         // The synthetic throws above pin the mapping; this pins the composition. It is the only
         // assertion in the suite that would still catch SessionService being changed to raise some
         // other type for a session that is not there.
-        val sessions = TestFixtures.sessions()
+        val sessions = TestFixtures.sessionApp().sessions
         application {
             install(ContentNegotiation) { json() }
             installErrorMapping()
@@ -364,6 +364,91 @@ class ErrorMappingTest {
 
         assertEquals(HttpStatusCode.NotFound, response.status)
         assertEquals("NOT_FOUND", response.apiError().code)
+    }
+
+    // ------------------------------------------------------- the same taxonomy, mid-stream
+
+    /**
+     * Every type the streaming mapping is expected to recognise. The list is deliberately the one
+     * `sessionRoutes` can actually raise after the first byte has gone out: the model, the
+     * validator, and the append that records the learner's step.
+     */
+    private val taxonomy: List<Throwable> = listOf(
+        SpanMismatchException("span text does not match the parent body at those offsets"),
+        DepthLimitException("a chain of 9 links exceeds the limit of 8"),
+        SessionFullException("session s1 already holds 200 of 200 nodes"),
+        VariantLimitException("variant 4 is outside the permitted range 0..3"),
+        SessionNotFoundException("s-vanished"),
+        CorruptSessionException("s-broken", "parent cycle through node n3"),
+        GenerationFailedException("upstream generation failed for k1"),
+        IllegalArgumentException("no node n9 in session s1"),
+        IllegalStateException("a genuine bug"),
+    )
+
+    @Test
+    fun `the streaming mapping answers with the same code as the status mapping, arm for arm`() = testApplication {
+        // StatusPages cannot rewrite a response that has already begun streaming, so the explain
+        // endpoint has to reproduce this mapping inside the SSE block. The version this task was
+        // handed reproduced it as a private `codeFor` that sent BOTH SessionNotFoundException and
+        // CorruptSessionException to "INTERNAL" — one task after the arms above were written for
+        // them, and with nothing anywhere comparing the two. This is that comparison.
+        application {
+            install(ContentNegotiation) { json() }
+            installErrorMapping()
+            routing {
+                get("/boom/{i}") { throw taxonomy[call.parameters["i"]!!.toInt()] }
+            }
+        }
+
+        taxonomy.forEachIndexed { i, cause ->
+            val throughStatusPages = client.get("/boom/$i").apiError().code
+            assertEquals(
+                throughStatusPages,
+                sseErrorFor(cause).code,
+                "${cause::class.simpleName} is coded differently depending on whether the response " +
+                    "had already begun",
+            )
+        }
+    }
+
+    @Test
+    fun `the streaming mapping keeps the same echo policy`() = testApplication {
+        // Echoed: written by us, about the caller's own input, and the only way a client can explain
+        // the refusal to the learner.
+        assertEquals(
+            "span text does not match the parent body at those offsets",
+            sseErrorFor(taxonomy[0]).message,
+        )
+        // Not echoed. GenerationFailedException's message carries an internal content key and,
+        // through its cause, whatever the upstream said — which on a bad key is a statement about
+        // our own credentials.
+        assertFalse(sseErrorFor(taxonomy[6]).message.contains("k1"))
+        // Not echoed: ContextChain's "no node n9 in session s1" confirms the contents of a session
+        // over a channel that has passed the ownership check and need not confirm anything further.
+        assertFalse(sseErrorFor(taxonomy[7]).message.contains("n9"))
+        assertFalse(sseErrorFor(taxonomy[8]).message.contains("a genuine bug"))
+        // No quota refusal ever reaches this function: those are decided before the stream opens,
+        // so they carry a status code and a Retry-After header instead.
+        assertTrue(taxonomy.all { sseErrorFor(it).retryAfter == null })
+    }
+
+    @Test
+    fun `a corruption discovered mid-stream still raises the operator alert`() {
+        val appender = attachAppender()
+        val error = try {
+            sseErrorFor(CorruptSessionException("s-77", "a node points at an explanation that is gone"))
+        } finally {
+            detachAppender(appender)
+        }
+
+        assertEquals("CORRUPT_SESSION", error.code)
+        assertFalse(error.message.contains("s-77"), "the session id leaked into the response body")
+        val event = assertNotNull(
+            appender.list.firstOrNull { it.level == Level.ERROR },
+            "corruption inside a stream was not logged at ERROR: ${appender.list.map { it.formattedMessage }}",
+        )
+        assertTrue(event.formattedMessage.contains(CORRUPT_SESSION_ALERT))
+        assertTrue(event.formattedMessage.contains("s-77"))
     }
 
     private fun attachAppender(): ListAppender<ILoggingEvent> {

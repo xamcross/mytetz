@@ -241,12 +241,7 @@ fun Application.installErrorMapping() {
          * there is nothing they can do about it; the detail is for the operator.
          */
         exception<CorruptSessionException> { call, cause ->
-            log.error(
-                "$CORRUPT_SESSION_ALERT sessionId={} — the stored session no longer describes a tree; " +
-                    "this needs an operator, no retry will fix it",
-                cause.sessionId,
-                cause,
-            )
+            logCorruptSession(cause)
             call.respond(
                 HttpStatusCode.InternalServerError,
                 ApiError("CORRUPT_SESSION", "this session's stored data is inconsistent and cannot be read"),
@@ -258,4 +253,91 @@ fun Application.installErrorMapping() {
             call.respond(HttpStatusCode.InternalServerError, ApiError("INTERNAL", "unexpected error"))
         }
     }
+}
+
+/**
+ * The same taxonomy, for a response that has already begun.
+ *
+ * ## Why this exists at all
+ *
+ * StatusPages rewrites a response. It cannot rewrite one whose status line and headers are already
+ * on the wire, which is every failure that happens after `/api/sessions/{id}/explain` starts
+ * streaming: the model call, the validator, the append that records the learner's step. Those
+ * failures have to be reported *inside* the stream, as an `error` event, and something has to decide
+ * which code they carry.
+ *
+ * ## Why it lives here rather than in `SessionRoutes.kt`
+ *
+ * Because the failure mode is drift, and drift is only visible when the two mappings are adjacent.
+ * The version of this that shipped as a private `codeFor` in the route file mapped
+ * [SessionNotFoundException] and [CorruptSessionException] to `"INTERNAL"` — one task after they
+ * were given types, and one task after the arms above were written for them. A learner whose session
+ * was deleted mid-stream got the code for "our fault", and a genuine data incident lost the alert
+ * that is the entire reason [CorruptSessionException] carries a `sessionId`.
+ *
+ * So: one file, two functions, and `ErrorMappingTest` walks the same list of types through both.
+ *
+ * ## The echo policy is identical, and that is not a coincidence
+ *
+ * The allowlist above is a statement about who *authored* a message, and authorship does not change
+ * with the transport. [SpanMismatchException] and the three ceiling types describe the caller's own
+ * input and are echoed; everything else answers with text written here and puts the detail in the
+ * log. Note in particular that the caller-error arm answers `INVALID_REQUEST` without the message —
+ * `ContextChain.pathTo`'s "no node X in session Y" would otherwise confirm the contents of a session
+ * over a channel that has already passed the ownership check but need not confirm anything further.
+ *
+ * There is no `retryAfter` on any arm here. Quota refusals never reach this function: they are
+ * decided **before** the stream opens, so they carry a real status code and a real `Retry-After`
+ * header. Anything arriving here has already been admitted by the gate.
+ */
+internal fun sseErrorFor(cause: Throwable): ApiError = when (cause) {
+
+    // -------------------------------------------------- the caller's request was malformed
+    is SpanMismatchException -> ApiError("SPAN_MISMATCH", cause.message.orEmpty())
+
+    // -------------------------------------------------- a ceiling was reached
+    is DepthLimitException -> ApiError("DEPTH_LIMIT", cause.message.orEmpty())
+    is SessionFullException -> ApiError("SESSION_FULL", cause.message.orEmpty())
+    is VariantLimitException -> ApiError("VARIANT_LIMIT", cause.message.orEmpty())
+
+    // -------------------------------------------------- the thing you named is not there
+    is SessionNotFoundException -> {
+        log.info("session {} vanished while it was being streamed to", cause.sessionId)
+        ApiError("NOT_FOUND", "no such session")
+    }
+
+    // -------------------------------------------------- upstream, and our own data
+    is GenerationFailedException -> {
+        log.warn("generation failed mid-stream", cause)
+        ApiError("GENERATION_FAILED", "the explanation could not be generated; try again")
+    }
+
+    is CorruptSessionException -> {
+        logCorruptSession(cause)
+        ApiError("CORRUPT_SESSION", "this session's stored data is inconsistent and cannot be read")
+    }
+
+    is IllegalArgumentException -> {
+        log.info("rejected a malformed request mid-stream: {}", cause.message)
+        INVALID_REQUEST
+    }
+
+    else -> {
+        log.error("unhandled error mid-stream", cause)
+        ApiError("INTERNAL", "unexpected error")
+    }
+}
+
+/**
+ * The one place the operator alert is written, so that the two paths that can raise
+ * [CorruptSessionException] cannot end up logging it two different ways — or, as happened once, one
+ * of them not logging it at all.
+ */
+private fun logCorruptSession(cause: CorruptSessionException) {
+    log.error(
+        "$CORRUPT_SESSION_ALERT sessionId={} — the stored session no longer describes a tree; " +
+            "this needs an operator, no retry will fix it",
+        cause.sessionId,
+        cause,
+    )
 }

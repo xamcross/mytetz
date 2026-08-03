@@ -50,6 +50,15 @@ fun Application.module(components: Components = Components()) {
             cookies = components.cookies,
             clientAddresses = components.clientAddresses,
         )
+        // No `install(SSE)`. The explain endpoint is a POST and builds its own `SSEServerContent`;
+        // the plugin is an empty marker for `Route.sse`, which registers GET only. See the note on
+        // `sessionRoutes`.
+        sessionRoutes(
+            sessions = components.sessions,
+            quota = components.quota,
+            cookies = components.cookies,
+            clientAddresses = components.clientAddresses,
+        )
 
         // Every unmatched `/api/**` path, answered as JSON.
         //

@@ -43,6 +43,23 @@ class VariantLimitException(message: String) : Exception(message)
 data class SpanSelection(val text: String, val start: Int, val end: Int)
 
 /**
+ * What [SessionService.create] produced: the session, its seed explanation, and what the seed's
+ * generation cost **this** caller.
+ *
+ * A type rather than a `Pair` because of the third field. [spentMicros] is 0 whenever the seed came
+ * out of the store, which is the ordinary case — seeds are content addressed per topic, so the whole
+ * catalogue is generated at most once per prompt version and model family. It is non-zero only for
+ * the caller whose own request paid for the model, and it is the only thing here a spend ledger may
+ * be driven from; see [com.mytetz.graph.GraphChunk.Done.spentMicros] for why neither
+ * [createWillGenerate] nor `Meta(cached = false)` will do.
+ */
+data class SessionCreation(
+    val session: LearningSession,
+    val seed: Explanation,
+    val spentMicros: Long,
+)
+
+/**
  * A validated, priced-out explain request that has not been executed yet.
  *
  * Only [SessionService.prepare] can make one — the constructor is `internal` deliberately, because
@@ -153,7 +170,9 @@ class ExplainPlan internal constructor(
  * - **Do not** use `plan.cached` or `Meta(cached = false)` as the trigger for
  *   `QuotaService.recordGeneration`. Neither one means "this caller spent money", and in a stampede
  *   both over-report by the width of the stampede — which trips the breaker early, on spend that
- *   never happened.
+ *   never happened. `Done.spentMicros` is the field that does mean it, and
+ *   [SessionCreation.spentMicros] is its counterpart for [create]; both are 0 for a caller that made
+ *   no model call, and both are this caller's own cost rather than the stored document's.
  *
  * ## Authorisation is the caller's, and this class does none of it
  *
@@ -165,7 +184,8 @@ class ExplainPlan internal constructor(
  * precisely because the section above spends thirty lines telling the API layer what it must do
  * about quota. The asymmetry would otherwise read as "quota is yours, ownership is handled" — it is
  * not. **The caller must establish that the principal owns the session before calling any of the
- * three.**
+ * three**, and [ownerOf] is the cheap read that lets it do so first — before [prepare]'s refusals
+ * start describing a session the caller may have no business knowing exists.
  *
  * ## Cancellation drops the node, deliberately
  *
@@ -204,14 +224,14 @@ class SessionService(
      * this slice can do that anyway — the explanations are already immutable and undeletable.
      * Recorded as a decision rather than left as an omission.
      */
-    suspend fun create(principalId: String, topicSlug: String): Pair<LearningSession, Explanation> {
+    suspend fun create(principalId: String, topicSlug: String): SessionCreation {
         val topic = requirePublishedTopic(topicSlug)
 
-        val seed = graph.getOrGenerate(seedRequest(topic))
+        val done = graph.getOrGenerate(seedRequest(topic))
             .toList()
             .filterIsInstance<GraphChunk.Done>()
             .single()
-            .explanation
+        val seed = done.explanation
 
         val now = clock()
         val rootId = idFactory()
@@ -237,7 +257,7 @@ class SessionService(
             lastActiveAtEpochMillis = now,
         )
         sessions.insert(session)
-        return session to seed
+        return SessionCreation(session, seed, spentMicros = done.spentMicros)
     }
 
     /**
@@ -454,6 +474,23 @@ class SessionService(
     ): Flow<GraphChunk> = flow {
         emitAll(explain(prepare(sessionId, parentNodeId, selection, verb, requestedVariant)))
     }
+
+    // ------------------------------------------------------------------ ownership
+
+    /**
+     * The principal [create] recorded against [sessionId], or null when there is no such session.
+     *
+     * This class still decides nothing about authorisation — it hands over the stored fact and the
+     * caller makes the decision. It exists so the caller can make it **cheaply and first**: one
+     * indexed read by `_id`, no chain walk, no hydrate, no catalogue lookup. [load] would answer the
+     * same question, but only after fetching every explanation the session points at, and [prepare]
+     * only after running the whole gate — whose refusals (`SPAN_MISMATCH`, `DEPTH_LIMIT`,
+     * `SESSION_FULL`) are each a statement about the *contents* of a session the caller may have no
+     * business knowing exists.
+     *
+     * So the order is: this, then everything else. See "Authorisation is the caller's".
+     */
+    suspend fun ownerOf(sessionId: String): String? = sessions.findById(sessionId)?.principalId
 
     // ------------------------------------------------------------------ load
 

@@ -157,7 +157,12 @@ class ExplanationGraphTest {
 
         val done = chunks.last()
         val stored = repository.findByKey(graph.keyFor(request()))
-        assertEquals(GraphChunk.Done(stored!!), done, "the terminal chunk must be the document that was stored")
+        assertEquals(
+            GraphChunk.Done(stored!!, spentMicros = stored.costMicros),
+            done,
+            "the terminal chunk must be the document that was stored, and must report the model " +
+                "call this caller actually made — a spend ledger has nothing else to read",
+        )
         assertEquals(1, documentCount(stored.key))
         assertEquals(1, llm.calls.size)
         assertTrue(
@@ -358,6 +363,15 @@ class ExplanationGraphTest {
             "a hit must serve the stored document as it was read",
         )
         assertEquals(0, llm.calls.size, "a cache hit must not call the model")
+        // The document carries a cost — somebody paid it once — and this caller paid none of it.
+        // A quota layer that read `explanation.costMicros` here would charge every hit for the
+        // original generation and trip the global breaker on money nobody is spending.
+        assertTrue(stored.costMicros > 0, "fixture error: the stored document must carry a cost")
+        assertEquals(
+            0,
+            chunks.filterIsInstance<GraphChunk.Done>().single().spentMicros,
+            "a cache hit spent nothing and must say so",
+        )
         assertEquals(1, repository.findByKey(stored.key)?.requestCount, "the hit is still counted as demand")
     }
 
@@ -495,11 +509,19 @@ class ExplanationGraphTest {
                 "writer emits it as the last thing before the terminal event",
         )
 
-        assertEquals(
-            GraphChunk.Done(rival),
-            chunks.last(),
-            "Done still carries the winner's document, field for field",
+        val done = chunks.last() as GraphChunk.Done
+        assertEquals(rival, done.explanation, "Done still carries the winner's document, field for field")
+        // The half that `assertEquals(GraphChunk.Done(rival), …)` could never have pinned, because
+        // the two numbers are only distinguishable on this path: we sampled our own tokens and were
+        // handed somebody else's document. Billing `done.explanation.costMicros` here charges this
+        // caller for the winner's generation and lets its own vanish from the ledger.
+        assertNotEquals(
+            rival.costMicros,
+            done.spentMicros,
+            "fixture error: the rival must cost something different, or this asserts nothing",
         )
+        assertEquals(rival.costMicros, done.explanation.costMicros, "the document's cost is the winner's")
+        assertTrue(done.spentMicros > 0, "a caller that called the model must report what it spent")
         assertEquals(1, documentCount(key))
         assertEquals(rival, repository.findByKey(key), "the loser's copy must not overwrite the winner's")
         assertEquals(1, probe.calls.get())
@@ -525,8 +547,8 @@ class ExplanationGraphTest {
             "the streamed text and the stored text agree, so the caller has nothing to re-render",
         )
         assertEquals(
-            GraphChunk.Done(twin),
-            chunks.last(),
+            twin,
+            (chunks.last() as GraphChunk.Done).explanation,
             "Done carries the winner's document even when the prose happened to match",
         )
         assertEquals(twin, repository.findByKey(key), "the loser's copy must not overwrite the winner's")

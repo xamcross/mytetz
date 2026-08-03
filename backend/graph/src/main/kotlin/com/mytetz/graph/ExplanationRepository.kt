@@ -10,7 +10,17 @@ import kotlinx.coroutines.flow.firstOrNull
 
 private const val DUPLICATE_KEY = 11000
 
-class ExplanationRepository(database: MongoDatabase) {
+/**
+ * `open`, and [findByKey] with it, only so that a test can make a key appear between two reads.
+ *
+ * That window is the whole subject of `SessionService.prepare`'s staleness contract — a plan that
+ * missed can be a hit by the time it is executed, and an API layer that turned the miss into a quota
+ * refusal has refused a request that had become free. Nothing else in the system can create that
+ * interleaving on demand: it needs two callers landing either side of one insert. Same reasoning,
+ * and the same note, as `QuotaRepository.incrementCounter` and `Components.bootstrap`. There is no
+ * production subclass.
+ */
+open class ExplanationRepository(database: MongoDatabase) {
 
     private val collection = database.getCollection<Explanation>("explanations")
 
@@ -22,7 +32,7 @@ class ExplanationRepository(database: MongoDatabase) {
         collection.createIndex(Indexes.ascending("createdAtEpochMillis"), IndexOptions().name("created_at"))
     }
 
-    suspend fun findByKey(key: String): Explanation? =
+    open suspend fun findByKey(key: String): Explanation? =
         collection.find(Filters.eq("_id", key)).firstOrNull()
 
     /**

@@ -79,8 +79,32 @@ sealed interface GraphChunk {
      */
     data class Superseded(val body: String) : GraphChunk
 
-    /** The authoritative document — always the winner's, whether or not this caller generated it. */
-    data class Done(val explanation: Explanation) : GraphChunk
+    /**
+     * The authoritative document — always the winner's, whether or not this caller generated it —
+     * and, separately, what **this** caller's own model call cost.
+     *
+     * ## Why the cost is not read off [explanation]
+     *
+     * `Explanation.costMicros` is a property of the *document*, and the document belongs to whoever
+     * generated it. Three callers can be handed the same document having spent three different
+     * amounts:
+     *
+     * - a **cache hit**, before or under the per-key lock, spent nothing;
+     * - the caller that **generated and kept the key** spent exactly `explanation.costMicros`;
+     * - a caller that **generated and lost** `insertIfAbsent` to another instance spent its own
+     *   tokens and is handed somebody else's document, whose cost is not the money it burned.
+     *
+     * So an API layer billing `Done.explanation.costMicros` over-reports by the width of a stampede
+     * — every loser records a generation it never made — and mis-reports the cross-instance race in
+     * both directions. [spentMicros] is the only field here that answers "did *I* spend, and how
+     * much", and it is the only one a spend ledger may be driven from. Zero means this caller made
+     * no model call, which is the common case: it is the default precisely so that the two cache
+     * paths cannot report a spend by omission.
+     *
+     * `Meta(cached = false)` is not a substitute and neither is any flag computed before the lock;
+     * see [ExplanationGraph.getOrGenerate] and `SessionService`'s class KDoc.
+     */
+    data class Done(val explanation: Explanation, val spentMicros: Long = 0) : GraphChunk
 }
 
 /**
@@ -162,7 +186,9 @@ class ExplanationGraph(
                     emit(GraphChunk.Delta(stored.body))
                     emit(GraphChunk.Done(stored))
                 } else {
-                    emit(GraphChunk.Done(generate(request, key)))
+                    // `generate` builds the terminal chunk itself, because it is the only place
+                    // that knows what THIS caller's model call cost. See GraphChunk.Done.
+                    emit(generate(request, key))
                 }
             }
         } finally {
@@ -207,7 +233,10 @@ class ExplanationGraph(
         }
     }
 
-    private suspend fun FlowCollector<GraphChunk>.generate(request: GraphRequest, key: String): Explanation {
+    private suspend fun FlowCollector<GraphChunk>.generate(
+        request: GraphRequest,
+        key: String,
+    ): GraphChunk.Done {
         val raw = StringBuilder()
         var usage = LlmUsage()
         var stopReason: String? = null
@@ -315,6 +344,9 @@ class ExplanationGraph(
             emit(GraphChunk.Superseded(winner.body))
         }
 
-        return winner
+        // `explanation.costMicros`, not `winner.costMicros`. We paid for the tokens we sampled,
+        // whether or not the document we paid for is the one that was kept — and on the losing side
+        // of a cross-instance race those two numbers are different. See GraphChunk.Done.
+        return GraphChunk.Done(winner, spentMicros = explanation.costMicros)
     }
 }

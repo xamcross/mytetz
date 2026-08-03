@@ -5,14 +5,19 @@ import com.mongodb.kotlin.client.coroutine.MongoDatabase
 import com.mytetz.catalog.CatalogService
 import com.mytetz.catalog.TopicRepository
 import com.mytetz.catalog.TopicRequestRepository
+import com.mytetz.graph.Explanation
 import com.mytetz.graph.ExplanationGraph
 import com.mytetz.graph.ExplanationRepository
 import com.mytetz.graph.ExplanationValidator
 import com.mytetz.llm.FakeLlmClient
+import com.mytetz.quota.QuotaConfig
+import com.mytetz.quota.QuotaRepository
+import com.mytetz.quota.QuotaService
 import com.mytetz.session.SessionRepository
 import com.mytetz.session.SessionService
 import kotlinx.coroutines.runBlocking
 import org.testcontainers.containers.MongoDBContainer
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * One Mongo container for the whole `:backend:api` module, following the `MongoTestSupport` objects
@@ -74,26 +79,112 @@ object TestFixtures {
 
     fun topicRequests(): TopicRequestRepository = topicRequestRepository
 
-    private val sessionService: SessionService by lazy {
-        val database = database("sessions")
-        val explanations = ExplanationRepository(database)
+    /**
+     * The seed body every session in this module opens on. Keyed on the phrase `PromptBuilder` puts
+     * in a SEED prompt, so a seed and a child explanation are distinguishable.
+     */
+    const val SEED_BODY: String = "Quantum mechanics is the fundamental physical theory that " +
+        "describes the behavior of matter and of light at and below the scale of atoms."
+
+    const val CHILD_BODY: String = "The microscopic realm studied by quantum theory is the " +
+        "subatomic scale, a universe smaller than 0.1 nanometers where the traditional laws of " +
+        "physics collapse."
+
+    private val databaseCounter = AtomicInteger()
+
+    /**
+     * A whole session stack — store, quota ledger and model — wired **per test**.
+     *
+     * Sharing it would be cheaper and wrong in three separate ways, each of which produces a green
+     * suite that pins nothing:
+     *
+     * - the **cost ledger** is one document per UTC day, so a test that trips the breaker trips it
+     *   for everything that runs after it;
+     * - the **explanation store** is content addressed, so a test that expects to *generate* is
+     *   served from cache the moment another test has asked for the same span — and a test whose
+     *   generation never happens cannot observe a gate that stops generation;
+     * - the **principal counter** is per principal and the fixture's client returns its cookie.
+     *
+     * The Mongo container is still shared; only the databases are new.
+     */
+    fun sessionApp(
+        dailyExplains: Int = QuotaConfig.DEFAULT_DAILY_EXPLAINS,
+        costCeilingMicros: Long = QuotaConfig.DEFAULT_COST_CEILING_MICROS,
+        sessionsPerCaller: Int = SESSIONS_PER_CALLER,
+    ): SessionStack {
+        val database = database("session_app_${databaseCounter.incrementAndGet()}")
+        val explanations = SeamedExplanationRepository(database)
         val sessionRepository = SessionRepository(database)
+        val quotaRepository = QuotaRepository(database)
         runBlocking {
             explanations.ensureIndexes()
             sessionRepository.ensureIndexes()
+            quotaRepository.ensureIndexes()
         }
-        SessionService(
-            sessions = sessionRepository,
-            catalog = catalog,
-            graph = ExplanationGraph(
-                repository = explanations,
-                llm = FakeLlmClient(),
-                validator = ExplanationValidator(),
-            ),
+
+        val llm = FakeLlmClient().apply {
+            bodyByPromptSubstring["opening paragraph"] = SEED_BODY
+            nextBody = CHILD_BODY
+        }
+
+        return SessionStack(
+            llm = llm,
             explanations = explanations,
+            sessions = SessionService(
+                sessions = sessionRepository,
+                catalog = catalog,
+                graph = ExplanationGraph(
+                    repository = explanations,
+                    llm = llm,
+                    validator = ExplanationValidator(),
+                ),
+                explanations = explanations,
+            ),
+            quota = QuotaService(
+                quotaRepository,
+                QuotaConfig(
+                    dailyExplains = dailyExplains,
+                    globalDailyCostCeilingMicros = costCeilingMicros,
+                ),
+            ),
+            quotaRepository = quotaRepository,
+            limiter = FixedWindowRateLimiter(limit = sessionsPerCaller, windowMillis = SESSION_WINDOW_MILLIS),
         )
     }
 
-    /** A fully wired `SessionService` over a fake model. Task 1.12's SSE endpoint reuses this. */
-    fun sessions(): SessionService = sessionService
+    class SessionStack(
+        val llm: FakeLlmClient,
+        val explanations: SeamedExplanationRepository,
+        val sessions: SessionService,
+        val quota: QuotaService,
+        val quotaRepository: QuotaRepository,
+        val limiter: FixedWindowRateLimiter,
+    ) {
+        /** How many model calls have been made. The only honest answer to "did that generate?". */
+        val generations: Int get() = llm.calls.size
+    }
+
+    /**
+     * Makes one key disappear for exactly one read.
+     *
+     * That interleaving — a key that is absent when `prepare` looks and present when the request is
+     * finally served — is the one `SessionService` warns about at length and the one an API layer
+     * gets wrong by refusing a request that had become free. It needs two callers landing either
+     * side of a single insert, which no amount of test sequencing can arrange deterministically, so
+     * it is arranged here instead. See `ExplanationRepository`, which is `open` for this.
+     */
+    class SeamedExplanationRepository(database: MongoDatabase) : ExplanationRepository(database) {
+
+        /** The next `findByKey` for this key answers null, once, and then clears itself. */
+        @Volatile
+        var hideOnce: String? = null
+
+        override suspend fun findByKey(key: String): Explanation? {
+            if (key == hideOnce) {
+                hideOnce = null
+                return null
+            }
+            return super.findByKey(key)
+        }
+    }
 }
