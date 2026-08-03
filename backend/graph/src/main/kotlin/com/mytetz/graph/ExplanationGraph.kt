@@ -113,6 +113,13 @@ sealed interface GraphChunk {
      * So the cost leaves this function at the first instant it is known, before anything that can
      * fail, and a consumer records it on arrival rather than on completion.
      *
+     * The guarantee therefore begins at the **announcement**, not at the model returning. `flow {}`
+     * emissions are cancellable, so a disconnect landing in the microseconds between the model's
+     * terminal event and this emit still loses a cost that is technically already known. That window
+     * is not worth a `NonCancellable` around the emit — it would suppress the caller's own abort
+     * signal on the one path where nobody is waiting — but it is a window, and saying "everything
+     * after the model returns is recorded" would be a slightly larger claim than the code makes.
+     *
      * ## Why the cost is not read off [Done.explanation]
      *
      * `Explanation.costMicros` is a property of the *document*, and the document belongs to whoever
@@ -221,8 +228,8 @@ class ExplanationGraph(
                     emit(GraphChunk.Delta(stored.body))
                     emit(GraphChunk.Done(stored))
                 } else {
-                    // `generate` builds the terminal chunk itself, because it is the only place
-                    // that knows what THIS caller's model call cost. See GraphChunk.Done.
+                    // `generate` announces its own cost on the way through — see GraphChunk.Spent —
+                    // and returns the terminal chunk, which is emitted here.
                     emit(generate(request, key))
                 }
             }

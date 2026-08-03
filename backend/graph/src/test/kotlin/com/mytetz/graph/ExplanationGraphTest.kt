@@ -30,6 +30,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
@@ -610,6 +611,39 @@ class ExplanationGraphTest {
 
         assertFailsWith<GenerationFailedException> { graph.getOrGenerate(request()).toList() }
 
+        assertNull(repository.findByKey(graph.keyFor(request())), "a rejected body must leave no trace")
+    }
+
+    @Test
+    fun `a generation that is billed and then rejected announces its cost before it raises`() = runTest {
+        // The property GraphChunk.Spent exists for, asserted in the module that owns it.
+        //
+        // Everything between the model returning and Done can throw, and the validator rejecting is
+        // the ordinary way it happens: the cap here is 600 characters while GraphConfig.maxOutputTokens
+        // is 4 000, so an over-long body is a routine outcome of a prompt regression — and a call
+        // that ran to max_tokens is the most expensive one the model can make. Anthropic bills it in
+        // full. If the cost only rode the terminal chunk, every one of those would be free as far as
+        // the spend breaker could tell, and `GENERATION_FAILED` invites the client to retry.
+        //
+        // Note what this asserts that a position check cannot: `Spent` is at chunks.size - 2 on the
+        // ordinary path, and that stays true if the cost is announced at the very end. Only a path
+        // with NO terminal chunk distinguishes the two.
+        llm.nextBody = "x".repeat(700)
+
+        val chunks = mutableListOf<GraphChunk>()
+        assertFailsWith<GenerationFailedException> {
+            graph.getOrGenerate(request()).collect { chunks += it }
+        }
+
+        val spent = assertNotNull(
+            chunks.filterIsInstance<GraphChunk.Spent>().singleOrNull(),
+            "a generation was billed and raised without ever announcing its cost",
+        )
+        assertTrue(spent.costMicros > 0, "the announced cost must be the real one")
+        assertTrue(
+            chunks.none { it is GraphChunk.Done },
+            "fixture error: this path must have no terminal chunk, or it proves nothing",
+        )
         assertNull(repository.findByKey(graph.keyFor(request())), "a rejected body must leave no trace")
     }
 

@@ -103,7 +103,7 @@ class SessionServiceTest {
         llm.nextStopReason = "end_turn"
     }
 
-    private suspend fun newSession() = service.create("anon:alice", "quantum-physics")
+    private suspend fun newSession() = service.create("anon:alice", "quantum-physics") {}
 
     /** A selection that really does sit where it says it does, so the gate lets it through. */
     private fun selectionOf(body: String, text: String): SpanSelection {
@@ -150,7 +150,7 @@ class SessionServiceTest {
 
     @Test
     fun `create fails for an unknown topic`() = runTest {
-        assertFailsWith<IllegalArgumentException> { service.create("anon:alice", "no-such-topic") }
+        assertFailsWith<IllegalArgumentException> { service.create("anon:alice", "no-such-topic") {} }
 
         // Nothing half-built: a session must not exist for a topic that does not.
         assertEquals(0L, database.getCollection<org.bson.Document>("sessions").countDocuments())
@@ -175,7 +175,7 @@ class SessionServiceTest {
         // The row really is there, so the refusal below is the status check and not a failed upsert.
         assertEquals(TopicStatus.DRAFT, catalog.findBySlug(draft.slug)?.status)
 
-        assertFailsWith<IllegalArgumentException> { service.create("anon:alice", draft.slug) }
+        assertFailsWith<IllegalArgumentException> { service.create("anon:alice", draft.slug) {} }
 
         assertEquals(0, llm.calls.size, "an unpublished topic must be refused before the model is asked")
         assertEquals(0L, database.getCollection<org.bson.Document>("sessions").countDocuments())
@@ -266,7 +266,7 @@ class SessionServiceTest {
         // advances on every call.
         var tick = 0L
         val svc = serviceWith(clock = { FIXED_NOW + tick++ })
-        val (session, _) = svc.create("anon:alice", "quantum-physics")
+        val (session, _) = svc.create("anon:alice", "quantum-physics") {}
 
         svc.explain(
             session.id, session.rootNodeId,
@@ -616,7 +616,7 @@ class SessionServiceTest {
     @Test
     fun `a session that has reached its node ceiling is refused before anything is generated`() = runTest {
         val svc = serviceWith(SessionLimits(maxDepth = 12, maxNodes = 2, maxVariants = 3))
-        val (session, _) = svc.create("anon:alice", "quantum-physics")
+        val (session, _) = svc.create("anon:alice", "quantum-physics") {}
         val selection = selectionOf(seedBody, "behavior of matter")
 
         // One node so far, so the second is admitted.
@@ -638,7 +638,7 @@ class SessionServiceTest {
     @Test
     fun `a chain that has reached its depth ceiling is refused before anything is generated`() = runTest {
         val svc = serviceWith(SessionLimits(maxDepth = 1, maxNodes = 200, maxVariants = 3))
-        val (session, _) = svc.create("anon:alice", "quantum-physics")
+        val (session, _) = svc.create("anon:alice", "quantum-physics") {}
 
         // Depth 1 is inside a ceiling of 1: the limit counts links below the root.
         svc.explain(
@@ -733,7 +733,7 @@ class SessionServiceTest {
         // A second learner, on the same topic, drills into the same span. A seed is keyed by its
         // topic, so both sessions' roots hold the SAME explanation key, so both plans derive the
         // same content key — which is the entire premise of the store being a cache.
-        val (second, _) = service.create("anon:bob", "quantum-physics")
+        val (second, _) = service.create("anon:bob", "quantum-physics") {}
         val other = service.prepare(second.id, second.rootNodeId, selection, Verb.EXPLAIN, null)
         assertEquals(
             plan.contentKey, other.contentKey,

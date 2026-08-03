@@ -231,10 +231,30 @@ mutate M49-cost-announced-too-late-seen-from-the-ledger $EG \
 # exists to notice.
 
 # A registration added to installErrorMapping with no matching arm in sseErrorFor. This is the drift
-# the one-file-two-functions argument rests on, and the checked-in count is what makes a PARTIAL
-# scan fail loudly instead of quietly reporting coverage it never checked.
+# the one-file-two-functions argument rests on.
+#
+# NOTE what this does and does not evidence. It is caught by the `registered - covered` assertion,
+# which predates the count and the hierarchy loop — so this row would have been KILLED before either
+# hardening existed and says nothing about them. M50 and M51 are the ones that do. Left in because
+# the property is still worth a mutation of its own; relabelled so the report cannot overstate it.
 mutate M47-a-registration-drifts-away-from-the-stream-mapping $EM \
   "s=s.replace('        exception<SpanMismatchException> { call, cause ->','        exception<ArithmeticException> { call, _ -> call.respond(HttpStatusCode.BadRequest, INVALID_REQUEST) }\n        exception<SpanMismatchException> { call, cause ->',1)" $API
+
+# THE COUNT. A registration written with a qualified name: the scan regex is `[A-Za-z0-9_]+`, so the
+# dots make it invisible and `registered` silently loses an entry. `isNotEmpty()` is still satisfied
+# and `registered - covered` cannot fire on a type that has DISAPPEARED from the left-hand side — so
+# a partial parse reports coverage it never checked, and only the checked-in count notices.
+mutate M50-a-registration-becomes-invisible-to-the-scan $EM \
+  "s=s.replace('        exception<SpanMismatchException> { call, cause ->','        exception<com.mytetz.session.SpanMismatchException> { call, cause ->',1)" $API
+
+# THE HIERARCHY INVARIANT. Registering a supertype of a covered fixture — RuntimeException, which is
+# on IllegalArgumentException's and CorruptSessionException's chains. The count is unchanged because
+# this REPLACES an arm rather than adding one, and `registered - covered` stays empty because the new
+# entry is covered by those very chains. Only the no-supertype test fires, which is the hole the
+# hierarchy matching would otherwise leave: a registered supertype counted as covered by a subtype
+# fixture that never exercises it.
+mutate M51-a-registered-type-becomes-a-supertype-of-another $EM \
+  "s=s.replace('        exception<IllegalArgumentException> { call, cause ->','        exception<RuntimeException> { call, cause ->',1)" $API
 
 # A bootstrap that touches the session service. That forces the lazy model client, so on a keyless
 # deployment bootstrap throws — and the throw is swallowed and logged as BOOTSTRAP_FAILED, leaving

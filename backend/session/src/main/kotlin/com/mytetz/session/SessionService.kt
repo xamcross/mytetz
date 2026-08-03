@@ -210,6 +210,13 @@ class SessionService(
      * and it takes a `Long` rather than anything from `:backend:quota`, which this module must not
      * depend on and does not.
      *
+     * **It has no default**, for the same reason [com.mytetz.graph.GraphChunk.Spent] is emitted
+     * rather than defaulted: a caller that forgets it bills nobody, and the two errors are not
+     * symmetric — over-reporting is noticed within a day, under-reporting is invisible until the
+     * invoice. A `= {}` would compile at every future call site and silently spend nothing. The
+     * price is `{}` at the handful of test call sites that do not care, which is the right way round:
+     * the ones that do not care say so.
+     *
      * Refuses an unknown slug **and a topic that is not published**, both as
      * [IllegalArgumentException] and deliberately with the same type: `CatalogService.findBySlug`
      * does not filter on status (`CatalogServiceTest` pins that, so that an admin lookup can see a
@@ -231,7 +238,7 @@ class SessionService(
     suspend fun create(
         principalId: String,
         topicSlug: String,
-        onSpend: suspend (Long) -> Unit = {},
+        onSpend: suspend (Long) -> Unit,
     ): SessionCreation {
         val topic = requirePublishedTopic(topicSlug)
 

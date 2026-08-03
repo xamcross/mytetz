@@ -382,6 +382,31 @@ class ErrorMappingTest {
      */
     private val REGISTERED_EXCEPTION_ARMS = 13
 
+    /**
+     * Every type `installErrorMapping` registers an `exception<...>` arm for, read out of the source.
+     *
+     * Reading a source file from a test is unusual and is the point: the registration list is the
+     * authority, and no runtime API exposes it — `StatusPagesConfig` keeps its handler map private.
+     *
+     * Comments are stripped first. This file argues about the mapping at length, and an
+     * `exception<UnsupportedMediaTypeException>` written *in prose* to explain why that arm does not
+     * exist would otherwise be scanned as a registration. Found by this scan on its first run, which
+     * is a fair advertisement for it.
+     */
+    private fun registeredExceptionArms(): Set<String> {
+        val source = java.io.File("src/main/kotlin/com/mytetz/api/ErrorMapping.kt")
+        assertTrue(source.isFile, "cannot find ErrorMapping.kt from ${java.io.File(".").absolutePath}")
+
+        val code = source.readText()
+            .replace(Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL), "")
+            .replace(Regex("""//[^\n]*"""), "")
+
+        return Regex("""exception<([A-Za-z0-9_]+)>""")
+            .findAll(code)
+            .map { it.groupValues[1] }
+            .toSet() - "Throwable" // the catch-all is `else`, not an arm
+    }
+
     private val taxonomy: List<Throwable> = listOf(
         SpanMismatchException("span text does not match the parent body at those offsets"),
         DepthLimitException("a chain of 9 links exceeds the limit of 8"),
@@ -410,28 +435,10 @@ class ErrorMappingTest {
      * it, so a type registered in `installErrorMapping` and forgotten in [sseErrorFor] would be
      * `INTERNAL` inside a stream with nothing objecting. This reads the registrations out of the
      * source and requires each one to be represented here.
-     *
-     * Reading a source file from a test is unusual and is the point: the registration list is the
-     * authority, and no runtime API exposes it — `StatusPagesConfig` keeps its handler map private.
      */
     @Test
     fun `the streaming mapping covers every type the status mapping registers`() {
-        val source = java.io.File("src/main/kotlin/com/mytetz/api/ErrorMapping.kt")
-        assertTrue(source.isFile, "cannot find ErrorMapping.kt from ${java.io.File(".").absolutePath}")
-
-        // Comments stripped first: this file argues about the mapping at length, and an
-        // `exception<UnsupportedMediaTypeException>` written in prose to explain why that arm does
-        // NOT exist would otherwise be scanned as a registration. Found by this test on its first
-        // run, which is a fair advertisement for it.
-        val code = source.readText()
-            .replace(Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL), "")
-            .replace(Regex("""//[^
-]*"""), "")
-
-        val registered = Regex("""exception<([A-Za-z0-9_]+)>""")
-            .findAll(code)
-            .map { it.groupValues[1] }
-            .toSet() - "Throwable" // the catch-all is `else`, not an arm
+        val registered = registeredExceptionArms()
 
         // By hierarchy, not by exact type: StatusPages routes a throwable to the closest registered
         // handler up its class chain, so a fixture of a *subtype* genuinely exercises the arm its
@@ -454,13 +461,30 @@ class ErrorMappingTest {
         assertContains(registered, "SessionNotFoundException")
         assertContains(registered, "CorruptSessionException")
 
-        // The invariant `installErrorMapping`'s KDoc states and nothing enforced: apart from the
-        // `Throwable` catch-all, no registered type is a supertype of another registered type.
-        //
-        // This test needs it. Coverage is matched by hierarchy, because StatusPages routes a
-        // throwable to the closest registered handler up its chain — so without this, a registered
-        // *supertype* would count as covered by a *subtype* fixture, while the arm-for-arm test only
-        // ever exercises the subtype and a bare supertype instance would still fall to INTERNAL.
+        assertEquals(
+            emptySet(),
+            registered - covered,
+            "installErrorMapping registers these types and the streaming taxonomy does not cover " +
+                "them, so they would fall to INTERNAL inside a stream",
+        )
+    }
+
+    /**
+     * The invariant `installErrorMapping`'s KDoc states and nothing enforced: apart from the
+     * `Throwable` catch-all, **no registered type is a supertype of another registered type**.
+     *
+     * Its own test, and not an extra assertion on the coverage test above, because the two fail for
+     * different reasons and a mutation that breaks only this one has to be able to say so.
+     *
+     * The coverage test needs this. It matches by hierarchy — it has to, since StatusPages routes a
+     * throwable to the closest registered handler up its chain — so without this invariant a
+     * registered *supertype* counts as covered by a *subtype* fixture, while the arm-for-arm test
+     * only ever exercises the subtype and a bare supertype instance still falls to INTERNAL.
+     */
+    @Test
+    fun `no registered type is a supertype of another registered type`() {
+        val registered = registeredExceptionArms()
+
         taxonomy.forEach { cause ->
             val onThisChain = generateSequence<Class<*>>(cause.javaClass) { it.superclass }
                 .map { it.simpleName }
@@ -469,16 +493,10 @@ class ErrorMappingTest {
             assertTrue(
                 onThisChain.size <= 1,
                 "${cause::class.simpleName} has two registered types in its hierarchy ($onThisChain), " +
-                    "so handler selection now depends on StatusPages' most-specific walk and the " +
-                    "coverage check above can be satisfied without the supertype ever being exercised",
+                    "so handler selection now depends on StatusPages' most-specific walk, and the " +
+                    "coverage test can be satisfied without the supertype ever being exercised",
             )
         }
-        assertEquals(
-            emptySet(),
-            registered - covered,
-            "installErrorMapping registers these types and the streaming taxonomy does not cover " +
-                "them, so they would fall to INTERNAL inside a stream",
-        )
     }
 
     @Test

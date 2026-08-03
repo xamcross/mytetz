@@ -453,15 +453,23 @@ fun Route.sessionRoutes(
  *
  * The bound that leaves: a client which disconnects mid-generation pays nothing into the ledger and
  * nothing into its own daily count, which makes `QuotaConfig.dailyExplains` optional for such a
- * client. **Everything after that instant is recorded** — a generation that is billed and then
- * rejected, or whose insert fails, or whose correction cannot be sent, all reach `Spent` first.
+ * client. **Everything after the announcement is recorded** — a generation that is billed and then
+ * rejected, or whose insert fails, or whose correction cannot be sent, all reach `Spent` first. The
+ * guarantee starts at the emit rather than at the model returning: a disconnect landing in the
+ * microseconds between the two loses a cost that is already known, which is a real if vanishing
+ * window and is stated rather than rounded away.
  *
- * Charging the *count* without the cost was considered and rejected: this layer cannot distinguish
- * "cancelled after the model was called" from "cancelled while being served a cache hit", because
- * `Meta(cached = false)` is emitted before the per-key lock and a hit served under that lock looks
- * identical from here. Closing it needs `ExplanationGraph` to report partial usage on the
- * cancellation path — which is the same change that would let it be billed properly, and is the
- * right place for it. Recorded as a bound in the shape `QuotaService` uses for its own overshoot.
+ * Charging the *count* without the cost is **deferred as a billing-policy decision, not blocked by
+ * anything**. It was once argued here that this layer cannot tell "cancelled after the model was
+ * called" from "cancelled while being served a cache hit under the lock" — true of the signals that
+ * existed then, and disproved by `GraphChunk.Spent`, which demonstrates that the graph can announce
+ * anything it likes at any instant it chooses, including the instant it commits to calling the
+ * model. So the question is whether a learner should spend one of twenty daily explanations on an
+ * answer they never received, and that is a product call nobody has made. What is *not* available
+ * either way is the amount, since no token counts exist on this path; closing that needs
+ * `ExplanationGraph` to report partial usage, which is the same change that would let it be billed
+ * rather than merely counted. Recorded as a bound in the shape `QuotaService` uses for its own
+ * overshoot.
  */
 private suspend fun ServerSSESession.streamExplanation(
     sessions: SessionService,
