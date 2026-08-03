@@ -59,7 +59,7 @@ mutate M07-principal-exceeded-carries-no-wait $SR \
 # between prepare and execution, and that refusing it is a real failure during exactly the incident
 # the breaker exists for.
 mutate M09-stale-plan-is-never-re-read $SR \
-  "s=s.replace('                plan = prepare()\n                plan.cached','                plan.cached',1)" $API
+  "s=s.replace('                    plan = prepare()\n                    plan.cached','                    plan.cached',1)" $API
 
 mutate M10-create-gate-does-not-re-read $SR \
   "s=s.replace('quota.refusalFor(principal) { !sessions.createWillGenerate(request.topicSlug) }','quota.refusalFor(principal) { false }',1)" $API
@@ -70,7 +70,7 @@ mutate M11-spend-is-billed-from-the-document $SR \
   "s=s.replace('            if (chunk is GraphChunk.Done) spentMicros = chunk.spentMicros','            if (chunk is GraphChunk.Done) spentMicros = chunk.explanation.costMicros',1)" $API
 
 mutate M12-spend-is-never-recorded $SR \
-  "s=s.replace('        quota.recordSpend(principal, spentMicros)\n    } catch (e: CancellationException) {','    } catch (e: CancellationException) {',1)" $API
+  "s=s.replace('        withContext(NonCancellable) { quota.recordSpend(principal, spentMicros) }\n','',1)" $API
 
 mutate M13-seed-spend-is-never-recorded $SR \
   "s=s.replace('        quota.recordSpend(principal, created.spentMicros)\n','',1)" $API
@@ -82,7 +82,7 @@ mutate M15-generator-reports-the-winners-cost $EG \
   "s=s.replace('return GraphChunk.Done(winner, spentMicros = explanation.costMicros)','return GraphChunk.Done(winner, spentMicros = winner.costMicros)',1)" $GRAPH
 
 mutate M16-a-cache-hit-claims-the-documents-cost $EG \
-  "s=s.replace('            emit(GraphChunk.Delta(stored.body))\n            emit(GraphChunk.Done(stored))','            emit(GraphChunk.Delta(stored.body))\n            emit(GraphChunk.Done(stored, stored.costMicros))',1)" $GRAPH
+  "s=s.replace('emit(GraphChunk.Done(stored, spentMicros = 0))','emit(GraphChunk.Done(stored, spentMicros = stored.costMicros))',1)" $GRAPH
 
 mutate M17-create-reports-no-spend $SS \
   "s=s.replace('return SessionCreation(session, seed, spentMicros = done.spentMicros)','return SessionCreation(session, seed, spentMicros = 0)',1)" $API
@@ -157,3 +157,40 @@ mutate M36-body-size-unbounded $SR \
 
 mutate M37-ownerOf-answers-for-the-wrong-field $SS \
   "s=s.replace('suspend fun ownerOf(sessionId: String): String? = sessions.findById(sessionId)?.principalId','suspend fun ownerOf(sessionId: String): String? = sessions.findById(sessionId)?.topicSlug',1)" $API
+
+# ------------------------------------------------- review round 1: the two Criticals
+
+AP=backend/api/src/main/kotlin/com/mytetz/api/Application.kt
+LC=backend/llm/src/testFixtures/kotlin/com/mytetz/llm/FakeLlmClient.kt
+
+# Critical 1. NOT a deletion — M12 already covers that, and the happy path kills it. This *moves* the
+# recording back to where it was: after `collect`, so that anything throwing between the cost
+# becoming known and the collection returning (the terminal `send`, and `appendNode`, which runs
+# inside the flow after the last emit) skips it. The tokens are already bought at that point, and
+# SPEND_UNRECORDED does not fire either, because the function that raises it never runs.
+mutate M38-spend-recorded-after-collect-instead-of-finally $SR \
+  "s=s.replace('    } finally {\n        withContext(NonCancellable) { quota.recordSpend(principal, spentMicros) }\n    }','    }',1).replace('            send(eventFor(chunk))\n        }\n    } catch (e: CancellationException) {','            send(eventFor(chunk))\n        }\n        quota.recordSpend(principal, spentMicros)\n    } catch (e: CancellationException) {',1)" $API
+
+# Critical 2. Reading the lazy at routing time builds AnthropicLlmClient inside module(), so a
+# missing ANTHROPIC_API_KEY stops the process booting and takes /api/health and topic browsing with
+# it — reversing a decision Components' KDoc argues for at length.
+mutate M39-session-service-resolved-at-routing-time $AP \
+  "s=s.replace('            sessions = { components.sessions },','            sessions = components.sessions.let { built -> { built } },',1)" $API
+
+# The re-check swallowing its own failure, so a Mongo blip inside it answers 500 on a request the
+# cache could have served, instead of leaving the clean refusal in place.
+mutate M40-quota-recheck-failure-becomes-the-answer $SR \
+  "s=s.replace('                } catch (e: Exception) {\n                    log.info(\"the quota re-check could not be evaluated; keeping the refusal\", e)\n                    false\n                }','                } catch (e: Exception) {\n                    throw e\n                }',1)" $API
+
+# RATE_LIMITED losing the header again.
+mutate M41-rate-limit-refusal-drops-retry-after $SR \
+  "s=s.replace('            call.respondRefusal(\n                Refusal(\n                    HttpStatusCode.TooManyRequests,\n                    ApiError(\n                        code = \"RATE_LIMITED\",\n                        message = \"too many sessions started; try again later\",\n                        retryAfter = SESSION_WINDOW_MILLIS / 1000,\n                    ),\n                )\n            )','            call.respond(\n                HttpStatusCode.TooManyRequests,\n                ApiError(\"RATE_LIMITED\", \"too many sessions started; try again later\", SESSION_WINDOW_MILLIS / 1000),\n            )',1)" $API
+
+# The streaming mapping losing an arm the status mapping registers. M24 covered the session types;
+# this covers the mechanism that is supposed to NOTICE such a loss.
+mutate M42-stream-mapping-drops-a-registered-arm $EM \
+  "s=s.replace('    is ResourceNotFoundException -> ApiError(\"NOT_FOUND\", cause.message.orEmpty())\n','',1)" $API
+
+# The fixture hook itself, since two tests now depend on it firing exactly once mid-stream.
+mutate M43-mid-stream-hook-never-fires $LC \
+  "s=s.replace('            if (index == 0) afterFirstDelta?.invoke()','',1)" $API

@@ -4,10 +4,15 @@ import com.mongodb.kotlin.client.coroutine.MongoDatabase
 import com.mytetz.llm.FakeLlmClient
 import com.mytetz.persistence.Mongo
 import com.mytetz.persistence.MongoConfig
+import io.ktor.client.plugins.cookies.HttpCookies
 import io.ktor.client.request.get
 import io.ktor.client.request.head
+import io.ktor.client.request.post
+import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
+import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.contentType
 import io.ktor.server.testing.testApplication
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -210,6 +215,78 @@ class ComponentsTest {
         // status codes sees a healthy API.
         assertEquals(HttpStatusCode.NotFound, response.status)
         assertTrue(response.bodyAsText().contains("NOT_FOUND"), "an /api path fell through to the SPA")
+    }
+
+    @Test
+    fun `module boots and serves without a model client, because the session routes defer it`() = testApplication {
+        // The regression this exists for: `sessionRoutes(sessions = components.sessions, …)` reads a
+        // lazy whose chain ends at `AnthropicLlmClient()`, which demands ANTHROPIC_API_KEY in its
+        // constructor. Evaluating it while `module()` is being configured means a missing or
+        // freshly-rotated key stops the process booting — taking /api/health and topic browsing,
+        // which need no model at all, down with it. The key is currently absent from fly secrets, so
+        // this is the difference between "sessions unavailable" and "does not start".
+        //
+        // Invisible to every other test in the suite, because they all inject a FakeLlmClient. This
+        // one injects a factory that fails if it is ever called.
+        application {
+            module(
+                Components(
+                    mongo = Mongo(MongoConfig(TestFixtures.connectionString, "test_api_no_model")),
+                    cookies = TestFixtures.cookieConfig,
+                    llmFactory = { error("the model client must not be built to serve the catalogue") },
+                )
+            )
+        }
+
+        assertEquals(HttpStatusCode.OK, client.get("/api/health").status)
+        assertEquals(HttpStatusCode.OK, client.get("/api/catalog/topics").status)
+    }
+
+    @Test
+    fun `the real module routes the session endpoints ahead of the api catch-all and the spa`() = testApplication {
+        // Every SessionRoutesTest builds its own routing block, so nothing else establishes that
+        // these paths survive contact with the rest of `module()`. Both things below them match
+        // broadly: `route("/api/{...}")` is a tailcard over every method, and `default("index.html")`
+        // makes the static handler match everything — and that catch-all exists precisely because
+        // "specificity will handle it" was wrong once already.
+        application { module(components("session_routes")) }
+        // The catalogue is seeded in the background, and `POST /api/sessions` refuses a topic the
+        // catalogue does not have — so without this the route answers 400 for the right reason and
+        // the test fails for the wrong one.
+        awaitReady(client)
+
+        // A cookie jar, because the routes enforce ownership: `Principals.resolve` mints a fresh
+        // principal for every cookie-less request, so the default test client would create a session
+        // as one learner and then be refused it as another. That the plain client gets a 404 here is
+        // the ownership check working through the real module, and it is asserted below.
+        val learner = createClient { install(HttpCookies) }
+
+        val created = learner.post("/api/sessions") {
+            contentType(ContentType.Application.Json)
+            setBody("""{"topicSlug":"quantum-physics"}""")
+        }
+        assertEquals(HttpStatusCode.OK, created.status, "POST /api/sessions fell through: ${created.bodyAsText()}")
+        assertTrue(created.bodyAsText().contains("rootNodeId"), "the SPA shell answered instead of the route")
+
+        val id = Regex("\"sessionId\":\"([^\"]+)\"").find(created.bodyAsText())!!.groupValues[1]
+        assertEquals(HttpStatusCode.OK, learner.get("/api/sessions/$id").status)
+        assertEquals(
+            HttpStatusCode.NotFound,
+            client.get("/api/sessions/$id").status,
+            "ownership is not enforced when the routes are wired by the real module",
+        )
+
+        // The explain route is a POST, and `route("/api/{...}") { handle { … } }` answers every
+        // method — so if the tailcard out-ranked it this would be a JSON 404 rather than a stream.
+        val explain = learner.post("/api/sessions/$id/explain") {
+            contentType(ContentType.Application.Json)
+            setBody("""{"parentNodeId":"nope","span":{"text":"x","start":0,"end":1},"verb":"EXPLAIN"}""")
+        }
+        assertEquals(
+            HttpStatusCode.BadRequest,
+            explain.status,
+            "the explain route did not run; the catch-all or the SPA answered: ${explain.bodyAsText()}",
+        )
     }
 
     @Test

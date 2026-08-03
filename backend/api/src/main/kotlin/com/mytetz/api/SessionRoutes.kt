@@ -22,6 +22,8 @@ import io.ktor.server.routing.post
 import io.ktor.server.sse.SSEServerContent
 import io.ktor.server.sse.ServerSSESession
 import io.ktor.sse.ServerSentEvent
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
@@ -197,9 +199,28 @@ const val MAX_SESSION_BODY_BYTES: Long = 4_096
  * The `SSE` plugin is deliberately **not** installed: it is `createApplicationPlugin("SSE") {}`, an
  * empty marker whose only purpose is the `plugin(SSE)` assertion inside `processSSE`, which this
  * file does not call. Installing it would read as load-bearing configuration and do nothing.
+ *
+ * The one thing given up by going around `Route.sse` is `ServerSSESession.heartbeat`, which Ktor
+ * offers to keep an idle stream alive. Nothing here emits a keep-alive comment, so a model that
+ * stalls mid-generation leaves the connection silent, and Cloudflare's idle timeout — not this
+ * application — decides when the learner's page gives up. Acceptable while `GraphConfig.maxOutputTokens`
+ * is 4 000 and a generation is seconds; it is the thing to add first if stalls are ever observed,
+ * and `heartbeat` is an extension on `ServerSSESession`, so it remains available inside the handler.
+ *
+ * ## [sessions] is a factory, and that is not a style choice
+ *
+ * `Components.sessions` is `by lazy` on a chain that ends at `AnthropicLlmClient()`, whose
+ * constructor calls `AnthropicOkHttpClient.fromEnv()` and demands `ANTHROPIC_API_KEY` **there and
+ * then**. Passing `components.sessions` into this function evaluates that lazy during routing setup,
+ * i.e. inside `Application.module()`, i.e. before the engine accepts a connection — so a missing or
+ * freshly-rotated key stops the process booting at all, taking `/api/health` and topic browsing with
+ * it. `Components`' KDoc argues at length for the opposite, and `ComponentsTest`'s `the model client
+ * is not built unless something needs a model` asserts exactly that touching `components.sessions` is
+ * what builds it. A `() -> SessionService` resolved per request keeps that property: a deployment
+ * with no key serves the catalogue and fails only the endpoints that actually need a model.
  */
 fun Route.sessionRoutes(
-    sessions: SessionService,
+    sessions: () -> SessionService,
     quota: QuotaService,
     cookies: PrincipalCookieConfig,
     clientAddresses: ClientAddressConfig = ClientAddressConfig(),
@@ -234,13 +255,23 @@ fun Route.sessionRoutes(
      */
     post("/api/sessions") {
         if (!call.bodyIsSmallEnough()) return@post
+        val sessions = sessions()
 
         val caller = ClientAddress.of(call, clientAddresses)
         if (!sessionLimiter.tryAcquire(caller)) {
             log.info("rate limited session creation from {}", caller)
-            call.respond(
-                HttpStatusCode.TooManyRequests,
-                ApiError("RATE_LIMITED", "too many sessions started; try again later", SESSION_WINDOW_MILLIS / 1000),
+            // Through `respondRefusal`, so this 429 carries a `Retry-After` header like the quota
+            // ones. The reasoning is the same and it is not the client's to guess: proxies, client
+            // libraries and crawlers all read the header and none of them reads our JSON.
+            call.respondRefusal(
+                Refusal(
+                    HttpStatusCode.TooManyRequests,
+                    ApiError(
+                        code = "RATE_LIMITED",
+                        message = "too many sessions started; try again later",
+                        retryAfter = SESSION_WINDOW_MILLIS / 1000,
+                    ),
+                )
             )
             return@post
         }
@@ -267,6 +298,7 @@ fun Route.sessionRoutes(
     }
 
     get("/api/sessions/{id}") {
+        val sessions = sessions()
         val principal = Principals.resolve(call, cookies)
         val id = call.parameters["id"].orEmpty()
 
@@ -281,6 +313,7 @@ fun Route.sessionRoutes(
 
     post("/api/sessions/{id}/explain") {
         if (!call.bodyIsSmallEnough()) return@post
+        val sessions = sessions()
 
         val principal = Principals.resolve(call, cookies)
         val sessionId = call.parameters["id"].orEmpty()
@@ -306,8 +339,22 @@ fun Route.sessionRoutes(
             val refusal = quota.refusalFor(principal) {
                 // Re-read, and use the fresher plan: another caller may have persisted this key
                 // since. `prepare` calls no model. See property 2.
-                plan = prepare()
-                plan.cached
+                //
+                // A throw here must not become the answer. The re-check exists to *soften* a
+                // refusal, so a Mongo blip inside it would turn a clean 503 into a 500 on a request
+                // the cache might have served — the failure this whole branch is trying to avoid,
+                // arriving through the door meant to fix it. A ceiling that has genuinely been
+                // crossed since the first `prepare` is refused too, one code less precisely; that is
+                // the cheaper error, and nothing generates either way.
+                try {
+                    plan = prepare()
+                    plan.cached
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    log.info("the quota re-check could not be evaluated; keeping the refusal", e)
+                    false
+                }
             }
             if (refusal != null) {
                 call.respondRefusal(refusal)
@@ -345,6 +392,50 @@ fun Route.sessionRoutes(
  * not cosmetic here either: the cancellation has to reach `SessionService.explain`, which is
  * specified to drop the abandoned node rather than resume the learner on a branch they walked away
  * from.
+ *
+ * ## Why the recording is in a `finally` and not after `collect`
+ *
+ * Because two things run between the cost becoming known and the collection returning, and either
+ * can throw:
+ *
+ * 1. the terminal `done` `send`, which writes to a socket the learner may have just closed; and
+ * 2. `SessionRepository.appendNode`, which `SessionService.explain` runs **inside the flow, after the
+ *    last emit** — so `collect` only returns once that Mongo write has succeeded.
+ *
+ * By the time either can fail, `ExplanationRepository.insertIfAbsent` has already returned: the
+ * tokens are bought, the document is in the store, and `spentMicros` is a known non-zero number. A
+ * recording placed after `collect` is skipped in exactly that case, and — worse — the
+ * [SPEND_UNRECORDED] alert built for this condition never fires either, because the function that
+ * raises it never runs. The ledger silently understates and nothing says so.
+ *
+ * That is not a rare shape. A client that aborts every explain once the deltas stop would move
+ * neither the ledger nor the principal's counter, so `checkGeneration` answers `Allowed` for ever,
+ * and `appendNode` never runs so the node budget is not consumed either: one session and one span
+ * become unbounded paid generations against a ledger that reads zero. Nothing else bounds explains —
+ * the rate limiter is on `POST /api/sessions` only.
+ *
+ * So it runs on every path, under `NonCancellable` so a cancelled coroutine cannot skip the write.
+ * `recordSpend` swallows its own failures, so it cannot fail the request from any position.
+ *
+ * The previous rationale here — "a cancelled request records nothing, consistent with the node not
+ * being written either" — was the exact conflation this task exists to prevent. An unwritten node is
+ * free. Sampled tokens are not.
+ *
+ * ## The bound this still leaves, named rather than implied
+ *
+ * A cancellation that arrives **before** `Done` leaves `spentMicros` at 0 and records nothing, even
+ * though the model may demonstrably have been called: `ExplanationGraph.generate` rethrows
+ * `CancellationException` before the stream's terminal event delivers `LlmUsage`, so the cost is
+ * genuinely unknowable at every layer, not merely unread here. The consequence is that a client
+ * which disconnects mid-generation pays nothing into the ledger **and** nothing into its own daily
+ * count, which makes `QuotaConfig.dailyExplains` optional for such a client.
+ *
+ * Charging the *count* without the cost was considered and rejected: this layer cannot distinguish
+ * "cancelled after the model was called" from "cancelled while being served a cache hit", because
+ * `Meta(cached = false)` is emitted before the per-key lock and a hit served under that lock looks
+ * identical from here. Closing it needs `ExplanationGraph` to report partial usage on the
+ * cancellation path — which is the same change that would let it be billed properly, and is the
+ * right place for it. Recorded as a bound in the shape `QuotaService` uses for its own overshoot.
  */
 private suspend fun ServerSSESession.streamExplanation(
     sessions: SessionService,
@@ -352,22 +443,21 @@ private suspend fun ServerSSESession.streamExplanation(
     principal: PrincipalId,
     plan: ExplainPlan,
 ) {
+    // Outside the `try`, because the `finally` reads it.
+    var spentMicros = 0L
     try {
-        var spentMicros = 0L
-
         sessions.explain(plan).collect { chunk ->
+            // Only the caller that actually called the model, and only for what its own call cost.
+            // See property 3 on `sessionRoutes`.
             if (chunk is GraphChunk.Done) spentMicros = chunk.spentMicros
             send(eventFor(chunk))
         }
-
-        // Only the caller that actually called the model, and only for what its own call cost. See
-        // property 3 on `sessionRoutes`. Runs after the stream so that a cancelled request records
-        // nothing — consistent with the node not being written either.
-        quota.recordSpend(principal, spentMicros)
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
         send(ServerSentEvent(event = "error", data = json.encodeToString(sseErrorFor(e))))
+    } finally {
+        withContext(NonCancellable) { quota.recordSpend(principal, spentMicros) }
     }
 }
 

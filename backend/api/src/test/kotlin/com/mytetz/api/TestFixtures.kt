@@ -5,6 +5,7 @@ import com.mongodb.kotlin.client.coroutine.MongoDatabase
 import com.mytetz.catalog.CatalogService
 import com.mytetz.catalog.TopicRepository
 import com.mytetz.catalog.TopicRequestRepository
+import com.mongodb.client.model.Filters
 import com.mytetz.graph.Explanation
 import com.mytetz.graph.ExplanationGraph
 import com.mytetz.graph.ExplanationRepository
@@ -16,6 +17,7 @@ import com.mytetz.quota.QuotaService
 import com.mytetz.session.SessionRepository
 import com.mytetz.session.SessionService
 import kotlinx.coroutines.runBlocking
+import org.bson.Document
 import org.testcontainers.containers.MongoDBContainer
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -128,6 +130,7 @@ object TestFixtures {
         }
 
         return SessionStack(
+            database = database,
             llm = llm,
             explanations = explanations,
             sessions = SessionService(
@@ -153,6 +156,7 @@ object TestFixtures {
     }
 
     class SessionStack(
+        val database: MongoDatabase,
         val llm: FakeLlmClient,
         val explanations: SeamedExplanationRepository,
         val sessions: SessionService,
@@ -162,6 +166,30 @@ object TestFixtures {
     ) {
         /** How many model calls have been made. The only honest answer to "did that generate?". */
         val generations: Int get() = llm.calls.size
+
+        /**
+         * Removes the session document out from under an in-flight request.
+         *
+         * There is no delete path in `SessionRepository` and there should not be; this reaches past
+         * it deliberately, to produce the one state the API layer has to survive — `appendNode`
+         * raising **after** `insertIfAbsent` has already bought and stored an explanation.
+         */
+        /**
+         * The first lookup of [key] answers "absent" — which is the truth on this path — and the
+         * **second** raises.
+         *
+         * The second lookup is the quota re-check's own `prepare`, which is the read this is about.
+         * Arming only the failure would blow up the *first* `prepare` instead, before the gate has
+         * run at all, and test nothing.
+         */
+        fun failTheRecheckLookupOf(key: String) {
+            explanations.hideOnce = key
+            explanations.failOnce = key
+        }
+
+        suspend fun deleteSession(sessionId: String) {
+            database.getCollection<Document>("sessions").deleteOne(Filters.eq("_id", sessionId))
+        }
     }
 
     /**
@@ -179,10 +207,24 @@ object TestFixtures {
         @Volatile
         var hideOnce: String? = null
 
+        /**
+         * The next `findByKey` for this key raises, once.
+         *
+         * For the other half of the staleness contract: the quota re-check is a second `prepare`, and
+         * a `prepare` reads Mongo. If that read fails, the re-check must not turn a clean refusal
+         * into a 500 on a request the cache might have served.
+         */
+        @Volatile
+        var failOnce: String? = null
+
         override suspend fun findByKey(key: String): Explanation? {
             if (key == hideOnce) {
                 hideOnce = null
                 return null
+            }
+            if (key == failOnce) {
+                failOnce = null
+                throw IllegalStateException("simulated read failure for $key")
             }
             return super.findByKey(key)
         }

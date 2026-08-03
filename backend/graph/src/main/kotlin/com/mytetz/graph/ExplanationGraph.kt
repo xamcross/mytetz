@@ -98,13 +98,21 @@ sealed interface GraphChunk {
      * — every loser records a generation it never made — and mis-reports the cross-instance race in
      * both directions. [spentMicros] is the only field here that answers "did *I* spend, and how
      * much", and it is the only one a spend ledger may be driven from. Zero means this caller made
-     * no model call, which is the common case: it is the default precisely so that the two cache
-     * paths cannot report a spend by omission.
+     * no model call, which is the common case — and it is written out at both cache sites rather than
+     * defaulted, for the reason below.
      *
      * `Meta(cached = false)` is not a substitute and neither is any flag computed before the lock;
      * see [ExplanationGraph.getOrGenerate] and `SessionService`'s class KDoc.
+     *
+     * **There is deliberately no default.** A default of 0 is the right value at both cache sites and
+     * the wrong one everywhere else, and the two failures are not symmetric: over-reporting is
+     * noticed within a day, because the breaker trips early and the site visibly stops generating,
+     * whereas under-reporting is invisible until the invoice arrives. A future path that constructs
+     * this chunk after calling a model would compile with a default, report nothing, and the breaker
+     * would never see the money. Requiring the argument turns that into a compile error, for the same
+     * reason `SessionRoutes.eventFor` is written to be exhaustive rather than to have an else branch.
      */
-    data class Done(val explanation: Explanation, val spentMicros: Long = 0) : GraphChunk
+    data class Done(val explanation: Explanation, val spentMicros: Long) : GraphChunk
 }
 
 /**
@@ -165,7 +173,7 @@ class ExplanationGraph(
             emit(GraphChunk.Meta(key, cached = true))
             repository.incrementRequestCount(key)
             emit(GraphChunk.Delta(stored.body))
-            emit(GraphChunk.Done(stored))
+            emit(GraphChunk.Done(stored, spentMicros = 0))
             return@flow
         }
 
@@ -184,7 +192,7 @@ class ExplanationGraph(
                 if (stored != null) {
                     repository.incrementRequestCount(key)
                     emit(GraphChunk.Delta(stored.body))
-                    emit(GraphChunk.Done(stored))
+                    emit(GraphChunk.Done(stored, spentMicros = 0))
                 } else {
                     // `generate` builds the terminal chunk itself, because it is the only place
                     // that knows what THIS caller's model call cost. See GraphChunk.Done.

@@ -23,6 +23,8 @@ import io.ktor.http.contentType
 import io.ktor.serialization.JsonConvertException
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.install
+import io.ktor.server.plugins.BadRequestException
+import io.ktor.server.plugins.ContentTransformationException
 import io.ktor.server.plugins.NotFoundException
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.request.receive
@@ -379,11 +381,69 @@ class ErrorMappingTest {
         SessionFullException("session s1 already holds 200 of 200 nodes"),
         VariantLimitException("variant 4 is outside the permitted range 0..3"),
         SessionNotFoundException("s-vanished"),
+        ResourceNotFoundException("no topic with slug 'nope'"),
+        NotFoundException("session s1 for principal anon:p not found"),
         CorruptSessionException("s-broken", "parent cycle through node n3"),
         GenerationFailedException("upstream generation failed for k1"),
+        BadRequestException("body was not json"),
+        // The concrete types the pipeline actually raises, not their registered supertypes — the
+        // coverage check below walks the hierarchy, so `JsonConvertException` stands in for
+        // `ContentConvertException`. `ContentTransformationException` is abstract, hence the object.
+        JsonConvertException("Illegal input"),
+        object : ContentTransformationException("no converter handled the body") {},
         IllegalArgumentException("no node n9 in session s1"),
         IllegalStateException("a genuine bug"),
     )
+
+    /**
+     * The drift detector's own drift detector.
+     *
+     * [taxonomy] is hand written, and a hand-written list is exactly the mechanism that fails
+     * silently: the arm-for-arm test below can only compare the types somebody remembered to put in
+     * it, so a type registered in `installErrorMapping` and forgotten in [sseErrorFor] would be
+     * `INTERNAL` inside a stream with nothing objecting. This reads the registrations out of the
+     * source and requires each one to be represented here.
+     *
+     * Reading a source file from a test is unusual and is the point: the registration list is the
+     * authority, and no runtime API exposes it — `StatusPagesConfig` keeps its handler map private.
+     */
+    @Test
+    fun `the streaming mapping covers every type the status mapping registers`() {
+        val source = java.io.File("src/main/kotlin/com/mytetz/api/ErrorMapping.kt")
+        assertTrue(source.isFile, "cannot find ErrorMapping.kt from ${java.io.File(".").absolutePath}")
+
+        // Comments stripped first: this file argues about the mapping at length, and an
+        // `exception<UnsupportedMediaTypeException>` written in prose to explain why that arm does
+        // NOT exist would otherwise be scanned as a registration. Found by this test on its first
+        // run, which is a fair advertisement for it.
+        val code = source.readText()
+            .replace(Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL), "")
+            .replace(Regex("""//[^
+]*"""), "")
+
+        val registered = Regex("""exception<([A-Za-z0-9_]+)>""")
+            .findAll(code)
+            .map { it.groupValues[1] }
+            .toSet() - "Throwable" // the catch-all is `else`, not an arm
+
+        // By hierarchy, not by exact type: StatusPages routes a throwable to the closest registered
+        // handler up its class chain, so a fixture of a *subtype* genuinely exercises the arm its
+        // supertype registers.
+        val covered = taxonomy.flatMap { cause ->
+            generateSequence<Class<*>>(cause.javaClass) { it.superclass }.map { it.simpleName }.toList()
+        }.toSet()
+
+        assertTrue(
+            registered.isNotEmpty(),
+            "the registration scan found nothing, so this test is asserting on an empty set",
+        )
+        assertEquals(
+            emptySet(),
+            registered - covered,
+            "installErrorMapping registers these types and the streaming taxonomy does not cover " +
+                "them, so they would fall to INTERNAL inside a stream",
+        )
+    }
 
     @Test
     fun `the streaming mapping answers with the same code as the status mapping, arm for arm`() = testApplication {
@@ -417,16 +477,24 @@ class ErrorMappingTest {
         // the refusal to the learner.
         assertEquals(
             "span text does not match the parent body at those offsets",
-            sseErrorFor(taxonomy[0]).message,
+            sseErrorFor(taxonomy.first { it is SpanMismatchException }).message,
         )
         // Not echoed. GenerationFailedException's message carries an internal content key and,
         // through its cause, whatever the upstream said — which on a bad key is a statement about
         // our own credentials.
-        assertFalse(sseErrorFor(taxonomy[6]).message.contains("k1"))
+        assertFalse(sseErrorFor(taxonomy.first { it is GenerationFailedException }).message.contains("k1"))
         // Not echoed: ContextChain's "no node n9 in session s1" confirms the contents of a session
         // over a channel that has passed the ownership check and need not confirm anything further.
-        assertFalse(sseErrorFor(taxonomy[7]).message.contains("n9"))
-        assertFalse(sseErrorFor(taxonomy[8]).message.contains("a genuine bug"))
+        assertFalse(sseErrorFor(taxonomy.first { it is IllegalArgumentException }).message.contains("n9"))
+        assertFalse(sseErrorFor(taxonomy.first { it is IllegalStateException }).message.contains("a genuine bug"))
+        // Ktor's own not-found, whose message a route is free to write anything into — Task 1.11
+        // added `ResourceNotFoundException` precisely so that "we authored this" is a property of
+        // the type. The same split has to hold here or the allowlist is only half a policy.
+        assertFalse(sseErrorFor(taxonomy.first { it is NotFoundException }).message.contains("anon:p"))
+        assertEquals(
+            "no topic with slug 'nope'",
+            sseErrorFor(taxonomy.first { it is ResourceNotFoundException }).message,
+        )
         // No quota refusal ever reaches this function: those are decided before the stream opens,
         // so they carry a status code and a Retry-After header instead.
         assertTrue(taxonomy.all { sseErrorFor(it).retryAfter == null })

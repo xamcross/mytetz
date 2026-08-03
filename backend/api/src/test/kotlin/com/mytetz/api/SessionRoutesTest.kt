@@ -80,7 +80,7 @@ class SessionRoutesTest {
             installErrorMapping()
             routing {
                 sessionRoutes(
-                    sessions = stack.sessions,
+                    sessions = { stack.sessions },
                     quota = stack.quota,
                     cookies = TestFixtures.cookieConfig,
                     clientAddresses = ClientAddressConfig(trustedHeader = null),
@@ -420,6 +420,36 @@ class SessionRoutesTest {
         assertNull(stack.explanations.hideOnce, "the key was never looked up a second time")
     }
 
+    @Test
+    fun `a quota re-check that cannot be evaluated leaves the refusal, not a 500`() = app(costCeilingMicros = 1) {
+        val created = createSession()
+        val span = sessionView(created.sessionId).spanOn("behavior of matter")
+        val before = stack.generations
+
+        // The key really is absent, so the first `prepare` misses and the breaker refuses. The
+        // re-check is a second `prepare`, and a `prepare` reads Mongo — so this is what a blip inside
+        // it looks like. The re-check exists to SOFTEN a refusal; letting it throw would turn a clean
+        // 503 into a 500 on a request the cache might have served, which is the failure the whole
+        // branch is trying to avoid arriving through the door meant to fix it.
+        stack.failTheRecheckLookupOf(keyFor(created.sessionId, span))
+
+        val response = explain(created.sessionId, span)
+
+        assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
+        assertEquals("SPEND_LIMIT", response.apiError().code)
+        assertEquals(before, stack.generations, "a failed re-check let the generation through")
+    }
+
+    /** The content key this span will resolve to. `prepare` costs no model call and the plan is dropped. */
+    private suspend fun Scope.keyFor(sessionId: String, span: Span): String =
+        stack.sessions.prepare(
+            sessionId = sessionId,
+            parentNodeId = span.parentNodeId,
+            selection = SpanSelection(span.text, span.start, span.end),
+            verb = Verb.EXPLAIN,
+            requestedVariant = null,
+        ).contentKey
+
     /** Puts the explanation for [span] in the store without going through the route's quota gate. */
     private suspend fun Scope.warmDirectly(sessionId: String, span: Span): String {
         val plan = stack.sessions.prepare(
@@ -486,10 +516,12 @@ class SessionRoutesTest {
         )
     }
 
-    private suspend fun Scope.principalCount(created: SessionView): Int {
-        val owner = assertNotNull(stack.sessions.ownerOf(created.sessionId))
-        return stack.quotaRepository.findCounter(owner)?.explainCount ?: 0
-    }
+    private suspend fun Scope.principalCount(created: SessionView): Int =
+        principalCount(assertNotNull(stack.sessions.ownerOf(created.sessionId)))
+
+    /** By principal, for the one test whose session is gone by the time it asks. */
+    private suspend fun Scope.principalCount(principalId: String): Int =
+        stack.quotaRepository.findCounter(principalId)?.explainCount ?: 0
 
     // ------------------------------------------------------------------ failures inside the stream
 
@@ -511,6 +543,42 @@ class SessionRoutesTest {
         assertFalse(text.contains("event: done"), "a failed generation must not report completion")
         assertFalse(text.contains("the upstream fell over"), "the upstream's own words were echoed")
         assertEquals(1, sessionView(created.sessionId).nodes.size, "a failed generation appended a node")
+    }
+
+    @Test
+    fun `a generation that was paid for is recorded even when the learner's step cannot be written`() = app {
+        val created = createSession()
+        val span = sessionView(created.sessionId).spanOn("behavior of matter")
+        val ledgerBefore = stack.quota.dailySpendMicros()
+        // Captured now: the session is gone by the time the assertions run, so `ownerOf` cannot
+        // answer any more.
+        val owner = assertNotNull(stack.sessions.ownerOf(created.sessionId))
+        val countBefore = principalCount(owner)
+
+        // The session disappears while the model is streaming, so `appendNode` raises — and it does
+        // so INSIDE the flow, after the last emit, which means the outer `collect` throws rather than
+        // returning. By then `insertIfAbsent` has run: the tokens are bought and the explanation is
+        // in the store. The only thing lost is the learner's step.
+        val doomed = created.sessionId
+        stack.llm.afterFirstDelta = { stack.deleteSession(doomed) }
+
+        val text = explain(created.sessionId, span).bodyAsText()
+
+        assertTrue(text.contains("event: error"), "the write failure was swallowed: $text")
+        assertTrue(text.contains("\"code\":\"NOT_FOUND\""), "wrong code for a vanished session: $text")
+        // The half that matters. A recording placed after `collect` is skipped on exactly this path,
+        // and SPEND_UNRECORDED does not fire either, because the function that raises it never runs.
+        // A client that aborts every explain the moment the deltas stop would then generate without
+        // limit against a ledger reading zero: nothing else bounds explains.
+        assertTrue(
+            stack.quota.dailySpendMicros() > ledgerBefore,
+            "a generation was paid for, the step failed to write, and the ledger never heard about it",
+        )
+        assertEquals(
+            countBefore + 1,
+            principalCount(owner),
+            "the attempt did not count against the principal's daily allowance either",
+        )
     }
 
     @Test
@@ -542,7 +610,12 @@ class SessionRoutesTest {
 
         assertEquals(HttpStatusCode.TooManyRequests, refused.status)
         assertEquals("RATE_LIMITED", refused.apiError().code)
-        assertNotNull(refused.apiError().retryAfter)
+        val retryAfter = assertNotNull(refused.apiError().retryAfter)
+        // The header as well as the field, on the same reasoning as the quota refusals two functions
+        // away: proxies, client libraries and crawlers read the header and none of them reads our
+        // JSON. A 429 that says "later" only in a body is a 429 that says nothing to the things that
+        // actually back off.
+        assertEquals(retryAfter.toString(), refused.headers[HttpHeaders.RetryAfter])
     }
 
     @Test
@@ -667,7 +740,7 @@ class SessionRoutesTest {
         assertEquals("delta", eventFor(GraphChunk.Delta("hello")).event)
         assertTrue(eventFor(GraphChunk.Delta("hello")).data!!.contains("hello"))
         assertEquals("done", eventFor(GraphChunk.Done(explanation, spentMicros = 7)).event)
-        assertTrue(eventFor(GraphChunk.Done(explanation)).data!!.contains("\"contentKey\":\"k1\""))
+        assertTrue(eventFor(GraphChunk.Done(explanation, spentMicros = 0)).data!!.contains("\"contentKey\":\"k1\""))
 
         // Not a flag on `done`, and not folded into `delta`: a client that renders deltas and treats
         // the terminal event as "stop the spinner" would silently miss a correction that says the

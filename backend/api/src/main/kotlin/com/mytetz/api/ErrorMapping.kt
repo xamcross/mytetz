@@ -306,6 +306,33 @@ internal fun sseErrorFor(cause: Throwable): ApiError = when (cause) {
         ApiError("NOT_FOUND", "no such session")
     }
 
+    // Ours, so the message is echoed; Ktor's, so it is not. Neither is raisable from inside a stream
+    // today — they are here because `the streaming mapping covers every type the status mapping
+    // registers` requires it, and that test is the mechanism the whole "one file, two functions"
+    // argument rests on. An arm that is currently unreachable is cheaper than a drift detector with
+    // a hole in it.
+    is ResourceNotFoundException -> ApiError("NOT_FOUND", cause.message.orEmpty())
+
+    is NotFoundException -> {
+        log.info("a framework not-found reached the stream mapping: {}", cause.message)
+        ApiError("NOT_FOUND", "not found")
+    }
+
+    is BadRequestException -> {
+        log.info("rejected a malformed request body mid-stream: {}", cause.message)
+        INVALID_REQUEST
+    }
+
+    is ContentConvertException -> {
+        log.info("rejected an unconvertible request body mid-stream: {}", cause.message)
+        INVALID_REQUEST
+    }
+
+    is ContentTransformationException -> {
+        log.info("rejected an untransformable request body mid-stream: {}", cause.message)
+        INVALID_REQUEST
+    }
+
     // -------------------------------------------------- upstream, and our own data
     is GenerationFailedException -> {
         log.warn("generation failed mid-stream", cause)

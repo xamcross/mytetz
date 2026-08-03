@@ -54,7 +54,12 @@ fun Application.module(components: Components = Components()) {
         // the plugin is an empty marker for `Route.sse`, which registers GET only. See the note on
         // `sessionRoutes`.
         sessionRoutes(
-            sessions = components.sessions,
+            // A factory, not the service. `components.sessions` is a lazy that ends at
+            // `AnthropicLlmClient()`, which demands ANTHROPIC_API_KEY in its constructor — reading it
+            // here would build the model client while this module is still being configured, so a
+            // missing key would stop the process booting and take /api/health and topic browsing
+            // with it. See the note on `sessionRoutes` and `Components`' own KDoc.
+            sessions = { components.sessions },
             quota = components.quota,
             cookies = components.cookies,
             clientAddresses = components.clientAddresses,
