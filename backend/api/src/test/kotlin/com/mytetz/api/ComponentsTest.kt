@@ -239,6 +239,11 @@ class ComponentsTest {
         }
 
         assertEquals(HttpStatusCode.OK, client.get("/api/health").status)
+        // Not just the routing path: `bootstrap()` runs in the background and its failures are
+        // swallowed and logged, so a future version of it that touched `sessions` would leave both
+        // assertions above passing while the instance came up with no indexes and no catalogue.
+        // Waiting for readiness is what makes this cover the boot as well as the wiring.
+        awaitReady(client)
         assertEquals(HttpStatusCode.OK, client.get("/api/catalog/topics").status)
     }
 

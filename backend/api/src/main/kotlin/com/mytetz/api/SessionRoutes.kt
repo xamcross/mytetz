@@ -69,7 +69,7 @@ data class SessionView(
  *
  * [cached] is `ExplanationGraph`'s own flag and describes the store as *this* caller found it, before
  * the per-key lock — so it is a hint for the client's "generating…" affordance and nothing else.
- * Nothing on the server side branches on it, and nothing bills on it; see `GraphChunk.Done`.
+ * Nothing on the server side branches on it, and nothing bills on it; see `GraphChunk.Spent`.
  *
  * There is no node id here, and none on [DoneEvent] either. `SessionService.explain` mints the node
  * id inside the flow and does not surface it, and cancellation is specified to drop the node
@@ -159,13 +159,22 @@ const val MAX_SESSION_BODY_BYTES: Long = 4_096
  *
  * ## 3. Spend is recorded once, by the caller that spent it, for what it cost
  *
- * The trigger is `GraphChunk.Done.spentMicros` and nothing else. Neither `plan.cached` nor
+ * The trigger is `GraphChunk.Spent` and nothing else — the chunk `ExplanationGraph` emits the
+ * instant its own model call returns, carrying that caller's own cost.
+ *
+ * **Three other things look like they would do and none of them does.** Neither `plan.cached` nor
  * `Meta(cached = false)` means "this caller spent money": `ExplanationGraph` emits `Meta` before
  * taking the per-key lock, deliberately, so that first-byte latency is not held behind somebody
  * else's generation — which means that in a stampede *every* caller sees `cached = false` and
  * exactly one of them pays. And `Done.explanation.costMicros` is the *document's* cost, i.e. the
- * winner's, so billing it charges every loser for a generation it never made. Both mistakes
- * over-report by the width of the stampede and trip the global breaker early, on money nobody spent.
+ * winner's, so billing it charges every loser for a generation it never made. All three over-report
+ * by the width of the stampede and trip the global breaker early, on money nobody spent.
+ *
+ * **And the trigger has to arrive before the answer does, not with it.** A cost carried on the
+ * terminal chunk is lost whenever the generation is billed and then fails — the validator rejecting
+ * an over-long body, a failed insert, a correction that cannot be sent — and `GENERATION_FAILED`
+ * invites the client to retry, so that loses money on a loop rather than once. `GraphChunk.Spent`
+ * exists for exactly that and its KDoc carries the full argument.
  *
  * ## Ownership is enforced here, because nothing below can
  *
@@ -217,7 +226,14 @@ const val MAX_SESSION_BODY_BYTES: Long = 4_096
  * it. `Components`' KDoc argues at length for the opposite, and `ComponentsTest`'s `the model client
  * is not built unless something needs a model` asserts exactly that touching `components.sessions` is
  * what builds it. A `() -> SessionService` resolved per request keeps that property: a deployment
- * with no key serves the catalogue and fails only the endpoints that actually need a model.
+ * with no key boots, serves the catalogue and answers `/api/health`.
+ *
+ * It does **not** make the session endpoints degrade gracefully, and the difference is worth stating
+ * because the obvious reading of "deferred" is that it does. `Components.sessions` is one lazy over
+ * the whole chain, so resolving it forces the model client even for `GET /api/sessions/{id}`, which
+ * is a pure read that needs no model. On a keyless deployment those endpoints answer 500. Splitting
+ * the session *store* from the session *generator* in `Components` is what would fix that, and it is
+ * a larger change than this one.
  */
 fun Route.sessionRoutes(
     sessions: () -> SessionService,
@@ -255,7 +271,6 @@ fun Route.sessionRoutes(
      */
     post("/api/sessions") {
         if (!call.bodyIsSmallEnough()) return@post
-        val sessions = sessions()
 
         val caller = ClientAddress.of(call, clientAddresses)
         if (!sessionLimiter.tryAcquire(caller)) {
@@ -277,7 +292,11 @@ fun Route.sessionRoutes(
         }
 
         // After the limiter, so a refused request costs no cookie — the same ordering, for the same
-        // reason, as `POST /api/topic-requests`.
+        // reason, as `POST /api/topic-requests`. The session service is resolved here for a second
+        // reason: resolving it forces the lazy model client, so doing it before the limiter would
+        // make a rate-limited request pay for building an Anthropic client, and 500 rather than 429
+        // on a deployment with no key.
+        val sessions = sessions()
         val principal = Principals.resolve(call, cookies)
         val request = call.receive<CreateSessionRequest>()
 
@@ -291,8 +310,12 @@ fun Route.sessionRoutes(
             }
         }
 
-        val created = sessions.create(principal.value, request.topicSlug)
-        quota.recordSpend(principal, created.spentMicros)
+        // Recorded from inside the generation, not from the result: a seed can be billed and then
+        // rejected by the validator, in which case `create` raises and there is no result to read a
+        // cost off. `recordSpend` swallows its own failures, so this cannot fail the request.
+        val created = sessions.create(principal.value, request.topicSlug) { costMicros ->
+            withContext(NonCancellable) { quota.recordSpend(principal, costMicros) }
+        }
 
         call.respond(created.session.toView(mapOf(created.seed.key to created.seed.body)))
     }
@@ -423,12 +446,15 @@ fun Route.sessionRoutes(
  *
  * ## The bound this still leaves, named rather than implied
  *
- * A cancellation that arrives **before** `Done` leaves `spentMicros` at 0 and records nothing, even
- * though the model may demonstrably have been called: `ExplanationGraph.generate` rethrows
- * `CancellationException` before the stream's terminal event delivers `LlmUsage`, so the cost is
- * genuinely unknowable at every layer, not merely unread here. The consequence is that a client
- * which disconnects mid-generation pays nothing into the ledger **and** nothing into its own daily
- * count, which makes `QuotaConfig.dailyExplains` optional for such a client.
+ * A cancellation that arrives **before the model's own stream completes** records nothing, and this
+ * is the one case where that is not a bookkeeping choice: `ExplanationGraph.generate` rethrows
+ * `CancellationException` before `LlmChunk.Done` delivers `LlmUsage`, so no token counts exist
+ * anywhere and the cost is genuinely unknowable at every layer rather than merely unread here.
+ *
+ * The bound that leaves: a client which disconnects mid-generation pays nothing into the ledger and
+ * nothing into its own daily count, which makes `QuotaConfig.dailyExplains` optional for such a
+ * client. **Everything after that instant is recorded** — a generation that is billed and then
+ * rejected, or whose insert fails, or whose correction cannot be sent, all reach `Spent` first.
  *
  * Charging the *count* without the cost was considered and rejected: this layer cannot distinguish
  * "cancelled after the model was called" from "cancelled while being served a cache hit", because
@@ -447,10 +473,19 @@ private suspend fun ServerSSESession.streamExplanation(
     var spentMicros = 0L
     try {
         sessions.explain(plan).collect { chunk ->
-            // Only the caller that actually called the model, and only for what its own call cost.
-            // See property 3 on `sessionRoutes`.
-            if (chunk is GraphChunk.Done) spentMicros = chunk.spentMicros
-            send(eventFor(chunk))
+            // Recorded on arrival and never on completion: `Spent` is emitted before the validator,
+            // the insert and the correction, every one of which can throw with the money already
+            // gone. Assignment first, `send` second — a socket that closes during the send must not
+            // lose a cost this collector has already been handed.
+            //
+            // `+=` rather than `=`, and it is defensive rather than load bearing. One collection of
+            // one plan makes at most one model call, so `ExplanationGraph` emits at most one `Spent`
+            // and the two operators are equivalent today. They stop being equivalent the moment
+            // anything retries or batches inside the graph, and of the two only `+=` is right then;
+            // `=` would silently keep the last cost and discard the rest. Written down so a reader
+            // does not have to guess which case this is.
+            if (chunk is GraphChunk.Spent) spentMicros += chunk.costMicros
+            eventFor(chunk)?.let { send(it) }
         }
     } catch (e: CancellationException) {
         throw e
@@ -462,13 +497,18 @@ private suspend fun ServerSSESession.streamExplanation(
 }
 
 /**
- * One `GraphChunk`, one SSE event.
+ * One `GraphChunk`, one SSE event — or null for the one chunk that is not a wire event at all.
  *
  * Exhaustive on purpose: `GraphChunk` is sealed, so a chunk added later stops this compiling rather
  * than being dropped on the floor. That matters most for `Superseded`, whose whole reason for being
  * a chunk rather than a flag on `Done` is that a client must not be able to miss it.
+ *
+ * `Spent` returns null. It is this server's accounting and no business of the learner's — putting a
+ * price on the wire would tell every client what each answer cost us. Returning null rather than
+ * filtering the chunk upstream keeps the decision inside the exhaustive `when`, where it is visible
+ * and testable, instead of in a predicate somewhere that quietly starts matching something else.
  */
-internal fun eventFor(chunk: GraphChunk): ServerSentEvent = when (chunk) {
+internal fun eventFor(chunk: GraphChunk): ServerSentEvent? = when (chunk) {
     is GraphChunk.Meta -> ServerSentEvent(
         event = "meta",
         data = json.encodeToString(MetaEvent(contentKey = chunk.contentKey, cached = chunk.cached)),
@@ -483,6 +523,8 @@ internal fun eventFor(chunk: GraphChunk): ServerSentEvent = when (chunk) {
         event = "superseded",
         data = json.encodeToString(SupersededEvent(chunk.body)),
     )
+
+    is GraphChunk.Spent -> null
 
     is GraphChunk.Done -> ServerSentEvent(
         event = "done",

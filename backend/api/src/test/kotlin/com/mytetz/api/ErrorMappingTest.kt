@@ -38,6 +38,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
 import kotlin.test.Test
+import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
@@ -375,6 +376,12 @@ class ErrorMappingTest {
      * `sessionRoutes` can actually raise after the first byte has gone out: the model, the
      * validator, and the append that records the learner's step.
      */
+    /**
+     * How many `exception<...>` arms `installErrorMapping` registers, excluding the `Throwable`
+     * catch-all. Hand written on purpose; see the test that reads it.
+     */
+    private val REGISTERED_EXCEPTION_ARMS = 13
+
     private val taxonomy: List<Throwable> = listOf(
         SpanMismatchException("span text does not match the parent body at those offsets"),
         DepthLimitException("a chain of 9 links exceeds the limit of 8"),
@@ -433,10 +440,39 @@ class ErrorMappingTest {
             generateSequence<Class<*>>(cause.javaClass) { it.superclass }.map { it.simpleName }.toList()
         }.toSet()
 
-        assertTrue(
-            registered.isNotEmpty(),
-            "the registration scan found nothing, so this test is asserting on an empty set",
+        // A checked-in count, not merely "not empty". `isNotEmpty` catches a TOTAL parse failure and
+        // nothing else: an unbalanced comment marker, a syntax change, or an arm moved to another
+        // file yields a SUBSET, and a subset makes this test report coverage it never checked. A
+        // count is a hand-written fact, so it fails loudly when the registrations change — which is
+        // exactly when somebody should be looking at this list.
+        assertEquals(
+            REGISTERED_EXCEPTION_ARMS,
+            registered.size,
+            "installErrorMapping's registrations changed; update REGISTERED_EXCEPTION_ARMS and the " +
+                "taxonomy above deliberately rather than letting this test silently narrow: $registered",
         )
+        assertContains(registered, "SessionNotFoundException")
+        assertContains(registered, "CorruptSessionException")
+
+        // The invariant `installErrorMapping`'s KDoc states and nothing enforced: apart from the
+        // `Throwable` catch-all, no registered type is a supertype of another registered type.
+        //
+        // This test needs it. Coverage is matched by hierarchy, because StatusPages routes a
+        // throwable to the closest registered handler up its chain — so without this, a registered
+        // *supertype* would count as covered by a *subtype* fixture, while the arm-for-arm test only
+        // ever exercises the subtype and a bare supertype instance would still fall to INTERNAL.
+        taxonomy.forEach { cause ->
+            val onThisChain = generateSequence<Class<*>>(cause.javaClass) { it.superclass }
+                .map { it.simpleName }
+                .filter { it in registered }
+                .toList()
+            assertTrue(
+                onThisChain.size <= 1,
+                "${cause::class.simpleName} has two registered types in its hierarchy ($onThisChain), " +
+                    "so handler selection now depends on StatusPages' most-specific walk and the " +
+                    "coverage check above can be satisfied without the supertype ever being exercised",
+            )
+        }
         assertEquals(
             emptySet(),
             registered - covered,

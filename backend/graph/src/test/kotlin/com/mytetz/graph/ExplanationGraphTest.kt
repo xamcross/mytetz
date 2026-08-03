@@ -158,10 +158,15 @@ class ExplanationGraphTest {
         val done = chunks.last()
         val stored = repository.findByKey(graph.keyFor(request()))
         assertEquals(
-            GraphChunk.Done(stored!!, spentMicros = stored.costMicros),
+            GraphChunk.Done(stored!!),
             done,
-            "the terminal chunk must be the document that was stored, and must report the model " +
-                "call this caller actually made — a spend ledger has nothing else to read",
+            "the terminal chunk must be the document that was stored",
+        )
+        assertEquals(
+            GraphChunk.Spent(stored.costMicros),
+            chunks[chunks.size - 2],
+            "the model call this caller made must be announced immediately before Done — a spend " +
+                "ledger has nothing else to read",
         )
         assertEquals(1, documentCount(stored.key))
         assertEquals(1, llm.calls.size)
@@ -367,10 +372,9 @@ class ExplanationGraphTest {
         // A quota layer that read `explanation.costMicros` here would charge every hit for the
         // original generation and trip the global breaker on money nobody is spending.
         assertTrue(stored.costMicros > 0, "fixture error: the stored document must carry a cost")
-        assertEquals(
-            0,
-            chunks.filterIsInstance<GraphChunk.Done>().single().spentMicros,
-            "a cache hit spent nothing and must say so",
+        assertTrue(
+            chunks.none { it is GraphChunk.Spent },
+            "a cache hit spent nothing, so it must announce no spend at all",
         )
         assertEquals(1, repository.findByKey(stored.key)?.requestCount, "the hit is still counted as demand")
     }
@@ -515,13 +519,14 @@ class ExplanationGraphTest {
         // the two numbers are only distinguishable on this path: we sampled our own tokens and were
         // handed somebody else's document. Billing `done.explanation.costMicros` here charges this
         // caller for the winner's generation and lets its own vanish from the ledger.
+        val spent = chunks.filterIsInstance<GraphChunk.Spent>().single()
         assertNotEquals(
             rival.costMicros,
-            done.spentMicros,
+            spent.costMicros,
             "fixture error: the rival must cost something different, or this asserts nothing",
         )
         assertEquals(rival.costMicros, done.explanation.costMicros, "the document's cost is the winner's")
-        assertTrue(done.spentMicros > 0, "a caller that called the model must report what it spent")
+        assertTrue(spent.costMicros > 0, "a caller that called the model must report what it spent")
         assertEquals(1, documentCount(key))
         assertEquals(rival, repository.findByKey(key), "the loser's copy must not overwrite the winner's")
         assertEquals(1, probe.calls.get())

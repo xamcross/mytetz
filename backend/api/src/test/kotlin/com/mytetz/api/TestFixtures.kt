@@ -168,13 +168,6 @@ object TestFixtures {
         val generations: Int get() = llm.calls.size
 
         /**
-         * Removes the session document out from under an in-flight request.
-         *
-         * There is no delete path in `SessionRepository` and there should not be; this reaches past
-         * it deliberately, to produce the one state the API layer has to survive — `appendNode`
-         * raising **after** `insertIfAbsent` has already bought and stored an explanation.
-         */
-        /**
          * The first lookup of [key] answers "absent" — which is the truth on this path — and the
          * **second** raises.
          *
@@ -187,6 +180,13 @@ object TestFixtures {
             explanations.failOnce = key
         }
 
+        /**
+         * Removes the session document out from under an in-flight request.
+         *
+         * There is no delete path in `SessionRepository` and there should not be; this reaches past
+         * it deliberately, to produce the one state the API layer has to survive — `appendNode`
+         * raising **after** `insertIfAbsent` has already bought and stored an explanation.
+         */
         suspend fun deleteSession(sessionId: String) {
             database.getCollection<Document>("sessions").deleteOne(Filters.eq("_id", sessionId))
         }

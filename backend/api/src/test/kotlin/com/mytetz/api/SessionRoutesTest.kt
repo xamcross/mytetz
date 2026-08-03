@@ -582,6 +582,55 @@ class SessionRoutesTest {
     }
 
     @Test
+    fun `a generation that is billed and then rejected still reaches the ledger`() = app {
+        val created = createSession()
+        val span = sessionView(created.sessionId).spanOn("behavior of matter")
+        val ledgerBefore = stack.quota.dailySpendMicros()
+        val owner = assertNotNull(stack.sessions.ownerOf(created.sessionId))
+        val countBefore = principalCount(owner)
+
+        // Over `ExplanationValidator`'s 600-character cap. This is not an exotic failure: the cap is
+        // 600 while `GraphConfig.maxOutputTokens` is 4 000, so an over-long generation is a routine
+        // outcome of a prompt regression — and one that ran to max_tokens is the most expensive call
+        // the model can make. Anthropic bills it in full.
+        stack.llm.nextBody = "x".repeat(700)
+
+        val text = explain(created.sessionId, span).bodyAsText()
+
+        assertTrue(text.contains("\"code\":\"GENERATION_FAILED\""), "expected a rejection: $text")
+        // And now the part that makes this Critical rather than untidy. The error tells the client
+        // to try again, the key stays free because nothing was persisted, and a client doing exactly
+        // what it is invited to do will loop — a fresh, fully billed call each time. If the ledger
+        // does not move, `checkGeneration` answers Allowed for ever and there is no bound at all.
+        assertTrue(
+            stack.quota.dailySpendMicros() > ledgerBefore,
+            "a rejected generation was paid for and never billed",
+        )
+        assertEquals(
+            countBefore + 1,
+            principalCount(owner),
+            "a rejected generation did not count against the principal's allowance either",
+        )
+        assertEquals(1, sessionView(created.sessionId).nodes.size, "a rejected generation appended a node")
+    }
+
+    @Test
+    fun `a seed that is billed and then rejected still reaches the ledger`() = app {
+        // The same window on the create path. `SessionService.create` raises before it can return,
+        // so a caller reading the cost off the result records nothing at all.
+        stack.llm.bodyByPromptSubstring.clear()
+        stack.llm.nextBody = "x".repeat(700)
+
+        val response = client.post("/api/sessions") {
+            contentType(ContentType.Application.Json)
+            setBody("""{"topicSlug":"thermodynamics"}""")
+        }
+
+        assertEquals(HttpStatusCode.BadGateway, response.status, "expected a rejection: ${response.bodyAsText()}")
+        assertTrue(stack.quota.dailySpendMicros() > 0, "a rejected seed was paid for and never billed")
+    }
+
+    @Test
     fun `a cancelled stream is not reported as an internal error`() = app {
         val created = createSession()
         val span = sessionView(created.sessionId).spanOn("behavior of matter")
@@ -735,19 +784,23 @@ class SessionRoutesTest {
             inputTokens = 1, outputTokens = 1, costMicros = 7, requestCount = 0, createdAtEpochMillis = 0,
         )
 
-        assertEquals("meta", eventFor(GraphChunk.Meta("k1", cached = true)).event)
-        assertTrue(eventFor(GraphChunk.Meta("k1", cached = true)).data!!.contains("\"cached\":true"))
-        assertEquals("delta", eventFor(GraphChunk.Delta("hello")).event)
-        assertTrue(eventFor(GraphChunk.Delta("hello")).data!!.contains("hello"))
-        assertEquals("done", eventFor(GraphChunk.Done(explanation, spentMicros = 7)).event)
-        assertTrue(eventFor(GraphChunk.Done(explanation, spentMicros = 0)).data!!.contains("\"contentKey\":\"k1\""))
+        assertEquals("meta", eventFor(GraphChunk.Meta("k1", cached = true))?.event)
+        assertTrue(eventFor(GraphChunk.Meta("k1", cached = true))?.data!!.contains("\"cached\":true"))
+        assertEquals("delta", eventFor(GraphChunk.Delta("hello"))?.event)
+        assertTrue(eventFor(GraphChunk.Delta("hello"))?.data!!.contains("hello"))
+        assertEquals("done", eventFor(GraphChunk.Done(explanation))?.event)
+        assertTrue(eventFor(GraphChunk.Done(explanation))?.data!!.contains("\"contentKey\":\"k1\""))
+
+        // Not a wire event. What an answer cost this server is its own accounting, and putting a
+        // price on the stream would publish it to every learner.
+        assertNull(eventFor(GraphChunk.Spent(4_200)), "the spend was put on the wire")
 
         // Not a flag on `done`, and not folded into `delta`: a client that renders deltas and treats
         // the terminal event as "stop the spinner" would silently miss a correction that says the
         // prose it just rendered is not what was stored — and quiz generation reads what was stored.
         val superseded = eventFor(GraphChunk.Superseded("the authoritative text"))
-        assertEquals("superseded", superseded.event)
-        assertTrue(superseded.data!!.contains("the authoritative text"))
+        assertEquals("superseded", superseded?.event)
+        assertTrue(superseded?.data!!.contains("the authoritative text"))
     }
 
     @Test

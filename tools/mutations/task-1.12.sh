@@ -10,7 +10,10 @@
 
 SR=backend/api/src/main/kotlin/com/mytetz/api/SessionRoutes.kt
 EM=backend/api/src/main/kotlin/com/mytetz/api/ErrorMapping.kt
+CO=backend/api/src/main/kotlin/com/mytetz/api/Components.kt
 EG=backend/graph/src/main/kotlin/com/mytetz/graph/ExplanationGraph.kt
+EMT=backend/api/src/test/kotlin/com/mytetz/api/ErrorMappingTest.kt
+CT=backend/api/src/test/kotlin/com/mytetz/api/ComponentsTest.kt
 SS=backend/session/src/main/kotlin/com/mytetz/session/SessionService.kt
 API=:backend:api:test
 GRAPH=:backend:graph:test
@@ -67,25 +70,25 @@ mutate M10-create-gate-does-not-re-read $SR \
 # ------------------------------------------------- property 3: spend is recorded once, correctly
 
 mutate M11-spend-is-billed-from-the-document $SR \
-  "s=s.replace('            if (chunk is GraphChunk.Done) spentMicros = chunk.spentMicros','            if (chunk is GraphChunk.Done) spentMicros = chunk.explanation.costMicros',1)" $API
+  "s=s.replace('            if (chunk is GraphChunk.Spent) spentMicros += chunk.costMicros','            if (chunk is GraphChunk.Done) spentMicros += chunk.explanation.costMicros',1)" $API
 
 mutate M12-spend-is-never-recorded $SR \
   "s=s.replace('        withContext(NonCancellable) { quota.recordSpend(principal, spentMicros) }\n','',1)" $API
 
 mutate M13-seed-spend-is-never-recorded $SR \
-  "s=s.replace('        quota.recordSpend(principal, created.spentMicros)\n','',1)" $API
+  "s=s.replace('            withContext(NonCancellable) { quota.recordSpend(principal, costMicros) }\n','',1)" $API
 
 mutate M14-zero-cost-still-spends-an-allowance $SR \
   "s=s.replace('    if (spentMicros <= 0) return','    if (spentMicros < 0) return',1)" $API
 
 mutate M15-generator-reports-the-winners-cost $EG \
-  "s=s.replace('return GraphChunk.Done(winner, spentMicros = explanation.costMicros)','return GraphChunk.Done(winner, spentMicros = winner.costMicros)',1)" $GRAPH
+  "s=s.replace('        emit(GraphChunk.Spent(costMicros))','        emit(GraphChunk.Spent(repository.findByKey(key)?.costMicros ?: costMicros))',1)" $GRAPH
 
 mutate M16-a-cache-hit-claims-the-documents-cost $EG \
-  "s=s.replace('emit(GraphChunk.Done(stored, spentMicros = 0))','emit(GraphChunk.Done(stored, spentMicros = stored.costMicros))',1)" $GRAPH
+  "s=s.replace('            repository.incrementRequestCount(key)\n            emit(GraphChunk.Delta(stored.body))','            repository.incrementRequestCount(key)\n            emit(GraphChunk.Spent(stored.costMicros))\n            emit(GraphChunk.Delta(stored.body))',1)" $GRAPH
 
 mutate M17-create-reports-no-spend $SS \
-  "s=s.replace('return SessionCreation(session, seed, spentMicros = done.spentMicros)','return SessionCreation(session, seed, spentMicros = 0)',1)" $API
+  "s=s.replace('                is GraphChunk.Spent -> onSpend(chunk.costMicros)','                is GraphChunk.Spent -> Unit',1)" $API
 
 # ------------------------------------------------- ownership
 
@@ -120,7 +123,7 @@ mutate M26-corruption-mid-stream-raises-no-alert $EM \
   "s=s.replace('    is CorruptSessionException -> {\n        logCorruptSession(cause)','    is CorruptSessionException -> {',1)" $API
 
 mutate M27-a-failed-generation-still-reports-done $SR \
-  "s=s.replace('        send(ServerSentEvent(event = \"error\", data = json.encodeToString(sseErrorFor(e))))','        send(eventFor(GraphChunk.Meta(\"\", cached = false)))',1)" $API
+  "s=s.replace('        send(ServerSentEvent(event = \"error\", data = json.encodeToString(sseErrorFor(e))))','        send(ServerSentEvent(event = \"done\", data = \"{}\"))',1)" $API
 
 # ------------------------------------------------- the wire shape
 
@@ -194,3 +197,48 @@ mutate M42-stream-mapping-drops-a-registered-arm $EM \
 # The fixture hook itself, since two tests now depend on it firing exactly once mid-stream.
 mutate M43-mid-stream-hook-never-fires $LC \
   "s=s.replace('            if (index == 0) afterFirstDelta?.invoke()','',1)" $API
+
+# ------------------------------------------------- re-review: the same window, one layer down
+
+# The Critical. NOT a deletion: this MOVES the announcement past the three things that can throw
+# after the tokens are billed — the validator, insertIfAbsent, and the correction emit. Every one of
+# those is a path on which the money is gone and the answer never arrives.
+mutate M44-cost-announced-after-everything-that-can-throw $EG \
+  "s=s.replace('        emit(GraphChunk.Spent(costMicros))\n\n        // The validator','\n        // The validator',1).replace('        return GraphChunk.Done(winner)','        emit(GraphChunk.Spent(costMicros))\n        return GraphChunk.Done(winner)',1)" $GRAPH
+
+# The same shape on the seed path: reading the cost off the return value loses every generation that
+# was billed and then rejected, because on that path there is no return value.
+mutate M45-seed-spend-read-from-the-result-not-the-flow $SS \
+  "s=s.replace('                is GraphChunk.Spent -> onSpend(chunk.costMicros)','                is GraphChunk.Spent -> spentOnSeed = chunk.costMicros',1).replace('        var seed: Explanation? = null','        var seed: Explanation? = null\n        var spentOnSeed = 0L',1).replace('        sessions.insert(session)','        sessions.insert(session)\n        onSpend(spentOnSeed)',1)" $API
+
+# Spend put on the wire. It is this server's accounting, not the learner's.
+mutate M46-spend-leaks-onto-the-wire $SR \
+  "s=s.replace('    is GraphChunk.Spent -> null','    is GraphChunk.Spent -> ServerSentEvent(event = \"spent\", data = chunk.costMicros.toString())',1)" $API
+
+# The same move as M44, run against the API module, because the property it breaks is a money
+# property and the ledger assertions live there. M44 runs :backend:graph:test and so only ever
+# exercises the graph's own contract; this one reaches the test that says the ledger must move even
+# when the generation is rejected. Same edit, different evidence.
+mutate M49-cost-announced-too-late-seen-from-the-ledger $EG \
+  "s=s.replace('        emit(GraphChunk.Spent(costMicros))\n\n        // The validator','\n        // The validator',1).replace('        return GraphChunk.Done(winner)','        emit(GraphChunk.Spent(costMicros))\n        return GraphChunk.Done(winner)',1)" $API
+
+# ------------------------------------------------- the two hardenings, mutated where they can bite
+#
+# The first attempt at these mutated the ASSERTIONS — weakening `assertEquals(REGISTERED_..., n)` to
+# a tautology, and deleting `awaitReady`. Both SURVIVED, and they had to: the harness measures
+# whether tests detect a change in PRODUCTION, and nothing detects a test that has been made weaker.
+# A mutation of test code can only ever survive. Replaced with the production changes each hardening
+# exists to notice.
+
+# A registration added to installErrorMapping with no matching arm in sseErrorFor. This is the drift
+# the one-file-two-functions argument rests on, and the checked-in count is what makes a PARTIAL
+# scan fail loudly instead of quietly reporting coverage it never checked.
+mutate M47-a-registration-drifts-away-from-the-stream-mapping $EM \
+  "s=s.replace('        exception<SpanMismatchException> { call, cause ->','        exception<ArithmeticException> { call, _ -> call.respond(HttpStatusCode.BadRequest, INVALID_REQUEST) }\n        exception<SpanMismatchException> { call, cause ->',1)" $API
+
+# A bootstrap that touches the session service. That forces the lazy model client, so on a keyless
+# deployment bootstrap throws — and the throw is swallowed and logged as BOOTSTRAP_FAILED, leaving
+# an instance serving with no indexes and no catalogue while every status code still reads 200.
+# `awaitReady` in the boot test is the only thing that notices.
+mutate M48-bootstrap-touches-the-session-service $CO \
+  "s=s.replace('        catalog.seedFromResource()','        catalog.seedFromResource()\n        sessions.ownerOf(\"bootstrap-probe\")',1)" $API

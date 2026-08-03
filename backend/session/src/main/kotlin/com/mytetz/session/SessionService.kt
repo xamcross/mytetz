@@ -13,7 +13,6 @@ import com.mytetz.graph.Verb
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.toList
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -43,20 +42,17 @@ class VariantLimitException(message: String) : Exception(message)
 data class SpanSelection(val text: String, val start: Int, val end: Int)
 
 /**
- * What [SessionService.create] produced: the session, its seed explanation, and what the seed's
- * generation cost **this** caller.
+ * What [SessionService.create] produced.
  *
- * A type rather than a `Pair` because of the third field. [spentMicros] is 0 whenever the seed came
- * out of the store, which is the ordinary case — seeds are content addressed per topic, so the whole
- * catalogue is generated at most once per prompt version and model family. It is non-zero only for
- * the caller whose own request paid for the model, and it is the only thing here a spend ledger may
- * be driven from; see [com.mytetz.graph.GraphChunk.Done.spentMicros] for why neither
- * [createWillGenerate] nor `Meta(cached = false)` will do.
+ * There is deliberately **no cost field**. A return value only exists when the call succeeded, and
+ * the seed's generation can be paid for and then fail — the validator rejects an over-long body, or
+ * the insert throws — at which point this object is never constructed and a cost carried on it would
+ * be lost. Spend is delivered through [SessionService.create]'s `onSpend` instead, the instant it is
+ * known. See [com.mytetz.graph.GraphChunk.Spent].
  */
 data class SessionCreation(
     val session: LearningSession,
     val seed: Explanation,
-    val spentMicros: Long,
 )
 
 /**
@@ -170,9 +166,9 @@ class ExplainPlan internal constructor(
  * - **Do not** use `plan.cached` or `Meta(cached = false)` as the trigger for
  *   `QuotaService.recordGeneration`. Neither one means "this caller spent money", and in a stampede
  *   both over-report by the width of the stampede — which trips the breaker early, on spend that
- *   never happened. `Done.spentMicros` is the field that does mean it, and
- *   [SessionCreation.spentMicros] is its counterpart for [create]; both are 0 for a caller that made
- *   no model call, and both are this caller's own cost rather than the stored document's.
+ *   never happened. `GraphChunk.Spent` is the chunk that does mean it — emitted only by the caller
+ *   that called the model, carrying that caller's own cost, and emitted *before* anything that could
+ *   fail afterwards. [create] delivers the same thing through its `onSpend` callback.
  *
  * ## Authorisation is the caller's, and this class does none of it
  *
@@ -206,6 +202,14 @@ class SessionService(
     /**
      * Starts a session on [topicSlug] and returns it with its seed explanation.
      *
+     * [onSpend] is called with what this caller's own model call cost, if it made one, **while the
+     * generation is still in flight** — before the session document is written and before anything
+     * below can raise. That ordering is the contract, not an implementation detail: a seed can be
+     * generated, billed, and then rejected by the validator, and a caller that read the cost off the
+     * return value would never see it. It is a callback rather than a field for exactly that reason,
+     * and it takes a `Long` rather than anything from `:backend:quota`, which this module must not
+     * depend on and does not.
+     *
      * Refuses an unknown slug **and a topic that is not published**, both as
      * [IllegalArgumentException] and deliberately with the same type: `CatalogService.findBySlug`
      * does not filter on status (`CatalogServiceTest` pins that, so that an admin lookup can see a
@@ -224,14 +228,27 @@ class SessionService(
      * this slice can do that anyway — the explanations are already immutable and undeletable.
      * Recorded as a decision rather than left as an omission.
      */
-    suspend fun create(principalId: String, topicSlug: String): SessionCreation {
+    suspend fun create(
+        principalId: String,
+        topicSlug: String,
+        onSpend: suspend (Long) -> Unit = {},
+    ): SessionCreation {
         val topic = requirePublishedTopic(topicSlug)
 
-        val done = graph.getOrGenerate(seedRequest(topic))
-            .toList()
-            .filterIsInstance<GraphChunk.Done>()
-            .single()
-        val seed = done.explanation
+        var seed: Explanation? = null
+        graph.getOrGenerate(seedRequest(topic)).collect { chunk ->
+            when (chunk) {
+                // The instant the money is known, and before anything below can fail. A caller that
+                // recorded spend from the return value instead would lose every generation that was
+                // billed and then rejected — see the note on `onSpend`.
+                is GraphChunk.Spent -> onSpend(chunk.costMicros)
+                is GraphChunk.Done -> seed = chunk.explanation
+                is GraphChunk.Meta, is GraphChunk.Delta, is GraphChunk.Superseded -> Unit
+            }
+        }
+
+        val seedExplanation = seed
+            ?: throw IllegalStateException("graph produced no Done chunk for the seed of ${topic.slug}")
 
         val now = clock()
         val rootId = idFactory()
@@ -245,7 +262,7 @@ class SessionService(
                 SessionNode(
                     nodeId = rootId,
                     parentNodeId = null,
-                    explanationKey = seed.key,
+                    explanationKey = seedExplanation.key,
                     span = "",
                     verb = Verb.SEED,
                     variant = 0,
@@ -257,7 +274,7 @@ class SessionService(
             lastActiveAtEpochMillis = now,
         )
         sessions.insert(session)
-        return SessionCreation(session, seed, spentMicros = done.spentMicros)
+        return SessionCreation(session, seedExplanation)
     }
 
     /**

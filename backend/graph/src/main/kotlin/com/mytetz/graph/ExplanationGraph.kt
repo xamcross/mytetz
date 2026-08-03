@@ -43,12 +43,18 @@ data class GraphRequest(
 /**
  * The wire shape of one answer: what it is, then the text as it arrives, then the document.
  *
- * There are exactly two sequences, and a consumer must handle both:
+ * There are three sequences, and a consumer must handle all of them:
  * ```
- * Meta → Delta* → Done                 a hit, or a generation that kept its key
- * Meta → Delta* → Superseded → Done    a generation that lost its key to another instance
+ * Meta → Delta* → Done                          a hit: nothing was spent
+ * Meta → Delta* → Spent → Done                  a generation that kept its key
+ * Meta → Delta* → Spent → Superseded → Done     a generation that lost its key to another instance
  * ```
- * The second is rare and never happens inside a single process; see [GraphChunk.Superseded].
+ * The third is rare and never happens inside a single process; see [GraphChunk.Superseded].
+ *
+ * **And one that has no terminal chunk at all**, which is the reason [Spent] exists:
+ * ```
+ * Meta → Delta* → Spent → (raises)              a generation that was paid for and then failed
+ * ```
  */
 sealed interface GraphChunk {
     data class Meta(val contentKey: String, val cached: Boolean) : GraphChunk
@@ -80,39 +86,60 @@ sealed interface GraphChunk {
     data class Superseded(val body: String) : GraphChunk
 
     /**
-     * The authoritative document — always the winner's, whether or not this caller generated it —
-     * and, separately, what **this** caller's own model call cost.
+     * **This caller's own model call has completed and cost [costMicros].** The money is gone; the
+     * answer may or may not arrive.
      *
-     * ## Why the cost is not read off [explanation]
+     * ## Why this is a chunk of its own and not a field on [Done]
+     *
+     * Because it has to survive the answer failing. Everything between the model returning and
+     * [Done] being emitted can throw, and each of those throws happens *after* the tokens are
+     * billed:
+     *
+     * - **the validator rejects the body.** Not an edge case: `ExplanationValidator` caps an
+     *   explanation at 600 characters while `GraphConfig.maxOutputTokens` is 4 000, so an over-long
+     *   generation is a routine outcome — and one that ran to `max_tokens` is by definition the
+     *   most expensive call the model can make;
+     * - **`insertIfAbsent` throws**, on any driver fault;
+     * - **`emit(Superseded)` throws**, because the learner's socket closed.
+     *
+     * A cost carried on the terminal chunk is discarded on all three, and the *retry loop* is what
+     * makes that serious rather than untidy. Identity is content addressed, so a failure here is
+     * safely retryable by design: the key stays free, and `GENERATION_FAILED` tells the client in as
+     * many words to try again. A client doing exactly what the system invites therefore loops — a
+     * fresh, fully billed model call each time, against a ledger that never moves and a
+     * `QuotaService.checkGeneration` that answers `Allowed` for ever. A prompt regression is enough
+     * to reach it; no adversary required.
+     *
+     * So the cost leaves this function at the first instant it is known, before anything that can
+     * fail, and a consumer records it on arrival rather than on completion.
+     *
+     * ## Why the cost is not read off [Done.explanation]
      *
      * `Explanation.costMicros` is a property of the *document*, and the document belongs to whoever
      * generated it. Three callers can be handed the same document having spent three different
      * amounts:
      *
-     * - a **cache hit**, before or under the per-key lock, spent nothing;
+     * - a **cache hit**, before or under the per-key lock, spent nothing and gets no [Spent] at all;
      * - the caller that **generated and kept the key** spent exactly `explanation.costMicros`;
      * - a caller that **generated and lost** `insertIfAbsent` to another instance spent its own
      *   tokens and is handed somebody else's document, whose cost is not the money it burned.
      *
-     * So an API layer billing `Done.explanation.costMicros` over-reports by the width of a stampede
-     * — every loser records a generation it never made — and mis-reports the cross-instance race in
-     * both directions. [spentMicros] is the only field here that answers "did *I* spend, and how
-     * much", and it is the only one a spend ledger may be driven from. Zero means this caller made
-     * no model call, which is the common case — and it is written out at both cache sites rather than
-     * defaulted, for the reason below.
+     * An API layer billing `Done.explanation.costMicros` therefore over-reports by the width of a
+     * stampede — every loser records a generation it never made — and mis-reports the cross-instance
+     * race in both directions. This chunk is the only thing here that answers "did *I* spend, and how
+     * much", and it is the only thing a spend ledger may be driven from. `Meta(cached = false)` is
+     * not a substitute and neither is any flag computed before the lock; see [getOrGenerate] and
+     * `SessionService`'s class KDoc.
      *
-     * `Meta(cached = false)` is not a substitute and neither is any flag computed before the lock;
-     * see [ExplanationGraph.getOrGenerate] and `SessionService`'s class KDoc.
-     *
-     * **There is deliberately no default.** A default of 0 is the right value at both cache sites and
-     * the wrong one everywhere else, and the two failures are not symmetric: over-reporting is
-     * noticed within a day, because the breaker trips early and the site visibly stops generating,
-     * whereas under-reporting is invisible until the invoice arrives. A future path that constructs
-     * this chunk after calling a model would compile with a default, report nothing, and the breaker
-     * would never see the money. Requiring the argument turns that into a compile error, for the same
-     * reason `SessionRoutes.eventFor` is written to be exhaustive rather than to have an else branch.
+     * **Its absence means nothing was spent**, which is why it is emitted rather than defaulted: a
+     * consumer that forgets to handle it bills nobody, and the two failures are not symmetric.
+     * Over-reporting is noticed within a day, because the breaker trips early and the site visibly
+     * stops generating; under-reporting is invisible until the invoice arrives.
      */
-    data class Done(val explanation: Explanation, val spentMicros: Long) : GraphChunk
+    data class Spent(val costMicros: Long) : GraphChunk
+
+    /** The authoritative document — always the winner's, whether or not this caller generated it. */
+    data class Done(val explanation: Explanation) : GraphChunk
 }
 
 /**
@@ -173,7 +200,7 @@ class ExplanationGraph(
             emit(GraphChunk.Meta(key, cached = true))
             repository.incrementRequestCount(key)
             emit(GraphChunk.Delta(stored.body))
-            emit(GraphChunk.Done(stored, spentMicros = 0))
+            emit(GraphChunk.Done(stored))
             return@flow
         }
 
@@ -192,7 +219,7 @@ class ExplanationGraph(
                 if (stored != null) {
                     repository.incrementRequestCount(key)
                     emit(GraphChunk.Delta(stored.body))
-                    emit(GraphChunk.Done(stored, spentMicros = 0))
+                    emit(GraphChunk.Done(stored))
                 } else {
                     // `generate` builds the terminal chunk itself, because it is the only place
                     // that knows what THIS caller's model call cost. See GraphChunk.Done.
@@ -241,6 +268,13 @@ class ExplanationGraph(
         }
     }
 
+    /**
+     * Calls the model, announces what it cost, and returns the terminal chunk.
+     *
+     * The announcement is not the return value, and that separation is the whole point: see
+     * [GraphChunk.Spent]. This function can raise after the money is spent, on three ordinary paths,
+     * and the cost has already left by then.
+     */
     private suspend fun FlowCollector<GraphChunk>.generate(
         request: GraphRequest,
         key: String,
@@ -305,6 +339,17 @@ class ExplanationGraph(
             throw GenerationFailedException("upstream generation failed for $key", e)
         }
 
+        // The model has answered and the tokens are billed. Everything below this line can throw —
+        // the validator on a 601-character body, `insertIfAbsent` on a driver fault, `emit` on a
+        // closed socket — and every one of those throws happens with the money already gone. So the
+        // cost leaves here FIRST, before any of it, and a consumer records it on arrival rather than
+        // on completion. See GraphChunk.Spent, which exists for this and nothing else.
+        //
+        // Deliberately outside the try/catch above: a downstream failure raised by this emit belongs
+        // to the caller and must propagate unchanged, not become a GenerationFailedException.
+        val costMicros = Pricing.costMicros(llm.modelId, usage)
+        emit(GraphChunk.Spent(costMicros))
+
         // The validator is an allowlist: a missing or unrecognised stop reason lands here too, not
         // in Valid. Nothing is persisted on rejection, so the key stays free and a retry is clean.
         val validated = when (val result = validator.validate(raw.toString(), stopReason)) {
@@ -330,11 +375,14 @@ class ExplanationGraph(
             modelId = llm.modelId,
             inputTokens = usage.inputTokens,
             outputTokens = usage.outputTokens,
-            // This document is the ledger the daily spend breaker will read. The counts come from
-            // the stream's own terminal event and nowhere else: a generation persisted at zero cost
+            // What this document cost the caller that produced it. The counts come from the
+            // stream's own terminal event and nowhere else: a generation persisted at zero cost
             // would quietly weaken the only protection against a runaway bill. A stream that never
             // delivered that event has no stop reason either, so it is rejected above.
-            costMicros = Pricing.costMicros(llm.modelId, usage),
+            //
+            // Note this is the *document's* cost and not a billing signal — a later cache hit reads
+            // it and spends nothing. GraphChunk.Spent is the billing signal.
+            costMicros = costMicros,
             // The caller that generated is not a repeat request; only hits increment demand, which
             // is what keeps a cache hit from double-counting anything but interest.
             requestCount = 0,
@@ -352,9 +400,6 @@ class ExplanationGraph(
             emit(GraphChunk.Superseded(winner.body))
         }
 
-        // `explanation.costMicros`, not `winner.costMicros`. We paid for the tokens we sampled,
-        // whether or not the document we paid for is the one that was kept — and on the losing side
-        // of a cross-instance race those two numbers are different. See GraphChunk.Done.
-        return GraphChunk.Done(winner, spentMicros = explanation.costMicros)
+        return GraphChunk.Done(winner)
     }
 }
