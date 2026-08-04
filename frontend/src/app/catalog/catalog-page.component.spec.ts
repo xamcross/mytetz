@@ -138,7 +138,7 @@ describe('CatalogPageComponent', () => {
 
   it('creates a session and navigates on selection', async () => {
     const router = TestBed.inject(Router);
-    const navigate = vi.spyOn(router, 'navigate');
+    const navigate = vi.spyOn(router, 'navigate').mockResolvedValue(true);
     const fixture = TestBed.createComponent(CatalogPageComponent);
     fixture.detectChanges();
     http.expectOne('/api/catalog/topics').flush([quantumPhysics]);
@@ -156,6 +156,7 @@ describe('CatalogPageComponent', () => {
   });
 
   it('shows a starting indicator and disables every topic button while a session is being created', async () => {
+    vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
     const fixture = TestBed.createComponent(CatalogPageComponent);
     fixture.detectChanges();
     http.expectOne('/api/catalog/topics').flush([quantumPhysics, microbiology]);
@@ -180,11 +181,17 @@ describe('CatalogPageComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    expect(quantumButton.disabled).toBe(false);
-    expect(microButton.disabled).toBe(false);
+    // Critical fix (post-review): buttons stay disabled once navigation has *succeeded*, not
+    // just while it's pending. The component is about to be torn down by the route change, so
+    // there is nothing left to re-enable for — and re-enabling here is exactly what let a click
+    // land in the gap between "session created" and "route actually swapped" and fire a second,
+    // paid createSession. See the next test for that gap pinned directly.
+    expect(quantumButton.disabled).toBe(true);
+    expect(microButton.disabled).toBe(true);
   });
 
   it('ignores a second click while a session creation is already pending', async () => {
+    vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
     const fixture = TestBed.createComponent(CatalogPageComponent);
     fixture.detectChanges();
     http.expectOne('/api/catalog/topics').flush([quantumPhysics]);
@@ -202,6 +209,90 @@ describe('CatalogPageComponent', () => {
     // pending request — that failure IS the assertion that the guard works.
     http.expectOne('/api/sessions').flush(sessionFixture());
     await fixture.whenStable();
+  });
+
+  it('does not start a second session for a click landing after the response but before navigation settles', async () => {
+    // This is the window the post-review Critical fix closes: `createSession` has already
+    // resolved (the session exists, a slot has been spent) but `router.navigate()` — standing in
+    // for, e.g., a slow fetch of Task 1.16's lazy reader chunk — has not resolved yet. A click in
+    // that exact gap must not fire a second `POST /api/sessions`.
+    let resolveNavigate!: (value: boolean) => void;
+    const pendingNavigate = new Promise<boolean>((resolve) => {
+      resolveNavigate = resolve;
+    });
+    vi.spyOn(TestBed.inject(Router), 'navigate').mockReturnValue(pendingNavigate);
+
+    const fixture = TestBed.createComponent(CatalogPageComponent);
+    fixture.detectChanges();
+    http.expectOne('/api/catalog/topics').flush([quantumPhysics]);
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const button = fixture.nativeElement.querySelector(
+      'button[data-slug="quantum-physics"]',
+    ) as HTMLButtonElement;
+    button.click();
+
+    http.expectOne('/api/sessions').flush(sessionFixture());
+    // Let the createSession promise's continuation run — including the synchronous call into
+    // router.navigate() — without waiting on navigate's own still-unresolved promise.
+    await Promise.resolve();
+    await Promise.resolve();
+    fixture.detectChanges();
+
+    // The session exists and navigate() has been called but is still pending. A click here must
+    // be a no-op: if it weren't, it would have issued a second, unflushed POST /api/sessions,
+    // and http.verify() below would fail on it.
+    button.click();
+    http.verify();
+
+    resolveNavigate(true);
+    await fixture.whenStable();
+  });
+
+  it('surfaces a message and a working retry when navigation to the new session fails', async () => {
+    // A rejected navigate() is what a real NavigationError looks like (confirmed by reading
+    // @angular/router's own NavigationTransitions source) — e.g. a failed fetch of Task 1.16's
+    // lazy reader chunk. The session already exists server-side by this point, so silently doing
+    // nothing here would look exactly like the click never registered, except a slot (and
+    // possibly a model call) was already spent.
+    const navigate = vi
+      .spyOn(TestBed.inject(Router), 'navigate')
+      .mockRejectedValueOnce(new Error('failed to load chunk reader-page-component'));
+    const fixture = TestBed.createComponent(CatalogPageComponent);
+    fixture.detectChanges();
+    http.expectOne('/api/catalog/topics').flush([quantumPhysics]);
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const button = fixture.nativeElement.querySelector(
+      'button[data-slug="quantum-physics"]',
+    ) as HTMLButtonElement;
+    button.click();
+    http.expectOne('/api/sessions').flush(sessionFixture());
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const text = fixture.nativeElement.textContent as string;
+    expect(text).toContain('Your session was created, but the reader could not load.');
+    // The learner is not stuck: the topic button re-enables (this failure genuinely has
+    // something to recover from), and a dedicated retry action is offered.
+    expect(button.disabled).toBe(false);
+
+    const retry = fixture.nativeElement.querySelector(
+      'button.banner__retry-button',
+    ) as HTMLButtonElement;
+    expect(retry).toBeTruthy();
+
+    // Retrying must re-navigate to the session that already exists, never re-run createSession —
+    // doing the latter would spend a second slot on a topic the learner already has a session
+    // for. http.verify() below fails if any unexpected /api/sessions request appeared.
+    navigate.mockResolvedValueOnce(true);
+    retry.click();
+    await fixture.whenStable();
+
+    expect(navigate).toHaveBeenLastCalledWith(['/learn', 's1']);
+    http.verify();
   });
 
   it('shows the retry wait for a 429 RATE_LIMITED refusal (Task 1.11 session limiter)', async () => {
@@ -253,6 +344,44 @@ describe('CatalogPageComponent', () => {
     // wait time should be shown for the latter, since the server gave none.
     expect(text).not.toContain('Try again in');
   });
+
+  // QUOTA_EXCEEDED's retryAfter ranges across the whole day (1–86400s, per Task 1.8's quota
+  // window), unlike RATE_LIMITED's fixed 3600 — so the singular/plural and unit-rollover
+  // boundaries in formatRetryAfter are all reachable in production, not just theoretical. Each
+  // case below is a value on one side of a rollover (seconds→minutes at 60, minutes→hours at 60
+  // minutes) plus the exact boundary itself.
+  it.each([
+    [59, '59 seconds'],
+    [60, '1 minute'],
+    [61, '2 minutes'],
+    [3599, '1 hour'],
+    [3601, '2 hours'],
+  ])(
+    'formats a %i-second QUOTA_EXCEEDED retryAfter as "Try again in %s."',
+    async (retryAfterSeconds, expectedDuration) => {
+      const fixture = TestBed.createComponent(CatalogPageComponent);
+      fixture.detectChanges();
+      http.expectOne('/api/catalog/topics').flush([quantumPhysics]);
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      fixture.nativeElement.querySelector('button[data-slug="quantum-physics"]').click();
+      http.expectOne('/api/sessions').flush(
+        {
+          code: 'QUOTA_EXCEEDED',
+          message: "you have used today's allowance of new explanations",
+          retryAfter: retryAfterSeconds,
+        },
+        { status: 429, statusText: 'Too Many Requests' },
+      );
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      expect(fixture.nativeElement.textContent as string).toContain(
+        `Try again in ${expectedDuration}.`,
+      );
+    },
+  );
 
   it('re-enables selection after a refusal, so the learner can pick a different topic', async () => {
     const fixture = TestBed.createComponent(CatalogPageComponent);

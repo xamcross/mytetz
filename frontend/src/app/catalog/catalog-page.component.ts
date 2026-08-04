@@ -2,7 +2,7 @@ import { Component, OnInit, computed, inject, signal } from '@angular/core';
 import { HttpErrorResponse } from '@angular/common/http';
 import { Router } from '@angular/router';
 import { ApiService } from '../core/api.service';
-import { TopicSummary } from '../core/models';
+import { SessionView, TopicSummary } from '../core/models';
 
 /**
  * The product's entry point: `/`. Lists the curated catalogue and, on selection, creates a
@@ -39,6 +39,11 @@ import { TopicSummary } from '../core/models';
           {{ err.message }}
           @if (err.retryLabel) {
             <span class="banner__retry">{{ err.retryLabel }}</span>
+          }
+          @if (err.reopenSessionId; as sessionId) {
+            <button type="button" class="banner__retry-button" (click)="reopen(sessionId)">
+              Try again
+            </button>
           }
         </p>
       }
@@ -241,35 +246,87 @@ export class CatalogPageComponent implements OnInit {
   }
 
   async open(topic: TopicSummary): Promise<void> {
-    // A second click while one request is already in flight does nothing — see `pendingSlug`'s
-    // doc comment for why this matters more here than it would on a cheap endpoint.
+    // A second click while one request is already in flight does nothing. This guard also
+    // covers the gap between the session existing and navigation completing — see
+    // `goToSession`'s doc comment for why `pendingSlug` is deliberately *not* cleared once
+    // `createSession` succeeds.
     if (this.pendingSlug() !== null) return;
 
     this.sessionError.set(null);
     this.pendingSlug.set(topic.slug);
+
+    let session: SessionView;
     try {
-      const session = await this.api.createSession(topic.slug);
-      // Not awaited: by this point the session already exists server-side, so there is nothing
-      // product-meaningful left for this page to do while navigation resolves, and no useful
-      // "navigation failed" state to show — the learner would just be staring at a catalogue
-      // that already spent one of their session slots. `.catch()` only exists so a genuine
-      // router misconfiguration becomes a logged error instead of an unhandled rejection.
-      this.router
-        .navigate(['/learn', session.sessionId])
-        .catch((navigationError: unknown) =>
-          console.error(`failed to navigate to /learn/${session.sessionId}`, navigationError),
-        );
+      session = await this.api.createSession(topic.slug);
     } catch (err) {
       this.sessionError.set(describeSessionError(err));
-    } finally {
       this.pendingSlug.set(null);
+      return;
     }
+
+    await this.goToSession(session.sessionId);
+  }
+
+  /** Retries navigating to an already-created session — never re-runs `createSession`, which
+   * would spend a second session slot (and, on a first-ever topic, a second model call) on a
+   * topic the learner already has an open session for. */
+  reopen(sessionId: string): void {
+    this.sessionError.set(null);
+    void this.goToSession(sessionId);
+  }
+
+  /**
+   * Navigates to an already-created session, awaited rather than fired-and-forgotten.
+   *
+   * Two defects from the first cut of this method, found in review, share one fix:
+   *
+   * 1. **`pendingSlug` must not be cleared on the success path.** The previous version reset it
+   *    in a `finally` that ran immediately after firing (not awaiting) `navigate()`. That
+   *    re-enabled every topic button while the route change — including, on a first visit, the
+   *    lazy fetch of Task 1.16's reader chunk — was still in flight. A click landing in that
+   *    window called `open()` again and created a *second*, paid session on a topic the learner
+   *    already had one open for: exactly the failure Problem E's guard exists to prevent, just
+   *    moved one step later. The fix is to never clear `pendingSlug` here on success at all: this
+   *    component is about to be torn down by the navigation that just succeeded, so there is
+   *    nothing left to re-enable for, and clearing it early is what reopens the window.
+   * 2. **A navigation failure must not be silently swallowed.** The previous version only logged
+   *    it (`.catch(() => console.error(...))`), which — from the learner's side — looks
+   *    identical to the click never having registered, except that a session slot (and possibly
+   *    a real model call, on a first-ever topic) has already been spent. `router.navigate()` can
+   *    fail two ways, confirmed by reading `@angular/router`'s own `Recognizer`/`Navigation
+   *    Transitions` source rather than assuming: a genuine `NavigationError` (e.g. a failed fetch
+   *    of the lazy chunk) rejects the returned promise, while a cancellation (no matching route,
+   *    a guard) resolves it to `false`. Both are handled and both are surfaced through
+   *    `sessionError`, with a `reopen()` action rather than routing the learner back through
+   *    `open()` — see that method's own comment for why.
+   */
+  private async goToSession(sessionId: string): Promise<void> {
+    try {
+      const navigated = await this.router.navigate(['/learn', sessionId]);
+      if (!navigated) this.failNavigation(sessionId);
+      // Otherwise: success, and `pendingSlug` is deliberately left set — see the doc comment
+      // above.
+    } catch {
+      this.failNavigation(sessionId);
+    }
+  }
+
+  private failNavigation(sessionId: string): void {
+    this.sessionError.set({
+      message: 'Your session was created, but the reader could not load.',
+      retryLabel: null,
+      reopenSessionId: sessionId,
+    });
+    this.pendingSlug.set(null);
   }
 }
 
 interface SessionErrorView {
   message: string;
   retryLabel: string | null;
+  /** Set only for a navigation failure after a session already exists — see `reopen()`. Absent
+   * for a `createSession` failure, where there is no session yet to reopen. */
+  reopenSessionId?: string;
 }
 
 /**
