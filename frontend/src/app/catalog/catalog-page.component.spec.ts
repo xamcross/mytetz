@@ -220,7 +220,7 @@ describe('CatalogPageComponent', () => {
     const pendingNavigate = new Promise<boolean>((resolve) => {
       resolveNavigate = resolve;
     });
-    vi.spyOn(TestBed.inject(Router), 'navigate').mockReturnValue(pendingNavigate);
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockReturnValue(pendingNavigate);
 
     const fixture = TestBed.createComponent(CatalogPageComponent);
     fixture.detectChanges();
@@ -239,6 +239,11 @@ describe('CatalogPageComponent', () => {
     await Promise.resolve();
     await Promise.resolve();
     fixture.detectChanges();
+
+    // Made explicit rather than inferred from tick count (post-review hardening): navigate() has
+    // genuinely been reached and is the thing still pending, not just "some number of microtasks
+    // happened to elapse."
+    expect(navigate).toHaveBeenCalledWith(['/learn', 's1']);
 
     // The session exists and navigate() has been called but is still pending. A click here must
     // be a no-op: if it weren't, it would have issued a second, unflushed POST /api/sessions,
@@ -275,9 +280,12 @@ describe('CatalogPageComponent', () => {
 
     const text = fixture.nativeElement.textContent as string;
     expect(text).toContain('Your session was created, but the reader could not load.');
-    // The learner is not stuck: the topic button re-enables (this failure genuinely has
-    // something to recover from), and a dedicated retry action is offered.
-    expect(button.disabled).toBe(false);
+    // The topic tile stays disabled (post-review fix — see `tilesLocked`): a session for it
+    // already exists, so re-enabling it would let a click run createSession a *second* time for
+    // the same topic. The `title` attribute states why, since a disabled control with no stated
+    // reason is its own small "nothing happened".
+    expect(button.disabled).toBe(true);
+    expect(button.title).toContain('Resolve the message above');
 
     const retry = fixture.nativeElement.querySelector(
       'button.banner__retry-button',
@@ -292,6 +300,47 @@ describe('CatalogPageComponent', () => {
     await fixture.whenStable();
 
     expect(navigate).toHaveBeenLastCalledWith(['/learn', 's1']);
+    http.verify();
+  });
+
+  it('keeps every tile locked after a navigation failure, so clicking the original topic does not start a second session', async () => {
+    // The narrower race found in the second review round: failNavigation clears pendingSlug so
+    // the "Try again" action becomes reachable, but a session for the clicked topic already
+    // exists at that point. If clearing pendingSlug alone re-enabled the tiles, clicking the
+    // *original* topic again — not just some other one — would spend a second slot on a session
+    // that already exists.
+    vi.spyOn(TestBed.inject(Router), 'navigate').mockRejectedValueOnce(
+      new Error('failed to load chunk reader-page-component'),
+    );
+    const fixture = TestBed.createComponent(CatalogPageComponent);
+    fixture.detectChanges();
+    http.expectOne('/api/catalog/topics').flush([quantumPhysics, microbiology]);
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const quantumButton = fixture.nativeElement.querySelector(
+      'button[data-slug="quantum-physics"]',
+    ) as HTMLButtonElement;
+    const microButton = fixture.nativeElement.querySelector(
+      'button[data-slug="microbiology"]',
+    ) as HTMLButtonElement;
+
+    quantumButton.click();
+    http.expectOne('/api/sessions').flush(sessionFixture());
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    // Both tiles are locked, not just the one that failed — a fresh, unrelated topic offers no
+    // way around the stuck reopen either.
+    expect(quantumButton.disabled).toBe(true);
+    expect(microButton.disabled).toBe(true);
+
+    quantumButton.click();
+    microButton.click();
+
+    // Pinned as the brief for this fix round asked: if either click had gone through, it would
+    // have issued a second, unflushed POST /api/sessions here, and http.verify() would fail on
+    // it before we ever get to resolve the pending reopen below.
     http.verify();
   });
 

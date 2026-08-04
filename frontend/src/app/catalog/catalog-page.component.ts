@@ -56,14 +56,15 @@ import { SessionView, TopicSummary } from '../core/models';
           <button type="button" class="banner__retry-button" (click)="loadTopics()">Retry</button>
         </p>
       } @else {
-        <ul class="topics" [attr.aria-busy]="pendingSlug() !== null">
+        <ul class="topics" [attr.aria-busy]="tilesLocked()">
           @for (t of filteredTopics(); track t.slug) {
             <li class="topic">
               <button
                 type="button"
                 class="topic__button"
                 [attr.data-slug]="t.slug"
-                [disabled]="pendingSlug() !== null"
+                [disabled]="tilesLocked()"
+                [attr.title]="tileLockedReason()"
                 (click)="open(t)"
               >
                 <span class="topic__category">{{ t.category }}</span>
@@ -203,6 +204,33 @@ export class CatalogPageComponent implements OnInit {
   readonly sessionError = signal<SessionErrorView | null>(null);
 
   /**
+   * Whether every topic tile should be disabled — not just the one that was clicked.
+   *
+   * `pendingSlug() !== null` covers the in-flight `createSession` window (see `pendingSlug`'s own
+   * doc comment). The second condition closes a narrower gap found in review: `failNavigation`
+   * clears `pendingSlug` so the "Try again" retry action becomes reachable, but a session for
+   * `sessionError().reopenSessionId` already exists at that point — if only `pendingSlug` gated
+   * the tiles, clearing it would re-enable *every* tile, including the one whose session already
+   * exists. Clicking that tile would run `createSession` a second time for a topic that already
+   * has one, spending another of the learner's 30 hourly slots (and, on a first-ever topic,
+   * another model call) for no reason. So a tile stays locked for as long as a reopen is being
+   * offered too, not only while a request is actually in flight.
+   */
+  readonly tilesLocked = computed(
+    () => this.pendingSlug() !== null || this.sessionError()?.reopenSessionId !== undefined,
+  );
+
+  /** Why the tiles are locked, for a `title` tooltip — a disabled control with no stated reason
+   * is its own small "nothing happened". `null` renders no `title` attribute at all. */
+  readonly tileLockedReason = computed(() => {
+    if (this.pendingSlug() !== null) return 'Starting your session…';
+    if (this.sessionError()?.reopenSessionId !== undefined) {
+      return 'Resolve the message above before starting another topic.';
+    }
+    return null;
+  });
+
+  /**
    * Client-side, deliberately. `?q=` exists on the backend (Task 1.3), but Slice 1's whole
    * catalogue is ~20 hand-curated topics (design spec §14) — already fetched in full by
    * `loadTopics()` below — so filtering it locally is instant and issues zero additional
@@ -267,11 +295,21 @@ export class CatalogPageComponent implements OnInit {
     await this.goToSession(session.sessionId);
   }
 
-  /** Retries navigating to an already-created session — never re-runs `createSession`, which
+  /**
+   * Retries navigating to an already-created session — never re-runs `createSession`, which
    * would spend a second session slot (and, on a first-ever topic, a second model call) on a
-   * topic the learner already has an open session for. */
+   * topic the learner already has an open session for.
+   *
+   * Deliberately does **not** clear `sessionError` before retrying. `tilesLocked` keys off
+   * `sessionError().reopenSessionId` to keep every tile disabled while a reopen is outstanding —
+   * clearing it here first would unlock every tile for the width of this retry's own `navigate()`
+   * call, reopening the exact gap `tilesLocked` exists to close, just moved into the retry path
+   * instead of the original one. If this retry fails again, `failNavigation` overwrites
+   * `sessionError` with the same shape, which is a harmless no-op from the tiles' perspective; if
+   * it succeeds, the component is torn down by the navigation and nothing reads `sessionError`
+   * again.
+   */
   reopen(sessionId: string): void {
-    this.sessionError.set(null);
     void this.goToSession(sessionId);
   }
 
@@ -313,10 +351,15 @@ export class CatalogPageComponent implements OnInit {
 
   private failNavigation(sessionId: string): void {
     this.sessionError.set({
-      message: 'Your session was created, but the reader could not load.',
+      message:
+        'Your session was created, but the reader could not load. Other topics are locked ' +
+        'until this is resolved.',
       retryLabel: null,
       reopenSessionId: sessionId,
     });
+    // `pendingSlug` is cleared so the "Try again" action below becomes reachable — but
+    // `tilesLocked` keeps every tile disabled regardless, via `sessionError().reopenSessionId`.
+    // See `tilesLocked`'s doc comment for why clearing this alone would not be safe.
     this.pendingSlug.set(null);
   }
 }
