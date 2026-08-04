@@ -1,3 +1,5 @@
+import { ExplainRequest } from './models';
+
 export interface SseEvent {
   event: string;
   data: unknown;
@@ -179,12 +181,20 @@ interface ErrorEventData {
  * error` over an HTTP 200 with the same body shape. Wiring both into the same thrown type means a
  * caller writes one `catch` around one `for await`, branching on `.code` if it cares which
  * failure this was, rather than a `catch` for one shape and an in-loop check for the other.
+ *
+ * The two shapes *are* still distinguishable, and the distinction matters: a pre-stream refusal
+ * throws before the caller's loop body has run even once, so nothing has been rendered — while a
+ * mid-stream error throws only after one or more prior events already drove a UI update, so
+ * something has. Recovering that from control flow (did the loop body ever execute?) works, but
+ * makes every caller re-derive it. [partiallyStreamed] states it directly instead: `true` iff
+ * `explainStream` yielded at least one event before this error was thrown.
  */
 export class ExplainStreamError extends Error {
   constructor(
     readonly code: string,
     message: string,
     readonly retryAfter: number | null = null,
+    readonly partiallyStreamed: boolean = false,
   ) {
     super(message);
     this.name = 'ExplainStreamError';
@@ -202,7 +212,7 @@ export class ExplainStreamError extends Error {
  */
 export async function* explainStream(
   sessionId: string,
-  body: unknown,
+  body: ExplainRequest,
   signal?: AbortSignal,
 ): AsyncGenerator<ExplainEvent> {
   const response = await fetch(`/api/sessions/${sessionId}/explain`, {
@@ -216,28 +226,42 @@ export async function* explainStream(
     signal,
   });
 
+  // Nothing has been yielded yet on either branch below, so both errors are unconditionally
+  // "nothing rendered" — stated explicitly at each call site rather than via a default parameter,
+  // so a future third call site added here can't silently inherit the wrong value.
   if (!response.ok) throw await explainErrorFrom(response);
-  if (!response.body) throw new ExplainStreamError('NO_BODY', 'the explain response had no body');
+  if (!response.body) {
+    throw new ExplainStreamError('NO_BODY', 'the explain response had no body', null, false);
+  }
 
+  let yieldedAny = false;
   for await (const event of parseSseStream(response.body)) {
-    if (event.event === 'error') throw explainErrorFromData(event.data);
+    if (event.event === 'error') throw explainErrorFromData(event.data, yieldedAny);
+    yieldedAny = true;
+    // Unchecked: `event` came back from the generic parser typed as `{event: string, data:
+    // unknown}`, and this cast is where that widens into the app's own closed union. Trusting it
+    // without validation is deliberate — this is a first-party backend and every other JSON
+    // response in this app (ApiService's `http.get<T>()`) is trusted the same way without runtime
+    // validation — but it is the trust boundary: an unexpected event name or a malformed payload
+    // here would masquerade as a well-typed `ExplainEvent` rather than fail loudly.
     yield event as ExplainEvent;
   }
 }
 
 async function explainErrorFrom(response: Response): Promise<ExplainStreamError> {
   try {
-    return explainErrorFromData(await response.json());
+    return explainErrorFromData(await response.json(), false);
   } catch {
-    return new ExplainStreamError('HTTP_ERROR', `explain failed: ${response.status}`);
+    return new ExplainStreamError('HTTP_ERROR', `explain failed: ${response.status}`, null, false);
   }
 }
 
-function explainErrorFromData(data: unknown): ExplainStreamError {
+function explainErrorFromData(data: unknown, partiallyStreamed: boolean): ExplainStreamError {
   const body = data as Partial<ErrorEventData> | null;
   return new ExplainStreamError(
     body?.code ?? 'UNKNOWN',
     body?.message ?? 'explain failed',
     body?.retryAfter ?? null,
+    partiallyStreamed,
   );
 }

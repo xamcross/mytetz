@@ -32,3 +32,14 @@ export interface SpanPayload {
   start: number;
   end: number;
 }
+
+/** The body of `POST /api/sessions/{id}/explain` — mirrors the backend's `ExplainRequest`
+ * exactly, so a caller assembling the wrong shape fails to compile rather than failing at
+ * request time. `verb` has a server-side default of `EXPLAIN` but is required here: a client
+ * that means to rely on the default should say so, not omit the field by accident. */
+export interface ExplainRequest {
+  parentNodeId: string;
+  span: SpanPayload;
+  verb: Verb;
+  variant?: number;
+}

@@ -1,4 +1,5 @@
 import { parseSseStream, explainStream, ExplainStreamError } from './sse.client';
+import { ExplainRequest } from './models';
 
 function streamOf(...chunks: string[]): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
@@ -127,10 +128,26 @@ describe('parseSseStream', () => {
 
     expect(events[0].event).toBe('message');
   });
+
+  // -- multi-line `data:` — spec-correct per the JSDoc, previously untested -----------------
+
+  it('joins multiple data: lines with a newline, per the SSE spec', async () => {
+    // Not JSON, deliberately: this wire never sends multi-line data today, so there is no real
+    // payload to reach for, and a JSON one would risk hiding a join-order bug behind
+    // JSON.parse's own leniency the way Problem F's test avoids for the same reason.
+    const events = await collect(streamOf('event: x\ndata: a\ndata: b\n\n'));
+
+    expect(events[0]).toEqual({ event: 'x', data: 'a\nb' });
+  });
 });
 
 describe('explainStream', () => {
   const originalFetch = globalThis.fetch;
+  const requestBody: ExplainRequest = {
+    parentNodeId: 'root',
+    span: { text: 'x', start: 0, end: 1 },
+    verb: 'EXPLAIN',
+  };
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
@@ -155,9 +172,8 @@ describe('explainStream', () => {
       );
     globalThis.fetch = fetchSpy as unknown as typeof fetch;
 
-    const body = { parentNodeId: 'root', span: { text: 'x', start: 0, end: 1 }, verb: 'EXPLAIN' };
     const events = [];
-    for await (const event of explainStream('sess-1', body)) events.push(event);
+    for await (const event of explainStream('sess-1', requestBody)) events.push(event);
 
     expect(events.map((e) => e.event)).toEqual(['meta', 'done']);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
@@ -169,7 +185,7 @@ describe('explainStream', () => {
       'content-type': 'application/json',
       accept: 'text/event-stream',
     });
-    expect(JSON.parse(init.body)).toEqual(body);
+    expect(JSON.parse(init.body)).toEqual(requestBody);
   });
 
   it('passes an AbortSignal through to fetch when given one', async () => {
@@ -177,14 +193,14 @@ describe('explainStream', () => {
     globalThis.fetch = fetchSpy as unknown as typeof fetch;
     const controller = new AbortController();
 
-    for await (const _ of explainStream('sess-1', {}, controller.signal)) {
+    for await (const _ of explainStream('sess-1', requestBody, controller.signal)) {
       // drain
     }
 
     expect(fetchSpy.mock.calls[0][1].signal).toBe(controller.signal);
   });
 
-  it('throws an ExplainStreamError built from the JSON body when the response is not ok', async () => {
+  it('throws an ExplainStreamError built from the JSON body when the response is not ok, unmarked as partial', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue(
       new Response(
         JSON.stringify({ code: 'QUOTA_EXCEEDED', message: 'no more today', retryAfter: 3600 }),
@@ -195,24 +211,25 @@ describe('explainStream', () => {
     ) as unknown as typeof fetch;
 
     await expect(async () => {
-      for await (const _ of explainStream('sess-1', {})) {
+      for await (const _ of explainStream('sess-1', requestBody)) {
         // should not yield before throwing
       }
     }).rejects.toMatchObject({
       code: 'QUOTA_EXCEEDED',
       message: 'no more today',
       retryAfter: 3600,
+      partiallyStreamed: false,
     });
   });
 
-  it('falls back to a generic error when a non-ok response body is not parseable JSON', async () => {
+  it('falls back to a generic, non-partial error when a non-ok response body is not parseable JSON', async () => {
     globalThis.fetch = vi
       .fn()
       .mockResolvedValue(new Response('not json', { status: 503 })) as unknown as typeof fetch;
 
     let caught: unknown;
     try {
-      for await (const _ of explainStream('sess-1', {})) {
+      for await (const _ of explainStream('sess-1', requestBody)) {
         // no-op
       }
     } catch (e) {
@@ -221,9 +238,10 @@ describe('explainStream', () => {
 
     expect(caught).toBeInstanceOf(ExplainStreamError);
     expect((caught as ExplainStreamError).code).toBe('HTTP_ERROR');
+    expect((caught as ExplainStreamError).partiallyStreamed).toBe(false);
   });
 
-  it('throws for a mid-stream error event and does not yield it, keeping events seen so far', async () => {
+  it('marks a mid-stream error as partial when prior events were already yielded', async () => {
     globalThis.fetch = vi
       .fn()
       .mockResolvedValue(
@@ -237,7 +255,7 @@ describe('explainStream', () => {
     const seen: unknown[] = [];
     let caught: unknown;
     try {
-      for await (const event of explainStream('sess-1', {})) seen.push(event);
+      for await (const event of explainStream('sess-1', requestBody)) seen.push(event);
     } catch (e) {
       caught = e;
     }
@@ -245,6 +263,32 @@ describe('explainStream', () => {
     expect(seen.map((e) => (e as { event: string }).event)).toEqual(['meta', 'delta']);
     expect(caught).toBeInstanceOf(ExplainStreamError);
     expect((caught as ExplainStreamError).code).toBe('GENERATION_FAILED');
+    expect((caught as ExplainStreamError).partiallyStreamed).toBe(true);
+  });
+
+  it('does not mark an error as partial when it is the very first event on the wire', async () => {
+    // The discriminating case: a 200-status stream is not, by itself, evidence that anything
+    // was rendered. Hard-coding `partiallyStreamed: true` for every mid-stream error would pass
+    // the test above and fail silently here.
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValue(
+        sseResponse(
+          'event: error\ndata: {"code":"GENERATION_FAILED","message":"failed immediately"}\n\n',
+        ),
+      ) as unknown as typeof fetch;
+
+    const seen: unknown[] = [];
+    let caught: unknown;
+    try {
+      for await (const event of explainStream('sess-1', requestBody)) seen.push(event);
+    } catch (e) {
+      caught = e;
+    }
+
+    expect(seen).toEqual([]);
+    expect(caught).toBeInstanceOf(ExplainStreamError);
+    expect((caught as ExplainStreamError).partiallyStreamed).toBe(false);
   });
 
   it('passes a superseded event through as a typed event rather than treating it as an error', async () => {
@@ -259,7 +303,7 @@ describe('explainStream', () => {
       ) as unknown as typeof fetch;
 
     const events = [];
-    for await (const event of explainStream('sess-1', {})) events.push(event);
+    for await (const event of explainStream('sess-1', requestBody)) events.push(event);
 
     expect(events.map((e) => e.event)).toEqual(['meta', 'superseded', 'done']);
     const superseded = events[1] as { event: string; data: { body: string } };
