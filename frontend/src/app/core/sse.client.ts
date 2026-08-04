@@ -193,8 +193,13 @@ export class ExplainStreamError extends Error {
   constructor(
     readonly code: string,
     message: string,
-    readonly retryAfter: number | null = null,
-    readonly partiallyStreamed: boolean = false,
+    // Neither trailing field defaults: every construction site in this file already supplies
+    // both explicitly, and a default here is exactly the failure mode Task 1.12 ruled out twice
+    // over (Done.spentMicros, then onSpend) — a future call site that forgets the argument would
+    // silently claim "no retry wait" or, worse, "nothing was rendered", rather than fail to
+    // compile.
+    readonly retryAfter: number | null,
+    readonly partiallyStreamed: boolean,
   ) {
     super(message);
     this.name = 'ExplainStreamError';
