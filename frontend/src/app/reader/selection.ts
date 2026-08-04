@@ -39,6 +39,11 @@ export function selectionToSpan(root: HTMLElement, range: Range): SpanPayload | 
   const start = offsetOf(root, range.startContainer, range.startOffset);
   const end = offsetOf(root, range.endContainer, range.endOffset);
 
+  // No `start >= end` guard: a live Range's start can never be positioned after its end (the
+  // invariant `setStart`/`setEnd` both maintain), so `start <= end` always holds here. The one case
+  // where they'd come out numerically *equal* despite `range` being non-collapsed — boundary points
+  // that differ in container/offset but have no text between them, e.g. either side of an empty
+  // element — falls out of the `text.length === 0` check below instead, since `raw` is then `''`.
   const full = root.textContent ?? '';
   const raw = full.slice(start, end);
 
@@ -63,10 +68,23 @@ export function selectionToSpan(root: HTMLElement, range: Range): SpanPayload | 
  * https://dom.spec.whatwg.org/#concept-descendant-text-content) and `Range.prototype.toString()`
  * ("stringification behavior", https://dom.spec.whatwg.org/#dom-range-stringifier) identically: both
  * are the concatenation of `Text` node `.data`, in tree order, with nothing else contributing and no
- * separators inserted. So the length of a range from `(root, 0)` to `(container, offset)` *is* the
- * character offset into `root.textContent`, by construction, for any boundary point `setEnd`
- * accepts — including one where `container` is an element with no text-node descendants at all (an
- * empty `<em></em>` sitting between two words, say).
+ * separators inserted. That identity alone isn't enough to justify this, though — it says the two
+ * concatenation *rules* match, not that this call sums the right *subset* of text. What scopes the
+ * sum to `root`'s own subtree is anchoring the marker's start at `(root, 0)`: per the spec's
+ * definition of "contained" (https://dom.spec.whatwg.org/#contained), a node only contributes to a
+ * range's stringification if its root equals the range's root *and* it falls entirely between the
+ * range's start and end in tree order. With start fixed at `(root, 0)`, nothing positioned before
+ * `root`'s own content — an ancestor's earlier text, an earlier sibling of `root` elsewhere in the
+ * document — can be "after start", so none of it is contained; and nothing positioned after
+ * `(container, offset)` — `root`'s own later content, `root`'s later siblings — is "before end"
+ * either. What's left, by elimination, is exactly the prefix of `root.textContent` up to the
+ * boundary point, which is what makes the length of this range equal the offset this function
+ * returns.
+ *
+ * So the length of a range from `(root, 0)` to `(container, offset)` *is* the character offset into
+ * `root.textContent`, by construction, for any boundary point `setEnd` accepts — including one where
+ * `container` is an element with no text-node descendants at all (an empty `<em></em>` sitting
+ * between two words, say).
  *
  * A `TreeWalker(root, SHOW_TEXT)` walk cannot locate that boundary point without a second,
  * error-prone fallback pass: finding no text node inside the target, it has nothing to stop it

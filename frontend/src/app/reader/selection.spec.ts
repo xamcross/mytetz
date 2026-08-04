@@ -164,6 +164,45 @@ describe('selectionToSpan', () => {
     expect(span!.text).toBe('be');
     expect(el.textContent!.slice(span!.start, span!.end)).toBe('be');
   });
+
+  // Symmetric case: the test above anchors an empty-element container at the *start* of the
+  // range; nothing covered one as the *end*. `offsetOf` treats both containers identically, so the
+  // underlying argument (Range's own boundary-point placement, not a text-node search) covers this
+  // either way — this pins that rather than leaving it assumed.
+  it('resolves a selection ending on an element with no text-node descendants', () => {
+    const el = elementWith('alpha<em></em>beta');
+    const alphaText = el.firstChild!;
+    const em = el.querySelector('em')!;
+
+    const range = document.createRange();
+    range.setStart(alphaText, 2);
+    range.setEnd(em, 0);
+
+    const span = selectionToSpan(el, range);
+
+    expect(span!.text).toBe('pha');
+    expect(el.textContent!.slice(span!.start, span!.end)).toBe('pha');
+  });
+
+  // Review item 2: the server's exact-match gate compares against a Kotlin `String`, which — like
+  // JavaScript's — indexes by UTF-16 code unit, not Unicode code point. A character outside the
+  // Basic Multilingual Plane (this microscope emoji, U+1F52C) is a surrogate *pair*: two code units
+  // for one visible character. `String.prototype.length`/`.slice()` already count and index in code
+  // units, so nothing in this file has to special-case it — but nothing pinned that the two
+  // languages' models actually agree, and this is the one place in the project where a correctness
+  // property spans both. If it ever broke, the symptom would be SPAN_MISMATCH on exactly the
+  // explanations containing an emoji or similar. Indices verified by hand against the fixture
+  // string's UTF-16 code units before writing this test's expectations.
+  it('round-trips offsets across an astral-plane character (surrogate pair)', () => {
+    const el = elementWith('before 🔬 after');
+
+    const span = selectionToSpan(el, rangeOver(el.firstChild!, 7, 9));
+
+    expect(span!.text).toBe('🔬');
+    expect(span!.start).toBe(7);
+    expect(span!.end).toBe(9);
+    expect(el.textContent!.slice(span!.start, span!.end)).toBe('🔬');
+  });
 });
 
 // Problem A: `selectionToSpan`'s offsets are only correct if `root.textContent` is
