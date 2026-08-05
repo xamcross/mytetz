@@ -73,6 +73,14 @@ test('pick a topic, highlight a phrase, and watch the explanation stream in prog
   // unaccounted-for request. The same technique acceptance criterion 5 asks for against the live
   // deployment's `requestCount`, applied here to this test's own claim about the request shape.
   expect(sessionGetCount()).toBe(2);
+
+  // Acceptance criterion 4's other half: "crumbs navigate". `goTo()` is a pure client-side focus
+  // change — no network request — so this also re-proves that clicking the root crumb does not
+  // silently re-issue a GET (`sessionGetCount` stays at 2).
+  await page.locator('.crumb').getByRole('button', { name: 'Quantum Physics' }).click();
+  await expect(page.getByTestId('focus-body')).toHaveText(SEED);
+  await expect(page.locator('.crumb')).toHaveCount(1);
+  expect(sessionGetCount()).toBe(2);
 });
 
 test('replaces streamed text with the winning body on a superseded race, not the local draft', async ({
