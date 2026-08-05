@@ -700,10 +700,9 @@ class SessionRoutesTest {
             explain(created.sessionId, view.spanOn("fundamental physical theory")).bodyAsText()
             val afterAllowance = stack.generations
 
-            // A span neither of the two above reached, so this request WOULD have generated. That is
-            // what makes the generation count below the assertion the name promises: the refusal has
-            // to happen before the model call, not instead of a cache hit that would have cost
-            // nothing anyway.
+            // The two requests above did not reach this span, so this request generates. That fact
+            // gives the generation count below its meaning. The refusal must come before the model
+            // call. A refusal in place of a free cache hit proves nothing.
             val refused = explain(created.sessionId, view.spanOn("scale of atoms"))
 
             assertEquals(HttpStatusCode.TooManyRequests, refused.status)
@@ -719,11 +718,11 @@ class SessionRoutesTest {
         app(explainsPerCaller = 1) {
             val created = createSession()
             val span = sessionView(created.sessionId).spanOn("behavior of matter")
-            // The shape the limiter exists for. A stream that breaks after the announcement emits no
-            // `GraphChunk.Spent`, so neither the ledger nor the principal's counter moves, and
-            // `appendNode` never runs so the node budget is not consumed either — every other bound
-            // on this endpoint reads zero. The allowance is spent at the door, before any of that,
-            // which is the only reason the loop terminates.
+            // The shape that the limiter exists for. A stream that breaks emits no
+            // `GraphChunk.Spent`. The ledger does not move, and the principal counter does not move.
+            // `appendNode` does not run, so the node budget stays full. Every other bound on this
+            // endpoint reads zero. The limiter spends the allowance at the door, before all of that.
+            // This is the only reason that the retry loop stops.
             stack.llm.failWith = RuntimeException("the upstream fell over")
 
             val ledgerBefore = stack.quota.dailySpendMicros()
@@ -753,11 +752,10 @@ class SessionRoutesTest {
         val span = sessionView(created.sessionId).spanOn("behavior of matter")
         explain(created.sessionId, span).bodyAsText()
 
-        // A client with no cookie jar is a fresh principal per request, so `dailyExplains` — which is
-        // keyed on the principal — bounds it not at all. The address limiter is keyed on
-        // `ClientAddress` for exactly that reason, and it must therefore be consulted BEFORE the
-        // ownership check: a stranger pounding a session id it does not own would otherwise cost
-        // nothing to refuse and could be repeated without limit.
+        // A client with no cookie jar gets a new principal for each request. `dailyExplains` keys on
+        // the principal, so it does not bound this client. The limiter keys on `ClientAddress` for
+        // that reason. The limiter must therefore run before the ownership check. A stranger that
+        // sends a session id it does not own must also spend an allowance.
         val stranger = cookieless.post("/api/sessions/${created.sessionId}/explain") {
             contentType(ContentType.Application.Json)
             setBody(explainBody(span))
@@ -773,9 +771,9 @@ class SessionRoutesTest {
         explain(created.sessionId, sessionView(created.sessionId).spanOn("behavior of matter")).bodyAsText()
         val before = stack.generations
 
-        // An id that does not exist. The answer is the 429 and not the 404, which pins the ordering:
-        // the allowance is spent at the door, so nothing below it — not a Mongo read, not `prepare`,
-        // and above all not the model — runs for a caller that is over its limit.
+        // An id that does not exist. The answer is the 429 and not the 404. This pins the order: the
+        // limiter spends the allowance at the door. Nothing below it runs for a caller that is over
+        // the limit. This includes the Mongo read, `prepare` and the model call.
         val refused = client.post("/api/sessions/00000000-0000-0000-0000-000000000000/explain") {
             contentType(ContentType.Application.Json)
             setBody("""{"parentNodeId":"nope","span":{"text":"x","start":0,"end":1},"verb":"EXPLAIN"}""")
