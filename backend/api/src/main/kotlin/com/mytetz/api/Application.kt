@@ -19,9 +19,35 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import java.util.concurrent.atomic.AtomicBoolean
 
+const val PORT_ENV: String = "PORT"
+
+/** The port `fly.toml` and `.env.example` both name. */
+const val DEFAULT_PORT: Int = 8080
+
+/**
+ * The port to bind, from the environment.
+ *
+ * A missing, unparseable or out-of-range value falls back to [DEFAULT_PORT] rather than throwing.
+ * That is the rule `GraphConfig.resolveMaxOutputTokens`, `QuotaConfig.resolveDailyExplains`,
+ * `SessionLimits.resolveMaxDepth` and `MongoConfig.resolveServerSelectionTimeoutMillis` all state:
+ * a typo in a deployment variable must not stop the server. `PORT` was the one config that broke
+ * it, because `"8O80".toInt()` throws and takes the boot with it.
+ *
+ * The range is the range of a TCP port. Zero is excluded on purpose: `embeddedServer` reads 0 as
+ * "bind any free port", so a `PORT` of 0 would start a server on a port that fly's proxy does not
+ * forward to, and the machine would look healthy while it served nobody.
+ *
+ * **`MYTETZ_COOKIE_SIGNING_KEY` does not follow this rule, and it must not be made to.**
+ * `PrincipalCookieConfig` fails closed, and its KDoc holds the argument: the premise of the rule
+ * above is that the default is the safe value, and there is no safe default signing key. A server
+ * that refuses to start is an incident an operator sees in the first thirty seconds. A server that
+ * started with a known key is an incident nobody sees at all.
+ */
+internal fun resolvePort(raw: String?): Int =
+    raw?.trim()?.toIntOrNull()?.takeIf { it in 1..65535 } ?: DEFAULT_PORT
+
 fun main() {
-    val port = System.getenv("PORT")?.toInt() ?: 8080
-    embeddedServer(Netty, port = port, host = "0.0.0.0") { module() }
+    embeddedServer(Netty, port = resolvePort(System.getenv(PORT_ENV)), host = "0.0.0.0") { module() }
         .start(wait = true)
 }
 
