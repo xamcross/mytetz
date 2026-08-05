@@ -57,8 +57,10 @@ Non-sensitive values are checked in, in `fly.toml`'s `[env]` block:
   MYTETZ_CLIENT_IP_HEADER = "CF-Connecting-IP"
 ```
 
-`MYTETZ_CLIENT_IP_HEADER` decides which header the topic-request rate limiter
-keys on, and it is a security setting rather than a tuning one. Because
+`MYTETZ_CLIENT_IP_HEADER` decides which header the rate limiters key on, and it
+is a security setting rather than a tuning one. Three routes use them:
+`POST /api/topic-requests`, `POST /api/sessions` and
+`POST /api/sessions/{id}/explain`. Because
 Cloudflare proxies this app (section 5), `CF-Connecting-IP` is the visitor's
 real address and gives one bucket per visitor. The trade: anyone reaching
 `mytetz.fly.dev` **directly**, bypassing Cloudflare, can set that header to
@@ -72,6 +74,13 @@ sharing an edge would share a single daily allowance. Set this to `none` only
 for a deployment behind no proxy you control: with no trusted header the key
 falls back to the socket peer, which on a proxied deployment is one address for
 every visitor.
+
+The server accepts only a name it knows: `Fly-Client-IP`, `CF-Connecting-IP`,
+`True-Client-IP`, `X-Forwarded-For`, `X-Real-IP`, or `none`. Case does not
+matter. Any other value is rejected with a WARN line, and `Fly-Client-IP`
+applies. A misspelt name is never present on a request, so without this check
+every visitor would share one bucket. The resolved source is logged once at
+startup — grep the boot log for `rate limiting keys on`.
 
 Sensitive values are fly secrets. `fly secrets list` shows names and digests only.
 
@@ -94,6 +103,66 @@ next `fly deploy` instead.
 `.env.example` lists every variable the app knows about, with placeholders.
 Copy it to `.env` for local work. **`.env` is git-ignored and must never be
 committed**, and `.dockerignore` excludes it so it cannot reach a layer either.
+
+### 2.1 The spend ceiling — read this before an incident, not during one
+
+`MYTETZ_GLOBAL_DAILY_COST_CEILING_USD_MICROS` is **the only spend brake in the
+system**. Lower it to slow a runaway bill.
+
+- The unit is USD micro-dollars. The default is `50000000`, which is **$50**.
+- It is a ceiling on the cost of all generation in one **UTC day**, across every
+  visitor. The ledger is one document in Mongo, so a restart does not reset it.
+- At the ceiling the server refuses **new** generation and keeps serving every
+  explanation it already holds. The site stays usable and stops costing money.
+  A refused request answers `503` with the code `SPEND_LIMIT`.
+
+To lower it mid-incident:
+
+```bash
+fly secrets set MYTETZ_GLOBAL_DAILY_COST_CEILING_USD_MICROS=5000000 --app mytetz   # $5
+```
+
+The machine restarts, and the new ceiling applies against the same day's ledger.
+A ceiling below the day's recorded spend stops new generation at once.
+
+**What the ceiling does not cover.** A request that ends before the model's own
+stream completes records no cost, because no token count exists for it. Two
+things do that: a learner who navigates away mid-answer, and a provider stream
+that ends without a stop reason, which includes the 120-second client timeout.
+`EXPLAINS_PER_CALLER` in `SessionRoutes.kt` — 30 explanations per address per
+ten minutes — is what bounds that path. Its counters live in the process, so
+they reset whenever the machine cold-starts.
+
+### 2.2 Every variable the backend reads
+
+19 variables, and each one is listed here and in `.env.example`. Everything
+except the three secrets above has a default in code, and the defaults are the
+values shown. **An unset, unparseable or non-positive value falls back to its
+default rather than stopping the server**, because these are read while the
+process is starting and a typo must not take the site down.
+`MYTETZ_COOKIE_SIGNING_KEY` is the one deliberate exception: it fails closed.
+
+| Variable | Default | What it decides |
+| --- | --- | --- |
+| `PORT` | `8080` | the port Ktor binds. `fly.toml` sets it. |
+| `MONGODB_URI` | none — required | the Atlas connection string. The app refuses to boot without it. |
+| `MONGODB_DATABASE` | `mytetz` | the database name. |
+| `MYTETZ_MONGO_SERVER_SELECTION_TIMEOUT_MILLIS` | `3000` | how long the driver looks for a reachable server. Keep it under fly's 5s health-check timeout. |
+| `ANTHROPIC_API_KEY` | none | the model key. The catalogue serves without it; explanation generation does not. |
+| `MYTETZ_MODEL_ID` | `claude-opus-5` | the model that generates explanations. It also selects the price table. |
+| `MYTETZ_MODEL_FAMILY` | `claude-opus-5` | part of every content key. Changing it regenerates the whole store. |
+| `MYTETZ_LLM_TIMEOUT_SECONDS` | `120` | the ceiling on one streamed request, and on how long a stalled read holds a thread. |
+| `MYTETZ_MAX_OUTPUT_TOKENS` | `4000` | caps thinking and response text together. |
+| `MYTETZ_EFFORT` | `LOW` | thinking effort: `LOW`, `MEDIUM` or `HIGH`. An unknown name falls back to the cheapest. |
+| `MYTETZ_MAX_DEPTH` | `12` | how deep one learner may drill in a session. |
+| `MYTETZ_MAX_SESSION_NODES` | `200` | how many steps one session may hold. |
+| `MYTETZ_MAX_VARIANTS` | `3` | how many times one span may be regenerated. |
+| `MYTETZ_DAILY_EXPLAINS` | `20` | explanations per principal per day. A visitor that drops its cookie gets a new principal, so this bounds a polite client only. |
+| `MYTETZ_GLOBAL_DAILY_COST_CEILING_USD_MICROS` | `50000000` ($50) | **the only spend brake.** See section 2.1. |
+| `MYTETZ_MAX_TOPIC_REQUESTS` | `5000` | how many distinct rows `POST /api/topic-requests` may store. It then recycles the least-wanted row. |
+| `MYTETZ_COOKIE_SIGNING_KEY` | none — required | signs the principal cookie. The app refuses to boot without it. 32 characters minimum. |
+| `MYTETZ_COOKIE_SECURE` | `true` | whether the cookie carries `Secure`. Only an explicit `false`, `0`, `no` or `off` turns it off. |
+| `MYTETZ_CLIENT_IP_HEADER` | `Fly-Client-IP` | which header the rate limiters key on. See section 2. |
 
 ### Atlas network access — known constraint
 
@@ -136,7 +205,7 @@ docker run --rm -p 8080:8080 \
   -e MONGODB_URI="$(grep '^MONGODB_URI=' .env | cut -d= -f2- | tr -d '\r\n')" \
   -e MONGODB_DATABASE=mytetz \
   mytetz:local
-curl -s localhost:8080/api/health    # {"status":"ok","mongo":true}
+curl -s localhost:8080/api/health    # {"status":"ok","mongo":true,"ready":true}
 ```
 
 ---
@@ -219,7 +288,7 @@ dashboard / API and are not automated by this repo.**
 Verify end to end:
 
 ```bash
-curl -s https://mytetz.com/api/health         # {"status":"ok","mongo":true}
+curl -s https://mytetz.com/api/health         # {"status":"ok","mongo":true,"ready":true}
 curl -sI https://mytetz.com/api/health | grep -i cf-cache-status   # expect BYPASS/DYNAMIC
 ```
 
@@ -234,9 +303,9 @@ not in the app.
 | Symptom | Likely cause |
 | --- | --- |
 | Machine boots then exits immediately | `MONGODB_URI` missing. `fly secrets list --app mytetz` — the app throws on startup without it. |
-| `/api/health` returns `{"status":"degraded","mongo":false}` with HTTP 503 | The app is up but cannot reach Atlas: bad credentials, cluster paused (M0 clusters auto-pause after ~60 days idle), or the IP access list no longer has `0.0.0.0/0`. |
+| `/api/health` returns `{"status":"degraded","mongo":false,"ready":true}` with HTTP 503 | The app is up but cannot reach Atlas: bad credentials, cluster paused (M0 clusters auto-pause after ~60 days idle), or the IP access list no longer has `0.0.0.0/0`. |
 | SSE responses stall or arrive all at once | Cloudflare is caching/buffering `/api/*`. Check the cache rule from step 5.4. |
 | `fly deploy` cannot find a builder | Use `fly deploy --local-only` with Docker running locally. |
 | Health check fails only right after deploy | `grace_period` is 10s; JVM + Netty start well inside that, but a cold Atlas handshake on a loaded shared CPU can be slower. Raise `grace_period` before suspecting the app. |
-| `curl -I https://mytetz.fly.dev/api/health` returns **405** | Expected, not a fault. The route is registered with `get(...)` only, so `HEAD` is unhandled. Use `curl -s` (GET). Anything you point at this endpoint — uptime monitors included — must use GET. |
+| `curl -I https://mytetz.fly.dev/api/health` returns **404** | Not expected. `AutoHeadResponse` is installed, so `HEAD /api/health` answers **200** and an uptime monitor may use HEAD or GET. A 404 means the request did not reach this application. |
 | Cloudflare origin errors while `mytetz.fly.dev` is healthy | Almost certainly the shared-IPv4/SNI issue above: no fly certificate for that hostname yet. |
