@@ -8,6 +8,29 @@ import { FocusCardComponent } from './focus-card.component';
 import { SessionStore } from './session.store';
 import { TrailRailComponent } from './trail-rail.component';
 
+/** Words a title leaves lowercase unless they start it — see [ReaderPageComponent.topicLabel]. Only
+ * `by` and `and` are load-bearing for today's catalogue; the rest are the conventional set, so the
+ * next curated slug containing one does not need a code change to render correctly. */
+const MINOR_WORDS: ReadonlySet<string> = new Set([
+  'a',
+  'an',
+  'and',
+  'as',
+  'at',
+  'but',
+  'by',
+  'for',
+  'in',
+  'nor',
+  'of',
+  'on',
+  'or',
+  'the',
+  'to',
+  'vs',
+  'with',
+]);
+
 /**
  * `/learn/:sessionId` — the reader.
  *
@@ -53,7 +76,7 @@ import { TrailRailComponent } from './trail-rail.component';
             <div class="banner banner--error" role="alert">
               <p class="banner__message">
                 {{ failure.message }}
-                @if (failure.partiallyStreamed) {
+                @if (failure.discardedText) {
                   <span class="banner__detail">
                     The partial answer on screen was discarded — it was never saved to your session.
                   </span>
@@ -181,16 +204,27 @@ export class ReaderPageComponent {
    *
    * Derived from the slug because `SessionView` carries only that — the real title lives on
    * `TopicSummary`, behind a second request this page would otherwise have to make purely for a
-   * label. The catalogue's slugs are hand-curated kebab-case (`quantum-physics`), so the
-   * reconstruction is exact for every topic in Slice 1; if that ever stops holding, adding `title`
-   * to `SessionView` is the fix, not a cleverer transformation here.
+   * label.
+   *
+   * Capitalises every word except the short connectives, which is what the catalogue's own titles
+   * do. A plain per-word capitalisation is *not* exact: run over all 29 published slugs in
+   * `topics.json`, it disagrees with the real title on two of them — "Evolution **By** Natural
+   * Selection" against "Evolution by Natural Selection", and "Supply **And** Demand" against
+   * "Supply and Demand". With [MINOR_WORDS] all 29 agree, which is the whole of the current
+   * catalogue, checked rather than assumed.
+   *
+   * This is still a reconstruction and it will drift the moment a curator writes a title that is not
+   * a mechanical transform of its slug (a proper noun's internal capitals, an acronym, a comma). The
+   * fix then is to put `title` on `SessionView`, not to grow the rule.
    */
   readonly topicLabel = computed(() => {
     const slug = this.store.session()?.topicSlug ?? '';
     return slug
       .split('-')
       .filter((part) => part.length > 0)
-      .map((part) => part[0].toUpperCase() + part.slice(1))
+      .map((part, index) =>
+        index > 0 && MINOR_WORDS.has(part) ? part : part[0].toUpperCase() + part.slice(1),
+      )
       .join(' ');
   });
 

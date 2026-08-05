@@ -42,8 +42,12 @@ describe('ReaderPageComponent', () => {
   let http: HttpTestingController;
   let harness: RouterTestingHarness;
   let script: ExplainStreamFn;
+  /** The `AbortSignal` handed to each `explainStream` call, so a test can assert what happens to an
+   * in-flight generation when the reader goes away. */
+  let signals: Array<AbortSignal | undefined>;
 
   beforeEach(async () => {
+    signals = [];
     script = () => {
       throw new Error('this test triggered an explain without installing a stream script');
     };
@@ -54,7 +58,10 @@ describe('ReaderPageComponent', () => {
         provideHttpClientTesting(),
         {
           provide: EXPLAIN_STREAM,
-          useValue: ((...args) => script(...args)) satisfies ExplainStreamFn,
+          useValue: ((sessionId, body, signal) => {
+            signals.push(signal);
+            return script(sessionId, body, signal);
+          }) satisfies ExplainStreamFn,
         },
       ],
     });
@@ -64,12 +71,27 @@ describe('ReaderPageComponent', () => {
 
   afterEach(() => http.verify());
 
-  async function open(): Promise<ReaderPageComponent> {
+  async function open(response: SessionView = view): Promise<ReaderPageComponent> {
     const component = await harness.navigateByUrl('/learn/s1', ReaderPageComponent);
-    http.expectOne('/api/sessions/s1').flush(view);
+    http.expectOne('/api/sessions/s1').flush(response);
     await harness.fixture.whenStable();
     harness.detectChanges();
     return component;
+  }
+
+  /** Highlights `pillars` in the focus card and presses a verb. */
+  function highlightAndExplain(): void {
+    const bodyEl = harness.routeNativeElement?.querySelector('.focus__body') as HTMLElement;
+    const range = document.createRange();
+    range.setStart(bodyEl.firstChild as Text, 4);
+    range.setEnd(bodyEl.firstChild as Text, 11);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    bodyEl.dispatchEvent(new Event('mouseup'));
+    harness.detectChanges();
+    harness.routeNativeElement?.querySelector<HTMLButtonElement>('[data-verb="EXPLAIN"]')?.click();
+    selection?.removeAllRanges();
   }
 
   const text = (): string => harness.routeNativeElement?.textContent ?? '';
@@ -100,18 +122,9 @@ describe('ReaderPageComponent', () => {
       yield { event: 'done', data: { contentKey: 'k2', grounded: true } } satisfies ExplainEvent;
     };
     await open();
-
     const bodyEl = harness.routeNativeElement?.querySelector('.focus__body') as HTMLElement;
-    const range = document.createRange();
-    range.setStart(bodyEl.firstChild as Text, 4);
-    range.setEnd(bodyEl.firstChild as Text, 11);
-    const selection = window.getSelection();
-    selection?.removeAllRanges();
-    selection?.addRange(range);
-    bodyEl.dispatchEvent(new Event('mouseup'));
-    harness.detectChanges();
 
-    harness.routeNativeElement?.querySelector<HTMLButtonElement>('[data-verb="EXPLAIN"]')?.click();
+    highlightAndExplain();
     await tick();
     harness.detectChanges();
 
@@ -146,11 +159,83 @@ describe('ReaderPageComponent', () => {
     expect(
       (harness.routeNativeElement?.querySelector('.focus__body') as HTMLElement).textContent,
     ).toBe('Because they are.');
-    selection?.removeAllRanges();
+  });
+
+  it('banners a failed re-read over the still-readable session, rather than replacing the page', async () => {
+    script = async function* () {
+      yield { event: 'delta', data: { t: 'Because they are.' } } satisfies ExplainEvent;
+      yield { event: 'done', data: { contentKey: 'k2', grounded: true } } satisfies ExplainEvent;
+    };
+    await open();
+
+    highlightAndExplain();
+    await tick();
+    http.expectOne('/api/sessions/s1').flush(null, { status: 500, statusText: 'Server Error' });
+    await harness.fixture.whenStable();
+    harness.detectChanges();
+
+    // The generation succeeded and was paid for; only the GET that would have picked up the new
+    // node failed. The session on screen is stale, not wrong — so the failure belongs in a banner
+    // over a working reader, not on a page that replaces it.
+    //
+    // This is a load-kind failure, which is what makes the test worth having: keying the full-page
+    // branch on `kind` instead of "is there a session to show" passes every other test in this file
+    // and blanks the reader here.
+    expect(harness.routeNativeElement?.querySelector('.banner')).toBeTruthy();
+    expect(text()).toContain('could not be re-read');
+    expect(text()).toContain('The pillars of modern physics.');
+    expect(harness.routeNativeElement?.querySelector('.focus__body')).toBeTruthy();
+    expect(harness.routeNativeElement?.querySelector('.banner__back')).toBeNull();
+
+    // And the recovery is the idempotent GET, not a second generation.
+    harness.routeNativeElement?.querySelector<HTMLButtonElement>('.banner__retry-button')?.click();
+    http.expectOne('/api/sessions/s1').flush(view);
+    await harness.fixture.whenStable();
+    harness.detectChanges();
+
+    expect(signals.length).toBe(1);
+    expect(harness.routeNativeElement?.querySelector('.banner')).toBeNull();
+  });
+
+  it('abandons an in-flight generation when the reader is destroyed', async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    script = async function* () {
+      yield { event: 'delta', data: { t: 'Because ' } } satisfies ExplainEvent;
+      await held;
+      yield { event: 'done', data: { contentKey: 'k2', grounded: true } } satisfies ExplainEvent;
+    };
+    await open();
+
+    highlightAndExplain();
+    await tick();
+    expect(signals[0]?.aborted).toBe(false);
+
+    harness.fixture.destroy();
+    expect(signals[0]?.aborted).toBe(true);
+
+    // The learner has gone. Nothing may be written for them afterwards — and in particular the
+    // `done` below must not fire a re-fetch of a session nobody is looking at, which afterEach's
+    // http.verify() is what proves.
+    release();
+    await tick();
+  });
+
+  it('renders the topic title the catalogue uses, not a word-by-word capitalisation of the slug', async () => {
+    // `evolution-by-natural-selection` and `supply-and-demand` are both real, published slugs; the
+    // titles in topics.json are "Evolution by Natural Selection" and "Supply and Demand". A naive
+    // per-word capitalisation renders "By" and "And" in the root crumb and the root rail row.
+    await open({ ...view, topicSlug: 'evolution-by-natural-selection' });
+
+    expect(text()).toContain('Evolution by Natural Selection');
+    expect(text()).not.toContain('Evolution By Natural Selection');
   });
 
   it('shows a dismissible banner with a retry for a failed generation', async () => {
     script = async function* (): AsyncGenerator<ExplainEvent> {
+      // Prose really does reach the screen before this fails — the grounding validator rejecting a
+      // finished body is the shape that does this — so the withdrawal notice is accurate here.
+      yield { event: 'delta', data: { t: 'Because ' } } satisfies ExplainEvent;
       throw new ExplainStreamError('GENERATION_FAILED', 'could not generate', null, true);
     };
     const component = await open();
@@ -159,9 +244,8 @@ describe('ReaderPageComponent', () => {
     harness.detectChanges();
 
     expect(text()).toContain('could not generate');
-    // The partial-answer case says so, rather than leaving the learner to wonder where the prose
-    // that was on screen a moment ago went.
     expect(text()).toContain('was discarded');
+    expect(text()).not.toContain('Because ');
 
     const banner = harness.routeNativeElement?.querySelector('.banner') as HTMLElement;
     expect(banner.querySelector('.banner__retry-button')).toBeTruthy();
@@ -169,6 +253,22 @@ describe('ReaderPageComponent', () => {
     banner.querySelector<HTMLButtonElement>('.banner__dismiss')?.click();
     harness.detectChanges();
     expect(harness.routeNativeElement?.querySelector('.banner')).toBeNull();
+  });
+
+  it('does not tell the learner prose was withdrawn when none was ever shown', async () => {
+    script = async function* (): AsyncGenerator<ExplainEvent> {
+      // meta, then error: the ordinary shape of a model call that fails, and the one that carries
+      // `partiallyStreamed: true` with an empty card behind it.
+      yield { event: 'meta', data: { contentKey: 'k2', cached: false } } satisfies ExplainEvent;
+      throw new ExplainStreamError('GENERATION_FAILED', 'could not generate', null, true);
+    };
+    const component = await open();
+
+    await component.store.explain({ text: 'pillars', start: 4, end: 11 }, 'EXPLAIN');
+    harness.detectChanges();
+
+    expect(text()).toContain('could not generate');
+    expect(text()).not.toContain('was discarded');
   });
 
   it('renders a 404 as a dead end with a way back, not as a retry', async () => {

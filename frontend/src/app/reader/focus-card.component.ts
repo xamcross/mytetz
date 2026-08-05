@@ -218,12 +218,28 @@ export class FocusCardComponent {
    * all of those land in the same place: no span, verbs disabled.
    */
   onSelectionChanged(): void {
+    const root = this.bodyRef().nativeElement;
+
+    // Re-checked here as well as after render, because `textContent` is not a signal: something that
+    // rewrites the text nodes *in place*, leaving `body()` untouched, never makes the post-render
+    // check dirty and never re-runs it. Chrome's built-in page translation and Grammarly both do
+    // exactly that, and on a learning site with international readers it is ordinary rather than
+    // exotic — the affordance would stay live over text the server has never seen, and every request
+    // would come back SPAN_MISMATCH. This is the instant the offsets are computed, so it is the
+    // instant worth checking; the comparison is one paragraph long.
+    const matches = rootTextMatchesBody(root, this.body());
+    this.bodyMatches.set(matches);
+    if (!matches) {
+      this.selectedSpan.set(null);
+      return;
+    }
+
     const selection = window.getSelection();
     if (!selection || selection.rangeCount === 0) {
       this.selectedSpan.set(null);
       return;
     }
-    this.selectedSpan.set(selectionToSpan(this.bodyRef().nativeElement, selection.getRangeAt(0)));
+    this.selectedSpan.set(selectionToSpan(root, selection.getRangeAt(0)));
   }
 
   request(verb: Verb): void {

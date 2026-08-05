@@ -303,7 +303,7 @@ describe('SessionStore', () => {
       code: 'QUOTA_EXCEEDED',
       message: "you have used today's allowance",
       retryAfter: 3600,
-      partiallyStreamed: false,
+      discardedText: false,
       retryable: false,
     });
     expect(store.streamingText()).toBe('');
@@ -334,12 +334,30 @@ describe('SessionStore', () => {
     // learner select against prose no explanation body matches (every such span is SPAN_MISMATCH).
     expect(beforeThrow).toBe('half an answer');
     expect(store.streamingText()).toBe('');
-    expect(store.error()?.partiallyStreamed).toBe(true);
+    expect(store.error()?.discardedText).toBe(true);
     expect(store.error()?.code).toBe('GENERATION_FAILED');
     // GENERATION_FAILED is the one explain failure a plain "Retry" can act on.
     expect(store.error()?.retryable).toBe(true);
     expect(store.isStreaming()).toBe(false);
     expect(store.currentNodeId()).toBe('n1');
+  });
+
+  it('does not claim prose was discarded when the failure landed before any arrived', async () => {
+    script = async function* (): AsyncGenerator<ExplainEvent> {
+      yield meta('k4');
+      // `partiallyStreamed` is true here and says nothing useful: it means `explainStream` yielded
+      // at least one event, and the server emits `meta` *before* the model call. So the ordinary
+      // shape of a failed generation — meta, then error — arrives with the flag set and an empty
+      // card. Telling the learner their partial answer was withdrawn, when none was ever shown, is
+      // the one distinction Critical C exists to draw, drawn wrongly.
+      throw new ExplainStreamError('GENERATION_FAILED', 'could not generate', null, true);
+    };
+
+    await loadSession();
+    await store.explain(span, 'EXPLAIN');
+
+    expect(store.error()?.code).toBe('GENERATION_FAILED');
+    expect(store.error()?.discardedText).toBe(false);
   });
 
   it('treats a stream that ends without done as a failure rather than a success', async () => {

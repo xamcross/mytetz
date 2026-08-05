@@ -1,4 +1,4 @@
-import { Injectable, InjectionToken, computed, inject, signal } from '@angular/core';
+import { DestroyRef, Injectable, InjectionToken, computed, inject, signal } from '@angular/core';
 import { HttpErrorResponse } from '@angular/common/http';
 import { ApiService } from '../core/api.service';
 import { ExplainRequest, NodeView, SessionView, SpanPayload, Verb } from '../core/models';
@@ -33,9 +33,14 @@ export const EXPLAIN_STREAM = new InjectionToken<ExplainStreamFn>('EXPLAIN_STREA
  * is intact", because they need different UI: the first replaces the page, the second is a banner
  * over a working reader.
  *
- * [partiallyStreamed] is carried through from `ExplainStreamError` (Task 1.13) rather than being
- * re-derived: it is the difference between a refusal decided before a single character was rendered
- * and a failure that interrupted prose already on screen. See `SessionStore.explain`.
+ * [discardedText] is true only when prose was genuinely on screen and has been withdrawn — that is,
+ * when a `delta` or a `superseded` arrived before the failure. It is deliberately **not**
+ * `ExplainStreamError.partiallyStreamed`, which answers a different question: that flag means
+ * `explainStream` yielded at least one event, and the server emits `meta` before it calls the model.
+ * So the ordinary shape of a failed generation — `meta`, then `error` — sets `partiallyStreamed`
+ * with an empty card behind it, and a message keyed on it would tell the learner that a partial
+ * answer they never saw had been withdrawn. The distinction Critical C exists to draw has to be
+ * drawn from what this store actually rendered, which is the one place that knows.
  *
  * [retryable] means "re-issuing this exact request could plausibly succeed", which is *not* the same
  * as "the learner can do something about it". A quota refusal carries a [retryAfter] and no retry
@@ -46,7 +51,7 @@ export interface ReaderError {
   code: string;
   message: string;
   retryAfter: number | null;
-  partiallyStreamed: boolean;
+  discardedText: boolean;
   retryable: boolean;
 }
 
@@ -89,6 +94,12 @@ export class SessionStore {
   /** The id being read, kept separately from [session] so a failed load can still be retried. */
   private sessionId: string | null = null;
   private lastExplain: LastExplain | null = null;
+  /** The generation currently streaming, so it can be abandoned — see [abandon]. */
+  private inFlight: AbortController | null = null;
+
+  constructor() {
+    inject(DestroyRef).onDestroy(() => this.abandon());
+  }
 
   readonly session = signal<SessionView | null>(null);
   readonly currentNodeId = signal<string | null>(null);
@@ -203,6 +214,9 @@ export class SessionStore {
    * could not be opened and names both possibilities, without resolving which.
    */
   async load(sessionId: string): Promise<void> {
+    // Angular reuses this component across a parameter-only route change, so a load can arrive with
+    // the previous session's generation still streaming into these signals.
+    this.abandon();
     this.sessionId = sessionId;
     this.lastExplain = null;
     this.loading.set(true);
@@ -277,10 +291,21 @@ export class SessionStore {
     this.streamingText.set('');
     this.error.set(null);
 
+    // Abandoned if the learner leaves — see `abandon()`. `explainStream` passes this to `fetch`, so
+    // an abort closes the connection rather than leaving it draining into a store nobody reads.
+    const controller = new AbortController();
+    this.inFlight = controller;
+
     let sawDone = false;
+    // Whether anything was actually rendered. This — not `ExplainStreamError.partiallyStreamed` —
+    // is what `discardedText` reports; see `ReaderError`.
     let streamedAnything = false;
     try {
-      for await (const event of this.stream(sessionId, { parentNodeId, span, verb })) {
+      for await (const event of this.stream(
+        sessionId,
+        { parentNodeId, span, verb },
+        controller.signal,
+      )) {
         switch (event.event) {
           case 'delta':
             streamedAnything = true;
@@ -298,36 +323,62 @@ export class SessionStore {
         }
       }
 
+      // Nobody is reading this any more: no error to report, and above all no re-fetch of a session
+      // the learner has navigated away from.
+      if (controller.signal.aborted) return;
+
       if (!sawDone) {
         this.failStream({
           code: 'STREAM_TRUNCATED',
           message: 'the connection closed before the explanation finished',
           retryAfter: null,
-          partiallyStreamed: streamedAnything,
+          discardedText: streamedAnything,
         });
         return;
       }
 
       await this.refresh(sessionId);
     } catch (err) {
+      // An abort raises here too (as an `AbortError` from `fetch`), and it is this client's own
+      // doing rather than a failure to report.
+      if (controller.signal.aborted) return;
       const failure =
         err instanceof ExplainStreamError
           ? {
               code: err.code,
               message: err.message,
               retryAfter: err.retryAfter,
-              partiallyStreamed: err.partiallyStreamed,
+              // Not `err.partiallyStreamed`: `meta` precedes the model call, so that flag is set for
+              // the commonest failure of all with nothing on screen behind it. See `ReaderError`.
+              discardedText: streamedAnything,
             }
           : {
               code: 'UNKNOWN',
               message: 'the explanation could not be loaded',
               retryAfter: null,
-              partiallyStreamed: streamedAnything,
+              discardedText: streamedAnything,
             };
       this.failStream(failure);
     } finally {
+      if (this.inFlight === controller) this.inFlight = null;
       this.isStreaming.set(false);
     }
+  }
+
+  /**
+   * Drops an in-flight generation on the floor.
+   *
+   * Run when the reader is destroyed and when a different session is loaded into the same component
+   * instance. Without it, navigating away mid-generation leaves the `fetch` open, the generator
+   * writing deltas into signals nobody renders, and — worst — a `done` firing a re-fetch of a
+   * session the learner has left. The backend anticipates exactly this: `streamExplanation` rethrows
+   * `CancellationException` so that `SessionService.explain` drops the abandoned node rather than
+   * resuming a learner on a branch they walked away from, and that path only runs if the client
+   * actually closes the connection.
+   */
+  private abandon(): void {
+    this.inFlight?.abort();
+    this.inFlight = null;
   }
 
   /**
@@ -441,7 +492,7 @@ function loadErrorFor(err: unknown): ReaderError {
         'That session could not be opened. It may no longer exist, or it may have been started ' +
         'in a different browser.',
       retryAfter: null,
-      partiallyStreamed: false,
+      discardedText: false,
       retryable: false,
     };
   }
@@ -451,7 +502,7 @@ function loadErrorFor(err: unknown): ReaderError {
     code: body?.code ?? 'LOAD_FAILED',
     message: 'Could not load this session. Check your connection and try again.',
     retryAfter: body?.retryAfter ?? null,
-    partiallyStreamed: false,
+    discardedText: false,
     retryable: true,
   };
 }

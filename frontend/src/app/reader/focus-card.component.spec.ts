@@ -140,6 +140,21 @@ describe('FocusCardComponent', () => {
     expect(fixture.nativeElement.textContent).toContain('cannot be highlighted');
   });
 
+  it('re-checks the body when a selection is made, catching a rewrite no render saw', () => {
+    // `rootTextMatchesBody` reads `textContent`, which is not a signal, so a rewrite *in place* —
+    // with `body()` unchanged — never makes the post-render check dirty and never re-runs it.
+    // Chrome's built-in page translation and Grammarly both do exactly this, and on a learning site
+    // with international readers it is common rather than exotic. The result would be a live
+    // affordance over text the server has never seen: every request back as SPAN_MISMATCH.
+    (bodyEl().firstChild as Text).data = 'Los pilares de la física moderna.';
+
+    select(4, 11);
+
+    expect(verbButton('EXPLAIN').disabled).toBe(true);
+    expect(fixture.nativeElement.textContent).toContain('cannot be highlighted');
+    expect(requests).toEqual([]);
+  });
+
   it('disables every verb while a generation is streaming', async () => {
     select(4, 11);
     fixture.componentRef.setInput('isStreaming', true);
