@@ -274,6 +274,16 @@ class ExplanationGraphTest {
         assertNotEquals(key, graph.keyFor(base.copy(span = "traditional laws of physics")))
         assertNotEquals(key, graph.keyFor(base.copy(verb = Verb.DIG_DEEPER)))
         assertNotEquals(key, graph.keyFor(base.copy(variant = 1)))
+        // Moved here from the "not identity" block below, in the final review of slices 0-1. The
+        // sentence is a prompt input, and the parent key and the span do not determine it: one word
+        // can appear twice in one body, in two sentences. The old assertion said that those two
+        // selections must share one document, so the first generation answered the other sentence
+        // for ever. See `ContentKey`.
+        assertNotEquals(
+            key,
+            graph.keyFor(base.copy(spanSentence = "A different carrier sentence.")),
+            "two sentences around one span must not share one document",
+        )
         assertNotEquals(
             key,
             graphWith(config = config.copy(promptVersion = "vNext")).keyFor(base),
@@ -290,7 +300,6 @@ class ExplanationGraphTest {
         // document even if the caller hydrated the readable chain differently.
         assertEquals(key, graph.keyFor(base.copy(ancestors = emptyList())))
         assertEquals(key, graph.keyFor(base.copy(topicTitle = "Something Else Entirely")))
-        assertEquals(key, graph.keyFor(base.copy(spanSentence = "A different carrier sentence.")))
         assertEquals(key, graph.keyFor(base.copy(depth = 9)))
         assertEquals(key, graph.keyFor(base.copy(topicSlug = "another-topic")))
     }
@@ -306,8 +315,15 @@ class ExplanationGraphTest {
         )
         assertEquals(
             graph.keyFor(seed),
-            graph.keyFor(seed.copy(span = "irrelevant", parentKey = "irrelevant", variant = 0)),
-            "a seed has no parent and no span, so neither may move its key",
+            graph.keyFor(
+                seed.copy(
+                    span = "irrelevant",
+                    spanSentence = "irrelevant",
+                    parentKey = "irrelevant",
+                    variant = 0,
+                )
+            ),
+            "a seed has no parent, no span and no sentence, so none of them may move its key",
         )
         assertNotEquals(graph.keyFor(seed), graph.keyFor(seed.copy(topicSlug = "microbiology")))
     }

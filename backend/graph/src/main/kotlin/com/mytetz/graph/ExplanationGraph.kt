@@ -180,11 +180,20 @@ class ExplanationGraph(
     /**
      * The immutable identity of the answer to [request].
      *
-     * Identity is exactly: ancestry (carried whole by the parent's key), the highlighted span, the
-     * verb, the variant, the prompt version and the model family. Nothing else — not the topic
-     * title, not the sentence the span came from, not the hydrated ancestor bodies, not the depth.
-     * Those shape the prompt or describe the document; two callers who reached the same span by
-     * the same path must land on the same document however they hydrated the chain.
+     * Identity is exactly:
+     *
+     * - the ancestry, which the parent key carries whole;
+     * - the highlighted span;
+     * - the sentence that holds the span;
+     * - the verb, the variant, the prompt version and the model family.
+     *
+     * Nothing else. The topic title, the hydrated ancestor bodies and the depth are not part of it.
+     * They shape the prompt or they describe the document. Two callers that reach the same span by
+     * the same path get the same document, whatever way they hydrated the chain.
+     *
+     * The sentence joined this list in the final review of slices 0-1. It is a prompt input, and
+     * `(parentKey, span)` does not determine it: one word can appear twice in one body, in two
+     * sentences. [ContentKey] holds the full argument.
      */
     fun keyFor(request: GraphRequest): String =
         if (request.verb == Verb.SEED) {
@@ -193,6 +202,7 @@ class ExplanationGraph(
             ContentKey.derive(
                 parentKey = request.parentKey.orEmpty(),
                 span = request.span,
+                spanSentence = request.spanSentence,
                 verb = request.verb,
                 variant = request.variant,
                 promptVersion = config.promptVersion,
