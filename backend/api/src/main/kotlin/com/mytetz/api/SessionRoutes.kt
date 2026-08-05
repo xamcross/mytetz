@@ -108,6 +108,59 @@ const val SESSIONS_PER_CALLER: Int = 30
 const val SESSION_WINDOW_MILLIS: Long = 60L * 60 * 1000
 
 /**
+ * How many explanations one caller address may ask for per [EXPLAIN_WINDOW_MILLIS].
+ *
+ * ## Why this endpoint needs a rate limit of its own at all
+ *
+ * Everything else that bounds `POST /api/sessions/{id}/explain` can be made to read zero by one
+ * client, and none of the three is an adversary-only path:
+ *
+ * - **The ledger and the principal's counter** move on `GraphChunk.Spent`, which is emitted only
+ *   once the model's own stream has completed. A generation that breaks *before* that — a learner
+ *   who navigates away, or `AnthropicLlmClient`'s `LlmStreamTruncatedException` when the provider
+ *   stream ends without a stop reason, which includes OkHttp's 120-second whole-call timeout firing
+ *   on a slow one — emits no `Spent`, so `QuotaService.checkGeneration` answers `Allowed` for ever.
+ *   See "The bound this still leaves" on [streamExplanation]: the token counts genuinely do not
+ *   exist on that path, so this is not a bookkeeping choice that could be fixed here.
+ * - **`SessionLimits.maxNodes`** is consumed by `appendNode`, which `SessionService.explain` runs
+ *   after the last emit — so it never runs on the same path.
+ * - **`QuotaConfig.dailyExplains`** is keyed on the principal, and `Principals.resolve` mints a
+ *   fresh one for every cookie-less request. It bounds polite clients only.
+ *
+ * Net, before this limit existed: one session and one span, aborted repeatedly, was unbounded paid
+ * generation against a ledger reading zero. And the truncation path answers `GENERATION_FAILED`,
+ * whose message tells the client in as many words to *try again* — so a latency regression produces
+ * the same loop with nobody attacking anything.
+ *
+ * ## Why 30 per ten minutes, and not the session route's 30 per hour
+ *
+ * This is a learner's working rhythm, not a session-creation rate. The number is chosen so that
+ * **an honest learner never meets this limit first** — `QuotaConfig.dailyExplains` defaults to 20
+ * per principal per day, so a client that keeps its cookie is refused by the quota, with a message
+ * about its allowance, long before it comes near 30 in ten minutes. Three per minute sustained is
+ * already faster than a one-to-three-sentence explanation can be read, and the burst covers a fast
+ * skim, a double click and a `retry()`; ten minutes rather than an hour so that a caller who does
+ * hit it waits minutes rather than being locked out for the rest of the hour.
+ *
+ * What it *does* bind is precisely the caller the quota cannot: one re-minting principals, or one
+ * aborting streams so that nothing is ever recorded. For those, this is the only bound there is.
+ *
+ * ## What this limit honestly is not
+ *
+ * [FixedWindowRateLimiter] keeps its counters **in process**, and `fly.toml` sets
+ * `auto_stop_machines = "stop"` with `min_machines_running = 0` — so the machine stops when idle and
+ * every counter in it is lost. On this deployment a cold start is the first request after any idle
+ * period, and it hands the arriving caller a fresh allowance. A caller willing to wait out the idle
+ * timeout between bursts is therefore limited by nothing here. Closing that needs a shared counter
+ * with a TTL, the shape `QuotaRepository` already uses, at the cost of a round trip per request;
+ * the same trade `FixedWindowRateLimiter`'s own KDoc records for the topic-request limit, decided
+ * the same way and written down here rather than left for a reader to assume otherwise.
+ */
+const val EXPLAINS_PER_CALLER: Int = 30
+
+const val EXPLAIN_WINDOW_MILLIS: Long = 10L * 60 * 1000
+
+/**
  * The largest body either session endpoint will read at all.
  *
  * Both payloads are a handful of short fields — the longest, an explain span, is bounded by
@@ -125,10 +178,13 @@ const val MAX_SESSION_BODY_BYTES: Long = 4_096
  *
  * ## 1. A refused request must generate nothing
  *
- * Every gate runs **before** the response begins: body, ownership, `prepare`, quota. Only then does
- * the stream open. That ordering is the property, and it is also what lets a refusal carry a real
- * status code and a real `Retry-After` — a 429 a client can act on, rather than a 200 whose body
+ * Every gate runs **before** the response begins: body, rate, ownership, `prepare`, quota. Only then
+ * does the stream open. That ordering is the property, and it is also what lets a refusal carry a
+ * real status code and a real `Retry-After` — a 429 a client can act on, rather than a 200 whose body
  * says the word "error".
+ *
+ * The rate limit is first of the five, and it is the only one of them that still binds a client
+ * which never lets a stream finish; [EXPLAINS_PER_CALLER] carries that argument in full.
  *
  * The version this replaced gated *inside* `collect { }` and wrote `return@collect` in both refusal
  * arms. In Kotlin that returns from the lambda for one chunk and collection carries on, so the
@@ -244,6 +300,13 @@ fun Route.sessionRoutes(
         limit = SESSIONS_PER_CALLER,
         windowMillis = SESSION_WINDOW_MILLIS,
     ),
+    // A limiter of its own and not the session one: `FixedWindowRateLimiter` holds a single window
+    // and a single counter table, so sharing an instance would spend one allowance across two
+    // endpoints with different limits, different windows and different reasons for existing.
+    explainLimiter: FixedWindowRateLimiter = FixedWindowRateLimiter(
+        limit = EXPLAINS_PER_CALLER,
+        windowMillis = EXPLAIN_WINDOW_MILLIS,
+    ),
 ) {
 
     /**
@@ -336,6 +399,36 @@ fun Route.sessionRoutes(
 
     post("/api/sessions/{id}/explain") {
         if (!call.bodyIsSmallEnough()) return@post
+
+        // First of every gate on this endpoint, and the ordering is the property — see
+        // [EXPLAINS_PER_CALLER]. Nothing below this line runs for a caller that is over its limit:
+        // not the session lookup, not `prepare`, and above all not the model. It is also ahead of
+        // `sessions()` and `Principals.resolve` for the two reasons `POST /api/sessions` gives —
+        // resolving the service forces the lazy Anthropic client, so a refused request would
+        // otherwise pay to build one and answer 500 rather than 429 on a keyless deployment, and a
+        // refused request should cost no cookie.
+        //
+        // Keyed on the address and NOT the principal, and here that is not a nicety: the whole
+        // reason this limit exists is the caller whose principal is free to re-mint. See
+        // `ClientAddress`.
+        val caller = ClientAddress.of(call, clientAddresses)
+        if (!explainLimiter.tryAcquire(caller)) {
+            log.info("rate limited explanations from {}", caller)
+            call.respondRefusal(
+                Refusal(
+                    HttpStatusCode.TooManyRequests,
+                    ApiError(
+                        code = "RATE_LIMITED",
+                        message = "too many explanations requested; try again shortly",
+                        // The window's full width, which is the honest upper bound: the window is
+                        // fixed rather than sliding, so it may roll sooner, but never later.
+                        retryAfter = EXPLAIN_WINDOW_MILLIS / 1000,
+                    ),
+                )
+            )
+            return@post
+        }
+
         val sessions = sessions()
 
         val principal = Principals.resolve(call, cookies)
@@ -434,8 +527,10 @@ fun Route.sessionRoutes(
  * That is not a rare shape. A client that aborts every explain once the deltas stop would move
  * neither the ledger nor the principal's counter, so `checkGeneration` answers `Allowed` for ever,
  * and `appendNode` never runs so the node budget is not consumed either: one session and one span
- * become unbounded paid generations against a ledger that reads zero. Nothing else bounds explains —
- * the rate limiter is on `POST /api/sessions` only.
+ * become unbounded paid generations against a ledger that reads zero. Of everything on this
+ * endpoint, only the address rate limit is spent *before* the stream opens and therefore survives
+ * that shape — see [EXPLAINS_PER_CALLER], which exists for it and is the reason the loop now
+ * terminates.
  *
  * So it runs on every path, under `NonCancellable` so a cancelled coroutine cannot skip the write.
  * `recordSpend` swallows its own failures, so it cannot fail the request from any position.
@@ -453,7 +548,9 @@ fun Route.sessionRoutes(
  *
  * The bound that leaves: a client which disconnects mid-generation pays nothing into the ledger and
  * nothing into its own daily count, which makes `QuotaConfig.dailyExplains` optional for such a
- * client. **Everything after the announcement is recorded** — a generation that is billed and then
+ * client — which is why [EXPLAINS_PER_CALLER] is enforced at the door, on the address rather than on
+ * the principal, and is the only thing standing under a client shaped like that.
+ * **Everything after the announcement is recorded** — a generation that is billed and then
  * rejected, or whose insert fails, or whose correction cannot be sent, all reach `Spent` first. The
  * guarantee starts at the emit rather than at the model returning: a disconnect landing in the
  * microseconds between the two loses a cost that is already known, which is a real if vanishing

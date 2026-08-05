@@ -113,6 +113,7 @@ object TestFixtures {
         dailyExplains: Int = QuotaConfig.DEFAULT_DAILY_EXPLAINS,
         costCeilingMicros: Long = QuotaConfig.DEFAULT_COST_CEILING_MICROS,
         sessionsPerCaller: Int = SESSIONS_PER_CALLER,
+        explainsPerCaller: Int = EXPLAINS_PER_CALLER,
     ): SessionStack {
         val database = database("session_app_${databaseCounter.incrementAndGet()}")
         val explanations = SeamedExplanationRepository(database)
@@ -152,6 +153,10 @@ object TestFixtures {
             ),
             quotaRepository = quotaRepository,
             limiter = FixedWindowRateLimiter(limit = sessionsPerCaller, windowMillis = SESSION_WINDOW_MILLIS),
+            explainLimiter = FixedWindowRateLimiter(
+                limit = explainsPerCaller,
+                windowMillis = EXPLAIN_WINDOW_MILLIS,
+            ),
         )
     }
 
@@ -163,6 +168,7 @@ object TestFixtures {
         val quota: QuotaService,
         val quotaRepository: QuotaRepository,
         val limiter: FixedWindowRateLimiter,
+        val explainLimiter: FixedWindowRateLimiter,
     ) {
         /** How many model calls have been made. The only honest answer to "did that generate?". */
         val generations: Int get() = llm.calls.size
