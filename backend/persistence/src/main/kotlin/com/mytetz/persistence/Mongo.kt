@@ -33,12 +33,25 @@ class Mongo(config: MongoConfig) {
      * request and fly's health check allows 5 seconds, so an unbounded ping makes the endpoint that
      * reports a database outage unable to answer during one.
      */
+    /**
+     * `Exception` and not `Throwable`. An `Error` is not evidence that Mongo is unreachable.
+     *
+     * `Throwable` also caught `OutOfMemoryError` and `StackOverflowError`. `/api/health` then
+     * answered "mongo unreachable" for a JVM that was failing, and an operator would look at Atlas
+     * while the machine ran out of its 512 MB. An `Error` now propagates, and the health endpoint
+     * fails in a way that says so.
+     *
+     * The [CancellationException] clause stays first, and it is load bearing for the reason
+     * `ExplanationGraph.generate` and `streamExplanation` both give: it descends from
+     * `RuntimeException`, so `catch (e: Exception)` alone reports a caller that went away as a
+     * database fault.
+     */
     suspend fun ping(): Boolean = try {
         database.runCommand(BsonDocument("ping", BsonInt32(1)))
         true
     } catch (e: CancellationException) {
         throw e
-    } catch (e: Throwable) {
+    } catch (e: Exception) {
         false
     }
 
