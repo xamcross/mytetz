@@ -146,10 +146,31 @@ describe('SessionStore', () => {
 
   afterEach(() => http.verify());
 
-  async function loadSession(response: SessionView = view): Promise<void> {
+  /**
+   * Loads `s1` and answers both requests that a load makes.
+   *
+   * The store reads the session, then reads the curated topic title from the catalogue. It does not
+   * await the second request, so this helper flushes it. [title] of `null` answers 404, which is
+   * what a topic that a curator unpublished returns.
+   */
+  async function loadSession(
+    response: SessionView = view,
+    title: string | null = 'Quantum Physics',
+  ): Promise<void> {
     const loaded = store.load('s1');
     http.expectOne('/api/sessions/s1').flush(response);
     await loaded;
+    flushTopic(response.topicSlug, title);
+    await tick();
+  }
+
+  function flushTopic(slug: string, title: string | null): void {
+    const request = http.expectOne(`/api/catalog/topics/${slug}`);
+    if (title === null) {
+      request.flush({ code: 'NOT_FOUND', message: 'no such topic' }, { status: 404, statusText: '' });
+    } else {
+      request.flush({ slug, title, category: 'Physics', summary: 'A summary.' });
+    }
   }
 
   it('loads a session and exposes the current body', async () => {
@@ -361,6 +382,7 @@ describe('SessionStore', () => {
     const reloading = store.load('s1');
     http.expectOne('/api/sessions/s1').flush(view);
     await reloading;
+    flushTopic(view.topicSlug, 'Quantum Physics');
 
     let releaseCurrent!: () => void;
     const currentGate = new Promise<void>((resolve) => (releaseCurrent = resolve));
@@ -501,6 +523,7 @@ describe('SessionStore', () => {
     const retrying = store.retry();
     http.expectOne('/api/sessions/s1').flush(viewAfterExplain);
     await retrying;
+    flushTopic(view.topicSlug, 'Quantum Physics');
 
     expect(streamCalls.length).toBe(1);
     expect(store.currentNodeId()).toBe('n4');
@@ -522,6 +545,56 @@ describe('SessionStore', () => {
     expect(store.session()).toBeNull();
     expect(store.currentBody()).toBe('');
     expect(store.loading()).toBe(false);
+  });
+
+  it('reads the curated topic title from the catalogue', async () => {
+    // `SessionView` carries the slug only. The reader rebuilt a title from it, and
+    // `GET /api/catalog/topics/{slug}` — which holds the curated title — had no client at all.
+    // "Evolution by Natural Selection" is one of the two live titles that a mechanical transform of
+    // the slug gets wrong.
+    await loadSession(
+      { ...view, topicSlug: 'evolution-by-natural-selection' },
+      'Evolution by Natural Selection',
+    );
+
+    expect(store.topicTitle()).toBe('Evolution by Natural Selection');
+  });
+
+  it('leaves the title unset when the catalogue does not answer for the topic', async () => {
+    // A curator can unpublish a topic. The catalogue then answers 404, while a session on that
+    // topic still loads: `SessionService` enforces publication in `create` and not in `explain`.
+    // The reader must stay usable, so the store records no title and reports no error.
+    await loadSession(view, null);
+
+    expect(store.topicTitle()).toBeNull();
+    expect(store.error()).toBeNull();
+    expect(store.currentBody()).toBe('The pillars of modern physics…');
+  });
+
+  it('does not put one session title under the next session', async () => {
+    // Angular reuses the reader when only the route parameter changes, so a second load can start
+    // before the first title request returns.
+    const first = store.load('s1');
+    http.expectOne('/api/sessions/s1').flush(view);
+    await first;
+    const staleTitle = http.expectOne('/api/catalog/topics/quantum-physics');
+
+    const second = store.load('s2');
+    http.expectOne('/api/sessions/s2').flush({ ...view, sessionId: 's2', topicSlug: 'thermodynamics' });
+    await second;
+    flushTopic('thermodynamics', 'Thermodynamics');
+    await tick();
+
+    // The first request answers last. Its answer belongs to a session the learner has left.
+    staleTitle.flush({
+      slug: 'quantum-physics',
+      title: 'Quantum Physics',
+      category: 'Physics',
+      summary: 'A summary.',
+    });
+    await tick();
+
+    expect(store.topicTitle()).toBe('Thermodynamics');
   });
 
   it('logs an event name it does not know instead of dropping it', async () => {
@@ -589,6 +662,7 @@ describe('SessionStore', () => {
     const retrying = store.retry();
     http.expectOne('/api/sessions/s1').flush(view);
     await retrying;
+    flushTopic(view.topicSlug, 'Quantum Physics');
 
     expect(store.error()).toBeNull();
     expect(store.currentBody()).toBe('The pillars of modern physics…');

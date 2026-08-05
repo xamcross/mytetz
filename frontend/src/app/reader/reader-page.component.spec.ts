@@ -71,12 +71,33 @@ describe('ReaderPageComponent', () => {
 
   afterEach(() => http.verify());
 
-  async function open(response: SessionView = view): Promise<ReaderPageComponent> {
+  /**
+   * Opens the reader on `/learn/s1` and answers both requests that a load makes.
+   *
+   * The store reads the session, then reads the curated topic title from the catalogue. The second
+   * request is not awaited by the store, so it is flushed here. [title] of `null` answers 404,
+   * which is what a topic that a curator unpublished returns.
+   */
+  async function open(
+    response: SessionView = view,
+    title: string | null = 'Quantum Physics',
+  ): Promise<ReaderPageComponent> {
     const component = await harness.navigateByUrl('/learn/s1', ReaderPageComponent);
     http.expectOne('/api/sessions/s1').flush(response);
     await harness.fixture.whenStable();
+    flushTopic(response.topicSlug, title);
+    await harness.fixture.whenStable();
     harness.detectChanges();
     return component;
+  }
+
+  function flushTopic(slug: string, title: string | null): void {
+    const request = http.expectOne(`/api/catalog/topics/${slug}`);
+    if (title === null) {
+      request.flush({ code: 'NOT_FOUND', message: 'no such topic' }, { status: 404, statusText: '' });
+    } else {
+      request.flush({ slug, title, category: 'Physics', summary: 'A summary.' });
+    }
   }
 
   /** Highlights `pillars` in the focus card and presses a verb. */
@@ -191,6 +212,8 @@ describe('ReaderPageComponent', () => {
     harness.routeNativeElement?.querySelector<HTMLButtonElement>('.banner__retry-button')?.click();
     http.expectOne('/api/sessions/s1').flush(view);
     await harness.fixture.whenStable();
+    flushTopic(view.topicSlug, 'Quantum Physics');
+    await harness.fixture.whenStable();
     harness.detectChanges();
 
     expect(signals.length).toBe(1);
@@ -249,6 +272,8 @@ describe('ReaderPageComponent', () => {
       explanations: { ...view.explanations, k1: 'Cells are small.' },
     });
     await harness.fixture.whenStable();
+    flushTopic('microbiology', 'Microbiology');
+    await harness.fixture.whenStable();
     harness.detectChanges();
 
     expect(second).toBe(first);
@@ -277,12 +302,25 @@ describe('ReaderPageComponent', () => {
       // row. Kept as two literal cases rather than a loop over the real file: `topics.json` lives
       // outside `src`, so importing it here would pull a backend resource across the build's own
       // include scope to assert something a fixed pair already pins.
-      await open({ ...view, topicSlug: slug });
+      // The catalogue answers 404, so this exercises the FALLBACK. That is what these two cases
+      // were always about: the derivation has to agree with the curated title, because a session
+      // on an unpublished topic still loads while `GET /api/catalog/topics/{slug}` does not answer.
+      await open({ ...view, topicSlug: slug }, null);
 
       expect(text()).toContain(title);
       expect(text()).not.toContain(naive);
     },
   );
+
+  it('prefers the curated topic title over the one derived from the slug', async () => {
+    // The reader rebuilt the title from the slug and never asked the catalogue for it, while
+    // `GET /api/catalog/topics/{slug}` held the curated title and had no client at all. The
+    // derivation cannot produce this title: it capitalises each word and knows no punctuation.
+    await open({ ...view, topicSlug: 'dna-and-rna' }, 'DNA and RNA');
+
+    expect(text()).toContain('DNA and RNA');
+    expect(text()).not.toContain('Dna and Rna');
+  });
 
   it('shows a dismissible banner with a retry for a failed generation', async () => {
     script = async function* (): AsyncGenerator<ExplainEvent> {

@@ -70,6 +70,22 @@ describe('ApiService', () => {
     await expect(promise).resolves.toEqual(session);
   });
 
+  it('fetches one topic by slug', async () => {
+    const topic = {
+      slug: 'quantum-physics',
+      title: 'Quantum Physics',
+      category: 'Physics',
+      summary: 'A summary.',
+    };
+
+    const promise = service.topic('quantum-physics');
+    const req = http.expectOne('/api/catalog/topics/quantum-physics');
+    expect(req.request.method).toBe('GET');
+    req.flush(topic);
+
+    await expect(promise).resolves.toEqual(topic);
+  });
+
   it('fetches a session by id', async () => {
     const session: SessionView = {
       sessionId: 's1',

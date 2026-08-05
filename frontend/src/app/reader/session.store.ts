@@ -121,6 +121,19 @@ export class SessionStore {
 
   readonly session = signal<SessionView | null>(null);
   readonly currentNodeId = signal<string | null>(null);
+  /**
+   * The curated title of the session's topic, or `null` when the catalogue did not supply one.
+   *
+   * `SessionView` carries the slug and not the title, so the reader used to rebuild the title from
+   * the slug. That rebuild is a guess. It breaks on the first curated title that is not a
+   * mechanical transform of its slug: a proper noun with internal capitals, an acronym, a comma.
+   * `GET /api/catalog/topics/{slug}` holds the real title, and until now it had no client.
+   *
+   * `null` is a real outcome and not only a failure. The catalogue answers 404 for a topic that a
+   * curator unpublished, while a session on that topic still loads. The reader therefore keeps its
+   * slug-derived label as a fallback. See [ReaderPageComponent.topicLabel].
+   */
+  readonly topicTitle = signal<string | null>(null);
   readonly streamingText = signal('');
   readonly isStreaming = signal(false);
   readonly error = signal<ReaderError | null>(null);
@@ -237,18 +250,42 @@ export class SessionStore {
     this.abandon();
     this.sessionId = sessionId;
     this.lastExplain = null;
+    this.topicTitle.set(null);
     this.loading.set(true);
     this.error.set(null);
     try {
       const view = await this.api.session(sessionId);
       this.session.set(view);
       this.currentNodeId.set(view.currentNodeId);
+      // Started here, and deliberately not awaited. The reader can paint from the session alone,
+      // and the label has a fallback, so a second round trip must not delay the first paint.
+      void this.loadTopicTitle(sessionId, view.topicSlug);
     } catch (err) {
       this.session.set(null);
       this.currentNodeId.set(null);
       this.error.set(loadErrorFor(err));
     } finally {
       this.loading.set(false);
+    }
+  }
+
+  /**
+   * Reads the curated title of a topic and records it.
+   *
+   * A failure is not reported to the learner. The session is on screen and it is correct. The
+   * label falls back to the slug, which the reader derived for every session before this method
+   * existed. An error banner over a working reader, for a cosmetic label, is the worse answer.
+   *
+   * [forSessionId] guards a late answer. Angular reuses this component when only the route
+   * parameter changes, so a second `load` can start before this request returns. Without the
+   * guard, the first topic's title lands under the second session's breadcrumb.
+   */
+  private async loadTopicTitle(forSessionId: string, topicSlug: string): Promise<void> {
+    try {
+      const topic = await this.api.topic(topicSlug);
+      if (this.sessionId === forSessionId) this.topicTitle.set(topic.title);
+    } catch {
+      if (this.sessionId === forSessionId) this.topicTitle.set(null);
     }
   }
 

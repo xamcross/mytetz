@@ -202,22 +202,28 @@ export class ReaderPageComponent {
   /**
    * The topic's name for the root crumb and the root rail row.
    *
-   * Derived from the slug because `SessionView` carries only that — the real title lives on
-   * `TopicSummary`, behind a second request this page would otherwise have to make purely for a
-   * label.
+   * The curated title comes first. `SessionStore` reads it from
+   * `GET /api/catalog/topics/{slug}`, which is where the catalogue keeps it. The reader used to
+   * rebuild the title from the slug and never asked that route for it.
    *
-   * Capitalises every word except the short connectives, which is what the catalogue's own titles
-   * do. A plain per-word capitalisation is *not* exact: run over all 29 published slugs in
-   * `topics.json`, it disagrees with the real title on two of them — "Evolution **By** Natural
-   * Selection" against "Evolution by Natural Selection", and "Supply **And** Demand" against
-   * "Supply and Demand". With [MINOR_WORDS] all 29 agree, which is the whole of the current
-   * catalogue, checked rather than assumed.
+   * The rebuild stays as the fallback, because `topicTitle` is legitimately null twice: while the
+   * catalogue request is still in flight, and when it answers 404 for a topic that a curator
+   * unpublished under a session that still loads. A blank crumb in either case is worse than an
+   * approximate one.
    *
-   * This is still a reconstruction and it will drift the moment a curator writes a title that is not
-   * a mechanical transform of its slug (a proper noun's internal capitals, an acronym, a comma). The
-   * fix then is to put `title` on `SessionView`, not to grow the rule.
+   * The fallback capitalises every word except the short connectives, which is what the
+   * catalogue's own titles do. A plain per-word capitalisation is *not* exact: run over all 29
+   * published slugs in `topics.json`, it disagrees with the real title on two of them — "Evolution
+   * **By** Natural Selection" against "Evolution by Natural Selection", and "Supply **And**
+   * Demand" against "Supply and Demand". With [MINOR_WORDS] all 29 agree, which is the whole of
+   * the current catalogue, checked rather than assumed.
+   *
+   * The fallback is still a guess, and it drifts on the first title that is not a mechanical
+   * transform of its slug. It is now a guess of last resort and not the only answer.
    */
-  readonly topicLabel = computed(() => {
+  readonly topicLabel = computed(() => this.store.topicTitle() ?? this.labelFromSlug());
+
+  private labelFromSlug(): string {
     const slug = this.store.session()?.topicSlug ?? '';
     return slug
       .split('-')
@@ -226,7 +232,7 @@ export class ReaderPageComponent {
         index > 0 && MINOR_WORDS.has(part) ? part : part[0].toUpperCase() + part.slice(1),
       )
       .join(' ');
-  });
+  }
 
   constructor() {
     effect(() => {

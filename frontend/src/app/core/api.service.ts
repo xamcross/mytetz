@@ -21,6 +21,18 @@ export class ApiService {
     return firstValueFrom(this.http.get<TopicSummary[]>('/api/catalog/topics', { params }));
   }
 
+  /**
+   * One published topic, by slug.
+   *
+   * The route answers 404 for a topic that does not exist and for one that is not published. It
+   * uses one answer for both on purpose, so that a guessed slug tells a caller nothing.
+   * A session on a topic that a curator later unpublished therefore gets a 404 here, while the
+   * session itself still loads. A caller must handle that.
+   */
+  topic(slug: string): Promise<TopicSummary> {
+    return firstValueFrom(this.http.get<TopicSummary>(`/api/catalog/topics/${slug}`));
+  }
+
   createSession(topicSlug: string): Promise<SessionView> {
     return firstValueFrom(this.http.post<SessionView>('/api/sessions', { topicSlug }));
   }
