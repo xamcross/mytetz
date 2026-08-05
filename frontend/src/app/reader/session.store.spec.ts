@@ -524,6 +524,60 @@ describe('SessionStore', () => {
     expect(store.loading()).toBe(false);
   });
 
+  it('logs an event name it does not know instead of dropping it', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    script = async function* (): AsyncGenerator<ExplainEvent> {
+      yield meta('k4');
+      // A name from a server that is newer than this client. `sse.client.ts` casts the parser
+      // output into the closed union and checks nothing, so the value arrives here unchanged.
+      yield { event: 'rewritten', data: { body: 'the authoritative text' } } as unknown as
+        ExplainEvent;
+      yield delta('The four pillars are…');
+      yield done('k4');
+    };
+
+    await loadSession();
+    const explaining = store.explain(span, 'EXPLAIN');
+    await tick();
+    http.expectOne('/api/sessions/s1').flush(viewAfterExplain);
+    await explaining;
+
+    // `GraphChunk.Superseded` is a chunk and not a flag on `done`, and the stated reason is that
+    // "an unhandled event type is a visible gap; an unread boolean is not". A silent drop makes
+    // that argument false for the only consumer there is.
+    expect(warn).toHaveBeenCalled();
+    expect(String(warn.mock.calls[0][0])).toContain('rewritten');
+
+    // The unknown event must not stop the events that follow it, and must not be mistaken for one.
+    expect(store.error()).toBeNull();
+    expect(store.currentNodeId()).toBe('n4');
+    warn.mockRestore();
+  });
+
+  it('reports the server account of a load failure, and offers no retry for one the server calls unretryable', async () => {
+    const loaded = store.load('s1');
+    http.expectOne('/api/sessions/s1').flush(
+      {
+        code: 'CORRUPT_SESSION',
+        message: "this session's stored data is inconsistent and cannot be read",
+      },
+      { status: 500, statusText: 'Server Error' },
+    );
+    await loaded;
+
+    // `ErrorMapping.kt` raises CORRUPT_SESSION as a 500 for one reason: no retry fixes it, and an
+    // operator must look at the session. The load path answered every non-404 with a connectivity
+    // message and a retry button. Each press made another 500 and another log line.
+    expect(store.error()?.code).toBe('CORRUPT_SESSION');
+    expect(store.error()?.message).toBe(
+      "this session's stored data is inconsistent and cannot be read",
+    );
+    expect(store.error()?.retryable).toBe(false);
+
+    // `retry()` must send no request. `afterEach` calls `http.verify()`, which fails on one.
+    await store.retry();
+  });
+
   it('offers a retry when the session fails to load for any other reason', async () => {
     const loaded = store.load('s1');
     http.expectOne('/api/sessions/s1').flush(null, { status: 500, statusText: 'Server Error' });

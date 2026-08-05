@@ -72,6 +72,24 @@ const RETRYABLE_CODES: ReadonlySet<string> = new Set([
   'STREAM_TRUNCATED',
 ]);
 
+/**
+ * The load-path codes for which the same `GET /api/sessions/{id}` can succeed on a second attempt.
+ *
+ * The set is small because the endpoint answers few codes. `INTERNAL` is the catch-all in
+ * `ErrorMapping.kt`. A database that is briefly unreachable arrives under it, and the same read
+ * then works a moment later. The GET is idempotent and calls no model, so a retry is cheap.
+ *
+ * `CORRUPT_SESSION` is deliberately absent, and it is the reason this set exists. The backend
+ * raises it for a stored session that no longer describes a tree. Its whole justification is that
+ * no retry fixes it and that an operator must look at the document. A "Try again" button on it
+ * makes another 500 and another log line that nobody reads.
+ *
+ * An allowlist, not a denylist, and for the same reason as [RETRYABLE_CODES] above. A new server
+ * code arrives here as "not retryable", which shows the learner the server message and no button.
+ * The opposite default offers a button for a refusal that no button can clear.
+ */
+const RETRYABLE_LOAD_CODES: ReadonlySet<string> = new Set(['INTERNAL']);
+
 /** What `retry()` should re-issue, or `null` when the last failure was a load. */
 interface LastExplain {
   span: SpanPayload;
@@ -320,6 +338,25 @@ export class SessionStore {
             break;
           case 'meta':
             break;
+          default: {
+            // `sse.client.ts` casts the parser output into `ExplainEvent` and checks nothing, so an
+            // event name that this client does not know arrives here. TypeScript narrows `event` to
+            // `never`, because the union says that this cannot happen.
+            //
+            // `GraphChunk.Superseded` is a chunk and not a flag on `done` for one stated reason:
+            // "an unhandled event type is a visible gap; an unread boolean is not". That holds for
+            // a sealed `when` in Kotlin. For this consumer it holds only if this branch exists.
+            //
+            // The branch logs and continues. It does not throw. A server that adds an event must
+            // not break a client that predates it, and the events that follow are still valid.
+            // `streamedAnything` stays false, because this branch rendered nothing.
+            const unrecognised: { event: string } = event;
+            console.warn(
+              `[SessionStore] ignored an unknown explain event: "${unrecognised.event}". ` +
+                'The server sends an event that this client does not know.',
+            );
+            break;
+          }
         }
       }
 
@@ -512,11 +549,28 @@ function loadErrorFor(err: unknown): ReaderError {
     };
   }
 
+  // The server described the failure, so the learner reads that description. The explain path
+  // already does this. The load path did not: it replaced every message with the connectivity
+  // sentence below and set `retryable` to true. A CORRUPT_SESSION therefore became "check your
+  // connection", under a button that the backend says can fix nothing.
+  if (body !== null) {
+    return {
+      kind: 'load',
+      code: body.code,
+      message: body.message,
+      retryAfter: body.retryAfter ?? null,
+      discardedText: false,
+      retryable: RETRYABLE_LOAD_CODES.has(body.code),
+    };
+  }
+
+  // No `ApiError` in the response. The request did not reach this API, or something in front of it
+  // answered. A connectivity message is honest here, and only here.
   return {
     kind: 'load',
-    code: body?.code ?? 'LOAD_FAILED',
+    code: 'LOAD_FAILED',
     message: 'Could not load this session. Check your connection and try again.',
-    retryAfter: body?.retryAfter ?? null,
+    retryAfter: null,
     discardedText: false,
     retryable: true,
   };
