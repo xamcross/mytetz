@@ -38,7 +38,40 @@ object PromptBuilder {
      * content key, so bumping invalidates every downstream explanation: old documents
      * orphan harmlessly and new ones regenerate lazily. Reverting the string rolls back.
      */
-    const val VERSION: String = "v1"
+    const val VERSION: String = "v2"
+
+    /**
+     * Puts a stored value on one line.
+     *
+     * Every interpolated value below reaches this prompt from a stored explanation body. A body is
+     * model output. `ExplanationValidator` caps its length and rejects internal tags, and it does
+     * not reject a newline.
+     *
+     * The prompt has a line structure, and that structure carries meaning. An ancestor block is a
+     * numbered line and then one indented line. A newline inside a body ends the indented line, so
+     * the text after it starts at column 0 and reads as a new block. The model then sees ancestry
+     * that the learner does not have.
+     *
+     * This collapses each run of whitespace to one space, so no stored value can make a line.
+     */
+    private fun flattened(value: String): String = value.replace(WHITESPACE_RUN, " ").trim()
+
+    /**
+     * Puts a stored value inside quotation marks that it cannot leave.
+     *
+     * The span and the sentence are delimited by `"` in the lines below. A `"` inside the value
+     * closes the delimiter early, and the rest of the value then sits in the prompt as though this
+     * file had written it. A quotation mark in an explanation is ordinary — "the so-called "wave
+     * function"" is the shape the model produces without any prompting.
+     *
+     * The escape is the JSON one, so the words are unchanged and a reader can see where the value
+     * starts and stops. The backslash is escaped first, or escaping the quote would produce a
+     * second unescaped backslash before it.
+     */
+    private fun quoted(value: String): String =
+        "\"" + flattened(value).replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+
+    private val WHITESPACE_RUN = Regex("\\s+")
 
     fun system(): String = """
         You are an expert teacher writing an interactive learning workbook.
@@ -54,15 +87,19 @@ object PromptBuilder {
         5. If you genuinely do not know, say so in one sentence rather than inventing detail.
     """.trimIndent()
 
+    /**
+     * Every value below goes through [flattened] or [quoted]. Both are bounds on stored model
+     * output, and neither changes the words. See the two helpers for what each one prevents.
+     */
     fun user(context: PromptContext): String = buildString {
-        appendLine("Topic: ${context.topicTitle}")
+        appendLine("Topic: ${flattened(context.topicTitle)}")
 
         if (context.ancestors.isNotEmpty()) {
             appendLine()
             appendLine("What the learner has read so far, from the top down:")
             context.ancestors.forEachIndexed { index, ancestor ->
-                appendLine("${index + 1}. They highlighted \"${ancestor.span}\" and read:")
-                appendLine("   ${ancestor.body}")
+                appendLine("${index + 1}. They highlighted ${quoted(ancestor.span)} and read:")
+                appendLine("   ${flattened(ancestor.body)}")
             }
         }
 
@@ -72,8 +109,8 @@ object PromptBuilder {
             // naturally: "microscopic realm" resolves differently depending on whether its
             // sentence concerned scale or measurement, and that is true when zooming out or
             // drawing a diagram as much as when explaining.
-            appendLine("They have now highlighted: \"${context.span}\"")
-            appendLine("It appeared in this sentence: \"${context.spanSentence}\"")
+            appendLine("They have now highlighted: ${quoted(context.span)}")
+            appendLine("It appeared in this sentence: ${quoted(context.spanSentence)}")
             appendLine()
         }
         appendLine(instructionFor(context))
@@ -99,6 +136,6 @@ object PromptBuilder {
                 "or a different entry point. Do not repeat the wording they have already read."
 
         Verb.VISUALIZE ->
-            "Describe what a diagram of \"${context.span}\" would show."
+            "Describe what a diagram of ${quoted(context.span)} would show."
     }
 }
