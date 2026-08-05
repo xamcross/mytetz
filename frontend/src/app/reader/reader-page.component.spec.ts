@@ -221,15 +221,68 @@ describe('ReaderPageComponent', () => {
     await tick();
   });
 
-  it('renders the topic title the catalogue uses, not a word-by-word capitalisation of the slug', async () => {
-    // `evolution-by-natural-selection` and `supply-and-demand` are both real, published slugs; the
-    // titles in topics.json are "Evolution by Natural Selection" and "Supply and Demand". A naive
-    // per-word capitalisation renders "By" and "And" in the root crumb and the root rail row.
-    await open({ ...view, topicSlug: 'evolution-by-natural-selection' });
+  it("drops the previous session's streamed prose when the route moves to another session", async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    script = async function* () {
+      yield {
+        event: 'delta',
+        data: { t: 'Half an answer about session one.' },
+      } satisfies ExplainEvent;
+      await held;
+      yield { event: 'done', data: { contentKey: 'k2', grounded: true } } satisfies ExplainEvent;
+    };
+    const first = await open();
 
-    expect(text()).toContain('Evolution by Natural Selection');
-    expect(text()).not.toContain('Evolution By Natural Selection');
+    highlightAndExplain();
+    await tick();
+    harness.detectChanges();
+    expect(text()).toContain('Half an answer about session one.');
+
+    // A parameter-only route change: Angular reuses the component, so nothing is destroyed and the
+    // store survives with another session's generation still streaming into it.
+    const second = await harness.navigateByUrl('/learn/s2', ReaderPageComponent);
+    http.expectOne('/api/sessions/s2').flush({
+      ...view,
+      sessionId: 's2',
+      topicSlug: 'microbiology',
+      explanations: { ...view.explanations, k1: 'Cells are small.' },
+    });
+    await harness.fixture.whenStable();
+    harness.detectChanges();
+
+    expect(second).toBe(first);
+    expect(text()).toContain('Cells are small.');
+    // The half-answer belongs to a session the learner has left; under this session's breadcrumb it
+    // is simply another topic's text.
+    expect(text()).not.toContain('Half an answer about session one.');
+    // And the new session is not left claiming to be generating something.
+    expect(text()).not.toContain('Generating…');
+
+    // The abandoned generation unwinds last. It must not re-fetch s1 — afterEach's http.verify()
+    // is what proves that.
+    release();
+    await tick();
   });
+
+  it.each([
+    ['evolution-by-natural-selection', 'Evolution by Natural Selection', 'Evolution By Natural'],
+    ['supply-and-demand', 'Supply and Demand', 'Supply And Demand'],
+  ])(
+    'renders %s as the catalogue titles it, not a word-by-word capitalisation',
+    async (slug, title, naive) => {
+      // The only two of the 29 published slugs in `backend/catalog/.../topics.json` where a plain
+      // per-word capitalisation disagrees with the curated title — established by running both
+      // transforms over the whole file, not by eye. Both appear in the root crumb and the root rail
+      // row. Kept as two literal cases rather than a loop over the real file: `topics.json` lives
+      // outside `src`, so importing it here would pull a backend resource across the build's own
+      // include scope to assert something a fixed pair already pins.
+      await open({ ...view, topicSlug: slug });
+
+      expect(text()).toContain(title);
+      expect(text()).not.toContain(naive);
+    },
+  );
 
   it('shows a dismissible banner with a retry for a failed generation', async () => {
     script = async function* (): AsyncGenerator<ExplainEvent> {

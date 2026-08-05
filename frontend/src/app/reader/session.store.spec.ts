@@ -342,6 +342,55 @@ describe('SessionStore', () => {
     expect(store.currentNodeId()).toBe('n1');
   });
 
+  it('does not let an abandoned generation clear the streaming flag for the one that replaced it', async () => {
+    let releaseAbandoned!: () => void;
+    const abandonedGate = new Promise<void>((resolve) => (releaseAbandoned = resolve));
+    script = async function* () {
+      yield delta('session one');
+      await abandonedGate;
+      yield done('k4');
+    };
+
+    await loadSession();
+    const abandoned = store.explain(span, 'EXPLAIN');
+    await tick();
+
+    // Loading a session abandons the generation in flight, but the abandoned generator only unwinds
+    // when its own fetch gets round to rejecting — which can be long after the learner has started
+    // something else in the same, reused component.
+    const reloading = store.load('s1');
+    http.expectOne('/api/sessions/s1').flush(view);
+    await reloading;
+
+    let releaseCurrent!: () => void;
+    const currentGate = new Promise<void>((resolve) => (releaseCurrent = resolve));
+    script = async function* () {
+      yield delta('session two');
+      await currentGate;
+      yield done('k4');
+    };
+    const current = store.explain(span, 'EXPLAIN');
+    await tick();
+    expect(store.isStreaming()).toBe(true);
+
+    releaseAbandoned();
+    await tick();
+
+    // The property: the dead generation's `finally` must not report "nothing is streaming" over a
+    // live one. It would leave the card's caret and its disabled verbs contradicting each other
+    // while text was still arriving.
+    expect(store.isStreaming()).toBe(true);
+    expect(store.streamingText()).toBe('session two');
+
+    releaseCurrent();
+    await tick();
+    http.expectOne('/api/sessions/s1').flush(viewAfterExplain);
+    await current;
+    await abandoned;
+
+    expect(store.isStreaming()).toBe(false);
+  });
+
   it('does not claim prose was discarded when the failure landed before any arrived', async () => {
     script = async function* (): AsyncGenerator<ExplainEvent> {
       yield meta('k4');

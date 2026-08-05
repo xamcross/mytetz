@@ -155,6 +155,25 @@ describe('FocusCardComponent', () => {
     expect(requests).toEqual([]);
   });
 
+  it('recovers on the next selection when the rewritten text is put back', () => {
+    (bodyEl().firstChild as Text).data = 'Los pilares de la física moderna.';
+    select(4, 11);
+    expect(verbButton('EXPLAIN').disabled).toBe(true);
+
+    // Turning the translation off, or dismissing the extension, restores the text — and `body()`
+    // has not changed through any of this, so the post-render check is still not dirty. Recovery
+    // therefore has to come from the same selection-time re-check that spotted the problem, which
+    // is a property of where that check lives rather than something the code says anywhere.
+    (bodyEl().firstChild as Text).data = BODY;
+
+    select(4, 11);
+
+    expect(verbButton('EXPLAIN').disabled).toBe(false);
+    expect(fixture.nativeElement.textContent).not.toContain('cannot be highlighted');
+    verbButton('EXPLAIN').click();
+    expect(requests).toEqual([{ span: { text: 'pillars', start: 4, end: 11 }, verb: 'EXPLAIN' }]);
+  });
+
   it('disables every verb while a generation is streaming', async () => {
     select(4, 11);
     fixture.componentRef.setInput('isStreaming', true);

@@ -360,8 +360,14 @@ export class SessionStore {
             };
       this.failStream(failure);
     } finally {
-      if (this.inFlight === controller) this.inFlight = null;
-      this.isStreaming.set(false);
+      // Only if this is still the current generation. An abandoned one unwinds whenever its fetch
+      // gets round to rejecting, which can be after the learner has started something else in the
+      // reused component — and `isStreaming.set(false)` from a generation nobody is watching would
+      // then clear the flag out from under the one they are.
+      if (this.inFlight === controller) {
+        this.inFlight = null;
+        this.isStreaming.set(false);
+      }
     }
   }
 
@@ -375,10 +381,19 @@ export class SessionStore {
    * `CancellationException` so that `SessionService.explain` drops the abandoned node rather than
    * resuming a learner on a branch they walked away from, and that path only runs if the client
    * actually closes the connection.
+   *
+   * Clears the streamed prose too, and does not wait for the abandoned generation's own `finally` to
+   * do it. Half an explanation of *the previous session's* node is not a loading state in the new
+   * one — it is another session's text under this session's breadcrumb, and it would survive until
+   * the next `explain()` happened to overwrite it. `isStreaming` is cleared here for the same
+   * reason: left set, the new session's card reads "Generating…" with its verbs disabled while
+   * nothing is being generated at all.
    */
   private abandon(): void {
     this.inFlight?.abort();
     this.inFlight = null;
+    this.streamingText.set('');
+    this.isStreaming.set(false);
   }
 
   /**
