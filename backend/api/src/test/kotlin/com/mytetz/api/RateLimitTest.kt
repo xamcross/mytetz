@@ -231,6 +231,34 @@ class ClientAddressTest {
     }
 
     @Test
+    fun `a misspelt header name is rejected rather than trusted`() {
+        // The defect this closes. The resolver took any non-blank value as a header name. A
+        // misspelt header is never present on a request, so `ClientAddress.of` fell back to the
+        // socket peer. On this deployment the socket peer is the fly proxy: ONE KEY FOR THE WHOLE
+        // INTERNET. That is the exact collapse that round 2 of Task 1.11 fixed, and one typo in
+        // `fly.toml` re-created it. Nothing validated the name, nothing logged the resolved source,
+        // and there is no metric that would show it.
+        //
+        // The fallback is the code default and not `none`, for the reason `ClientAddress` gives: a
+        // coarse key beats no key. A deployment must not fail to start over a typo either.
+        assertEquals(ClientAddress.FLY_CLIENT_IP, ClientAddressConfig.resolveTrustedHeader("CF-Conecting-IP"))
+        assertEquals(ClientAddress.FLY_CLIENT_IP, ClientAddressConfig.resolveTrustedHeader("X-Forwarded-Fro"))
+        assertEquals(ClientAddress.FLY_CLIENT_IP, ClientAddressConfig.resolveTrustedHeader("Authorization"))
+    }
+
+    @Test
+    fun `a known header name is accepted whatever its case, and resolves to one spelling`() {
+        // HTTP header names are case-insensitive and Ktor's header map is too, so the case a
+        // deployment writes must not decide whether the name is recognised. One canonical spelling
+        // comes back, so the startup log and the configuration cannot disagree about it.
+        assertEquals("CF-Connecting-IP", ClientAddressConfig.resolveTrustedHeader("cf-connecting-ip"))
+        assertEquals(ClientAddress.FLY_CLIENT_IP, ClientAddressConfig.resolveTrustedHeader("FLY-CLIENT-IP"))
+        ClientAddress.KNOWN_HEADERS.forEach { known ->
+            assertEquals(known, ClientAddressConfig.resolveTrustedHeader(known), "$known was rejected")
+        }
+    }
+
+    @Test
     fun `trusting nothing has to be asked for explicitly`() {
         // Still reachable, because a deployment that is behind neither fly nor a proxy it controls
         // genuinely should trust no header. But it is no longer what you get by saying nothing.

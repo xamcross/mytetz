@@ -2,6 +2,9 @@ package com.mytetz.api
 
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.plugins.origin
+import org.slf4j.LoggerFactory
+
+private val log = LoggerFactory.getLogger("com.mytetz.api.RateLimit")
 
 /**
  * Which caller a request is attributed to, for rate limiting.
@@ -57,6 +60,34 @@ object ClientAddress {
     /** Set by fly's proxy, so a caller cannot choose it. See the note above. */
     const val FLY_CLIENT_IP: String = "Fly-Client-IP"
 
+    /** The visitor's real address behind Cloudflare. `fly.toml` names this one. */
+    const val CF_CONNECTING_IP: String = "CF-Connecting-IP"
+
+    /**
+     * The header names that [ClientAddressConfig.CLIENT_IP_HEADER_ENV] accepts.
+     *
+     * The list exists because the resolver used to accept any non-blank value as a header name.
+     * A misspelt name is never present on a request, so the key silently became the socket peer.
+     * On a proxied deployment the socket peer is one address for every visitor, which is the
+     * collapse that round 2 of Task 1.11 fixed. One typo in `fly.toml` re-created it, and nothing
+     * validated the name or reported which source was in use.
+     *
+     * Each entry is a header that a proxy in front of an application sets. Add a name here when a
+     * deployment needs it. That is a one-line change with a test. A resolver that guesses is what
+     * this list replaces.
+     *
+     * The list does not say that a name is trustworthy. `X-Forwarded-For` is on it and a caller can
+     * forge it. [ClientAddress] holds that argument, and the ceiling in [FixedWindowRateLimiter]
+     * bounds what a forged value can do.
+     */
+    val KNOWN_HEADERS: List<String> = listOf(
+        FLY_CLIENT_IP,
+        CF_CONNECTING_IP,
+        "True-Client-IP",
+        "X-Forwarded-For",
+        "X-Real-IP",
+    )
+
     /**
      * Long enough for an IPv6 address with a zone and a port, short enough that a caller cannot use
      * the key itself to spend memory: the resolved value is held in a map for a whole window.
@@ -97,16 +128,42 @@ data class ClientAddressConfig(
          * Unset or blank gives [ClientAddress.FLY_CLIENT_IP] — the coarsest key that is still a key,
          * rather than the socket peer, which is not one. A deployment that is behind neither fly nor
          * a proxy it controls sets `none`.
+         *
+         * A name that is not in [ClientAddress.KNOWN_HEADERS] is rejected, and the default applies.
+         * The resolver logs the rejection at WARN. It does not throw, for the reason that
+         * `GraphConfig.resolveMaxOutputTokens` gives: a typo in a deployment variable must not stop
+         * the server. Here the default is also the safe value, because the alternative is the
+         * socket peer.
+         *
+         * The comparison ignores case, because HTTP header names ignore case. The canonical
+         * spelling comes back, so the startup log and this value cannot disagree.
          */
         internal fun resolveTrustedHeader(raw: String?): String? {
             val value = raw?.trim().orEmpty()
             return when {
                 value.isEmpty() -> ClientAddress.FLY_CLIENT_IP
                 value.equals(NO_TRUSTED_HEADER, ignoreCase = true) -> null
-                else -> value
+                else -> ClientAddress.KNOWN_HEADERS.firstOrNull { it.equals(value, ignoreCase = true) }
+                    ?: ClientAddress.FLY_CLIENT_IP.also {
+                        log.warn(
+                            "$CLIENT_IP_HEADER_ENV names '{}', which is not a header this application " +
+                                "knows. The known names are {}, or '{}' to trust no header. The rate " +
+                                "limiter falls back to '{}'. Check this value: a name that no request " +
+                                "carries makes every visitor share one bucket.",
+                            value,
+                            ClientAddress.KNOWN_HEADERS,
+                            NO_TRUSTED_HEADER,
+                            it,
+                        )
+                    }
             }
         }
     }
+
+    /** One line for the startup log. It says what the rate limiter keys on. */
+    val source: String
+        get() = trustedHeader?.let { "the '$it' header" }
+            ?: "the socket peer, because this deployment trusts no header"
 }
 
 /**

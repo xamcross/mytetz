@@ -40,6 +40,11 @@ fun Application.module(components: Components = Components()) {
     install(AutoHeadResponse)
     installErrorMapping()
 
+    // Which source the rate limiters key on, said once, at startup. It is a security setting and
+    // not a tuning one: a name that no request carries puts every visitor in one bucket. Nothing
+    // reported it before, and there is no metric here that would show it. See `ClientAddress`.
+    log.info("rate limiting keys on {}", components.clientAddresses.source)
+
     val ready = bootstrap(components)
 
     routing {
