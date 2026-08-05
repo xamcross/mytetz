@@ -66,6 +66,7 @@ const VERBS: ReadonlyArray<{ verb: Verb; label: string }> = [
       <p
         #bodyEl
         class="focus__body"
+        data-testid="focus-body"
         (mouseup)="onSelectionChanged()"
         (touchend)="onSelectionChanged()"
       >{{ body() }}</p>
