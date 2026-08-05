@@ -198,6 +198,20 @@ export async function mockExplainRefusal(
 export interface ExplainStream {
   send(frame: string): Promise<void>;
   close(): Promise<void>;
+  /**
+   * Whether the mock's `AbortSignal` listener has actually fired — i.e., whether something really
+   * called `AbortController.abort()` on this request, not merely whether the page looks undisturbed
+   * afterwards. A test asserting only "the page navigated and nothing crashed" cannot tell a real
+   * abort from `DestroyRef.onDestroy(() => this.abandon())` being deleted outright: with that hook
+   * gone, `abort()` never fires, this mock's `pull()` stays blocked forever on an unresolved
+   * `state.waiters` promise, `SessionStore.explain`'s `for await` simply hangs (never throwing,
+   * never touching the DOM again), and `page.goBack()` still completes cleanly because Angular
+   * Router's own deactivation does not depend on that hook. Every assertion available from the DOM
+   * or from `pageerror` alone would pass identically in both cases. This reads the mock's own
+   * `state.aborted` flag, set only inside the `signal.addEventListener('abort', ...)` callback, so a
+   * test can assert the callback actually ran.
+   */
+  aborted(): Promise<boolean>;
 }
 
 /**
@@ -237,13 +251,16 @@ export interface ExplainStream {
  * completes" is not a timing bet — it is true by construction, because the test does not send the
  * rest of the frames until after it has already asserted the partial state.
  *
- * The abort path (Task 1.16's own deferred item) falls out of this for free: the shim listens for the
+ * The abort path (Task 1.16's own deferred item) is wired up here — the shim listens for the
  * caller's `AbortSignal` and errors the stream with a real `DOMException('AbortError')`, exactly what
- * a genuine `fetch` does when its controller aborts mid-response — so navigating away mid-stream in
- * `learn.spec.ts`'s abort test drives the real `fetch`-rejection path through `sse.client.ts` and
- * `SessionStore`, not a fake that completes normally. A stream a test never calls `close()` on models
- * a generation still genuinely in progress from the server's point of view, which is exactly the
- * abort test's setup.
+ * a genuine `fetch` does when its controller aborts mid-response — but wiring it up is not what
+ * proves it ran. A stream a test never calls `close()` on models a generation still genuinely in
+ * progress from the server's point of view, which is exactly the abort test's setup; navigating away
+ * mid-stream then drives the real `fetch`-rejection path through `sse.client.ts` and `SessionStore`,
+ * not a fake that completes normally — but the assertion has to check `ExplainStream.aborted()`
+ * afterwards, not just that the page survived. See that method's own doc comment: with
+ * `SessionStore`'s abort hook deleted outright, this mock's `pull()` would simply hang forever and
+ * every DOM-visible assertion would still pass.
  */
 export async function mockExplainStream(page: Page, sessionId: string): Promise<ExplainStream> {
   await page.addInitScript(
@@ -252,10 +269,14 @@ export async function mockExplainStream(page: Page, sessionId: string): Promise<
         queue: string[];
         closed: boolean;
         waiters: Array<() => void>;
+        // Set only from inside the AbortSignal listener below — see `ExplainStream.aborted`'s doc
+        // comment for why this has to be observable from outside the stream's own closure rather
+        // than a local variable.
+        aborted: boolean;
       }
       const w = window as unknown as { __mtzExplain: Map<string, MockState> };
       w.__mtzExplain = new Map<string, MockState>();
-      w.__mtzExplain.set(sessionId, { queue: [], closed: false, waiters: [] });
+      w.__mtzExplain.set(sessionId, { queue: [], closed: false, waiters: [], aborted: false });
 
       const path = `/api/sessions/${sessionId}/explain`;
       const realFetch = window.fetch.bind(window);
@@ -271,12 +292,11 @@ export async function mockExplainStream(page: Page, sessionId: string): Promise<
 
         const state = w.__mtzExplain.get(sessionId)!;
         const encoder = new TextEncoder();
-        let aborted = false;
 
         const stream = new ReadableStream<Uint8Array>({
           start(controller) {
             signal?.addEventListener('abort', () => {
-              aborted = true;
+              state.aborted = true;
               state.waiters.splice(0).forEach((wake) => wake());
               try {
                 controller.error(new DOMException('The operation was aborted.', 'AbortError'));
@@ -286,10 +306,10 @@ export async function mockExplainStream(page: Page, sessionId: string): Promise<
             });
           },
           async pull(controller) {
-            while (state.queue.length === 0 && !state.closed && !aborted) {
+            while (state.queue.length === 0 && !state.closed && !state.aborted) {
               await new Promise<void>((resolve) => state.waiters.push(resolve));
             }
-            if (aborted) return;
+            if (state.aborted) return;
             if (state.queue.length > 0) {
               controller.enqueue(encoder.encode(state.queue.shift()!));
               return;
@@ -335,6 +355,18 @@ export async function mockExplainStream(page: Page, sessionId: string): Promise<
           if (!state) throw new Error(`no explain mock installed for session "${sessionId}"`);
           state.closed = true;
           state.waiters.splice(0).forEach((wake) => wake());
+        },
+        { sessionId },
+      );
+    },
+    async aborted(): Promise<boolean> {
+      return page.evaluate(
+        ({ sessionId }) => {
+          interface MockState {
+            aborted: boolean;
+          }
+          const w = window as unknown as { __mtzExplain: Map<string, MockState> };
+          return w.__mtzExplain.get(sessionId)?.aborted ?? false;
         },
         { sessionId },
       );

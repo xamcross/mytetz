@@ -59,9 +59,14 @@ test('pick a topic, highlight a phrase, and watch the explanation stream in prog
   await stream.close();
 
   await expect(page.getByText(/subatomic scale/)).toBeVisible();
-  // Scoped to the breadcrumb specifically: the trail rail's own row for this node also has
-  // "fundamental physical theory" in its accessible name (prefixed with its verb, "Explain"), so an
-  // unscoped role query for that text matches both and is ambiguous.
+  // `exact: true` on its own already disambiguates from the trail rail's row for this node — that
+  // button's accessible name is "Explain fundamental physical theory" (verb prefixed onto the span),
+  // which an exact match on "fundamental physical theory" alone does not match. Scoping to `.crumb`
+  // besides is not load-bearing for that; it is here so the assertion reads as "the breadcrumb has
+  // this crumb" rather than "some button somewhere has this exact name", and so it stays correct if
+  // a future change ever makes the two accessible names collide. (An earlier, regex-based version of
+  // this query — `getByRole('button', { name: /fundamental physical theory/ })`, unscoped — did match
+  // both and failed with a real strict-mode violation; switching to `exact: true` was the actual fix.)
   await expect(
     page.locator('.crumb').getByRole('button', { name: 'fundamental physical theory', exact: true }),
   ).toBeVisible();
@@ -205,7 +210,7 @@ test('treats a stream that closes without its terminal event as truncated, not s
   await expect(banner.locator('.banner__retry-button')).toBeVisible();
 });
 
-test('leaves no unhandled failure when the reader navigates away mid-stream', async ({ page }) => {
+test('aborts the in-flight fetch when the reader navigates away mid-stream', async ({ page }) => {
   await stubCatalogueAndSession(page);
   const stream = await mockExplainStream(page, 's1');
 
@@ -217,6 +222,13 @@ test('leaves no unhandled failure when the reader navigates away mid-stream', as
   // SPA navigation — `DestroyRef.onDestroy` fires, `SessionStore.abandon()` runs, and it calls
   // `AbortController.abort()` on the in-flight generation), and the mock's `ReadableStream` reacts to
   // that abort signal exactly as a real network stream would.
+  //
+  // Critical, from review: asserting only that the page survived (no thrown error, the catalogue
+  // still usable) does not distinguish the abort hook actually running from `DestroyRef.onDestroy`
+  // being deleted outright — remove that hook and `abort()` never fires, this mock's `pull()` just
+  // hangs on an unresolved promise forever, and every DOM-visible or `pageerror` assertion below
+  // still passes identically. `stream.aborted()` reads the mock's own flag, set only inside the
+  // `AbortSignal` listener itself, so it can only be true if the abort actually happened.
   const pageErrors: Error[] = [];
   page.on('pageerror', (err) => pageErrors.push(err));
 
@@ -229,8 +241,12 @@ test('leaves no unhandled failure when the reader navigates away mid-stream', as
   await expect(page.locator('.focus__streaming')).toContainText('never gets to finish');
   // The generation is still "in progress" from the server's point of view when the learner leaves —
   // `stream.close()` is deliberately never called.
+  expect(await stream.aborted()).toBe(false);
 
   await page.goBack();
+
+  // The proof this test exists for: the abort path actually ran, not merely that nothing crashed.
+  await expect.poll(() => stream.aborted()).toBe(true);
 
   // Back on the catalogue, with the topic tile live again — the navigation itself completed cleanly.
   await expect(page.getByRole('button', { name: /Quantum Physics/ })).toBeEnabled();
