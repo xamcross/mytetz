@@ -167,7 +167,10 @@ describe('SessionStore', () => {
   function flushTopic(slug: string, title: string | null): void {
     const request = http.expectOne(`/api/catalog/topics/${slug}`);
     if (title === null) {
-      request.flush({ code: 'NOT_FOUND', message: 'no such topic' }, { status: 404, statusText: '' });
+      request.flush(
+        { code: 'NOT_FOUND', message: 'no such topic' },
+        { status: 404, statusText: '' },
+      );
     } else {
       request.flush({ slug, title, category: 'Physics', summary: 'A summary.' });
     }
@@ -580,7 +583,9 @@ describe('SessionStore', () => {
     const staleTitle = http.expectOne('/api/catalog/topics/quantum-physics');
 
     const second = store.load('s2');
-    http.expectOne('/api/sessions/s2').flush({ ...view, sessionId: 's2', topicSlug: 'thermodynamics' });
+    http
+      .expectOne('/api/sessions/s2')
+      .flush({ ...view, sessionId: 's2', topicSlug: 'thermodynamics' });
     await second;
     flushTopic('thermodynamics', 'Thermodynamics');
     await tick();
@@ -603,8 +608,10 @@ describe('SessionStore', () => {
       yield meta('k4');
       // A name from a server that is newer than this client. `sse.client.ts` casts the parser
       // output into the closed union and checks nothing, so the value arrives here unchanged.
-      yield { event: 'rewritten', data: { body: 'the authoritative text' } } as unknown as
-        ExplainEvent;
+      yield {
+        event: 'rewritten',
+        data: { body: 'the authoritative text' },
+      } as unknown as ExplainEvent;
       yield delta('The four pillars are…');
       yield done('k4');
     };

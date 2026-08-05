@@ -78,7 +78,12 @@ export async function stubCatalogueAndSession(
   await page.route('**/api/catalog/topics*', (route) =>
     route.fulfill({
       json: [
-        { slug: 'quantum-physics', title: 'Quantum Physics', category: 'Physics', summary: 'Small things.' },
+        {
+          slug: 'quantum-physics',
+          title: 'Quantum Physics',
+          category: 'Physics',
+          summary: 'Small things.',
+        },
       ],
     }),
   );

@@ -68,7 +68,9 @@ test('pick a topic, highlight a phrase, and watch the explanation stream in prog
   // this query — `getByRole('button', { name: /fundamental physical theory/ })`, unscoped — did match
   // both and failed with a real strict-mode violation; switching to `exact: true` was the actual fix.)
   await expect(
-    page.locator('.crumb').getByRole('button', { name: 'fundamental physical theory', exact: true }),
+    page
+      .locator('.crumb')
+      .getByRole('button', { name: 'fundamental physical theory', exact: true }),
   ).toBeVisible();
 
   // Acceptance criterion 4: the breadcrumb and trail rail grow with each drill-down.
@@ -155,7 +157,9 @@ test('refuses with nothing rendered when the daily quota is exceeded', async ({ 
   expect(sessionGetCount()).toBe(1);
 });
 
-test('discards partial prose and offers a retry when generation fails mid-stream', async ({ page }) => {
+test('discards partial prose and offers a retry when generation fails mid-stream', async ({
+  page,
+}) => {
   await stubCatalogueAndSession(page);
   const stream = await mockExplainStream(page, 's1');
 

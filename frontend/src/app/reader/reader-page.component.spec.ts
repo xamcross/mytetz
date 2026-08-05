@@ -94,7 +94,10 @@ describe('ReaderPageComponent', () => {
   function flushTopic(slug: string, title: string | null): void {
     const request = http.expectOne(`/api/catalog/topics/${slug}`);
     if (title === null) {
-      request.flush({ code: 'NOT_FOUND', message: 'no such topic' }, { status: 404, statusText: '' });
+      request.flush(
+        { code: 'NOT_FOUND', message: 'no such topic' },
+        { status: 404, statusText: '' },
+      );
     } else {
       request.flush({ slug, title, category: 'Physics', summary: 'A summary.' });
     }
