@@ -41,7 +41,14 @@ const PALETTE = {
   errInk2: '#8a4b45',
 } as const;
 
-/** WCAG 2.2 relative luminance. Each channel is normalised, then linearised, then weighted. */
+/**
+ * Relative luminance of a colour in the sRGB colour space. Each channel is normalised, then
+ * linearised, then weighted.
+ *
+ * The branch threshold is 0.04045, the value in the current sRGB specification. WCAG
+ * publishes 0.03928, a value from an older sRGB draft. No channel in this palette falls
+ * between the two values, so both thresholds give the same answer here.
+ */
 function luminance(hex: string): number {
   const h = hex.length === 4 ? `#${hex[1]}${hex[1]}${hex[2]}${hex[2]}${hex[3]}${hex[3]}` : hex;
   const channel = (offset: number): number => {
