@@ -17,9 +17,9 @@ const VERB_LABELS: Readonly<Record<string, string>> = {
  * indentation is what communicates parentage here, and the session's own chronological order does
  * not match the nesting once a learner goes back and branches from an earlier node.
  *
- * ## The drawer under 640px
+ * ## The drawer under 768px
  *
- * The list starts collapsed and a toggle opens it; a media query at 640px hides the toggle and
+ * The list starts collapsed and a toggle opens it; a media query at 768px hides the toggle and
  * forces the list visible, so the collapse only ever exists on narrow screens. Deliberately *not*
  * done by measuring the viewport: reading `window.matchMedia` on the render path is exactly what the
  * design spec rules out so the reader stays server-renderable for spec C. The initial state is
@@ -123,7 +123,7 @@ const VERB_LABELS: Readonly<Record<string, string>> = {
         font-size: 10px;
       }
       .trail__item--current .trail__verb {
-        color: var(--mt-teal-pale);
+        color: var(--mt-chip);
       }
       .trail__span {
         font-family: var(--mt-display);

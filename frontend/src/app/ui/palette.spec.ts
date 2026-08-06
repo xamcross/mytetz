@@ -93,6 +93,7 @@ describe('the Candy palette', () => {
     ['amber ink on the amber fill', PALETTE.amberInk, PALETTE.amber],
     ['error ink on the error surface', PALETTE.errInk, PALETTE.errBg],
     ['error ink 2 on the error surface', PALETTE.errInk2, PALETTE.errBg],
+    ['the eyebrow on the teal trail row', PALETTE.chip, PALETTE.teal],
   ];
 
   for (const [name, fg, bg] of normal) {
@@ -104,7 +105,6 @@ describe('the Candy palette', () => {
   const large: ReadonlyArray<[string, string, string]> = [
     ['the 24px coral wordmark on the bar', PALETTE.coral, PALETTE.surface],
     ['white on the teal trail row', PALETTE.surface, PALETTE.teal],
-    ['the teal-pale eyebrow on the teal trail row', PALETTE.tealPale, PALETTE.teal],
   ];
 
   for (const [name, fg, bg] of large) {
@@ -119,5 +119,7 @@ describe('the Candy palette', () => {
     expect(contrast(PALETTE.faint, PALETTE.page)).toBeLessThan(AA_NORMAL);
     expect(contrast(PALETTE.coral, PALETTE.surface)).toBeLessThan(AA_NORMAL);
     expect(contrast(PALETTE.surface, PALETTE.coral)).toBeLessThan(AA_NORMAL);
+    // teal-pale on teal fails AA for normal text, which is why the eyebrow uses chip instead.
+    expect(contrast(PALETTE.tealPale, PALETTE.teal)).toBeLessThan(AA_NORMAL);
   });
 });

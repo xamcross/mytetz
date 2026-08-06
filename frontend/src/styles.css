@@ -87,6 +87,7 @@
   /* teal — the current position */
   --mt-teal: #0f766e;
   --mt-teal-deep: #0a544e;
+  /* Decoration only. It fails AA as text. Text uses --mt-chip. */
   --mt-teal-pale: #a8d5cd;
 
   /* amber — attention, never action */
