@@ -111,9 +111,22 @@ and loads the topic catalogue. Wait for `true` before you go to phase 3.
 
 ### Step 2.5 — Check the log line for the rate-limit key
 
+The application writes this line one time, at startup.
+
+**In bash.**
+
+```bash
+fly logs --app mytetz --no-tail | grep "rate limiting keys on"
 ```
-fly logs --app mytetz | grep "rate limiting keys on"
+
+**In PowerShell.**
+
+```powershell
+fly logs --app mytetz --no-tail | Select-String "rate limiting keys on"
 ```
+
+The `--no-tail` flag is necessary. Without it, `fly logs` streams only new lines and waits. The
+startup line is already in the past, so the command shows nothing and never stops.
 
 The line must name `CF-Connecting-IP`.
 
