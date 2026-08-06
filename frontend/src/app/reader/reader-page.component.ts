@@ -49,67 +49,106 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
   template: `
     <main class="reader">
       @if (store.loading()) {
-        <p class="status" role="status">Loading your session…</p>
+        <p class="visually-hidden" role="status">Loading your session…</p>
+        <div class="reader__grid">
+          <div class="reader__rail" aria-hidden="true">
+            <span class="mt-eyebrow">Your trail</span>
+          </div>
+          <div class="reader__main">
+            <article class="focus-skeleton mt-card">
+              <span class="mt-eyebrow mt-eyebrow--coral">Writing your first explanation</span>
+              <span class="mt-skeleton line"></span>
+              <span class="mt-skeleton line"></span>
+              <span class="mt-skeleton line line--92"></span>
+              <span class="mt-skeleton line line--78"></span>
+              <span class="mt-skeleton line line--46"></span>
+              <p class="focus-skeleton__note">
+                A few seconds — it is written fresh for you, then kept, so a return here is instant.
+                The highlight unlocks when the text lands.
+              </p>
+            </article>
+          </div>
+        </div>
       } @else if (loadError(); as failure) {
-        <div class="banner banner--error" role="alert">
-          <p class="banner__message">{{ failure.message }}</p>
-          <div class="banner__actions">
-            @if (failure.retryable) {
-              <button type="button" class="banner__retry-button" (click)="store.retry()">
-                Try again
-              </button>
-            }
-            <a class="banner__back" routerLink="/">Back to topics</a>
+        <div class="reader__centre">
+          <div class="mt-card mt-card--error banner banner--error" role="alert">
+            <p class="banner__message">{{ failure.message }}</p>
+            <div class="banner__actions">
+              @if (failure.retryable) {
+                <button
+                  type="button"
+                  class="mt-pill mt-pill--coral banner__retry-button"
+                  (click)="store.retry()"
+                >
+                  Try again
+                </button>
+              }
+              <a class="mt-pill mt-pill--ghost banner__back" routerLink="/">Back to topics</a>
+            </div>
           </div>
         </div>
       } @else if (store.session()) {
-        <app-trail-rail
-          class="reader__rail"
-          [nodes]="store.tree()"
-          [currentNodeId]="store.currentNodeId()"
-          [topicLabel]="topicLabel()"
-          (navigate)="store.goTo($event)"
-        />
-
-        <div class="reader__main">
-          @if (bannerError(); as failure) {
-            <div class="banner banner--error" role="alert">
-              <p class="banner__message">
-                {{ failure.message }}
-                @if (failure.discardedText) {
-                  <span class="banner__detail">
-                    The partial answer on screen was discarded — it was never saved to your session.
-                  </span>
-                }
-                @if (failure.retryAfter !== null) {
-                  <span class="banner__detail">Try again in {{ wait(failure.retryAfter) }}.</span>
-                }
-              </p>
-              <div class="banner__actions">
-                @if (failure.retryable) {
-                  <button type="button" class="banner__retry-button" (click)="store.retry()">
-                    Try again
-                  </button>
-                }
-                <button type="button" class="banner__dismiss" (click)="store.dismissError()">
-                  Dismiss
-                </button>
-              </div>
-            </div>
-          }
-
-          <app-breadcrumb
-            [nodes]="store.breadcrumb()"
+        <div class="reader__grid">
+          <app-trail-rail
+            class="reader__rail"
+            [nodes]="store.tree()"
+            [currentNodeId]="store.currentNodeId()"
             [topicLabel]="topicLabel()"
             (navigate)="store.goTo($event)"
           />
 
-          <app-focus-card
-            [body]="store.currentBody()"
-            [streamingText]="store.streamingText()"
-            [isStreaming]="store.isStreaming()"
-            (explainRequested)="explain($event)"
-          />
+          <div class="reader__main">
+            @if (bannerError(); as failure) {
+              <div class="mt-card mt-card--error banner banner--error" role="alert">
+                <p class="banner__message">
+                  {{ failure.message }}
+                  @if (failure.discardedText) {
+                    <span class="banner__detail">
+                      The partial answer on screen was discarded — it was never saved to your
+                      session.
+                    </span>
+                  }
+                  @if (failure.retryAfter !== null) {
+                    <span class="banner__detail">Try again in {{ wait(failure.retryAfter) }}.</span>
+                  }
+                </p>
+                <div class="banner__actions">
+                  @if (failure.retryable) {
+                    <button
+                      type="button"
+                      class="mt-pill mt-pill--coral banner__retry-button"
+                      (click)="store.retry()"
+                    >
+                      Try again
+                    </button>
+                  }
+                  <button
+                    type="button"
+                    class="mt-pill mt-pill--ghost banner__dismiss"
+                    (click)="store.dismissError()"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            }
+
+            <app-breadcrumb
+              [nodes]="store.breadcrumb()"
+              [topicLabel]="topicLabel()"
+              (navigate)="store.goTo($event)"
+            />
+
+            <app-focus-card
+              [body]="store.currentBody()"
+              [streamingText]="store.streamingText()"
+              [isStreaming]="store.isStreaming()"
+              [step]="step()"
+              [verbLabel]="verbLabel()"
+              [topicLabel]="topicLabel()"
+              (explainRequested)="explain($event)"
+            />
+          </div>
         </div>
       }
     </main>
@@ -118,49 +157,105 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
     `
       :host {
         display: block;
-        font-family: system-ui, sans-serif;
-        color: #1a1a1a;
       }
       .reader {
-        max-width: 1040px;
-        margin: 0 auto;
-        padding: 1.5rem 1rem;
+        padding: 28px 32px;
+      }
+      .visually-hidden {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip-path: inset(50%);
+        white-space: nowrap;
+      }
+      /* One column below 768px. Two above it: the trail rail, then the card. The design's third
+         column at 4a is dropped — every card in it needs a route that does not exist yet. It
+         returns as a third track here and nowhere else. */
+      .reader__grid {
         display: grid;
-        gap: 1.5rem;
+        grid-template-columns: 1fr;
+        gap: 24px;
+        max-width: 1004px;
+        margin: 0 auto;
       }
       .reader__main {
         min-width: 0;
       }
-      .status {
-        color: #555;
+      .reader__centre {
+        max-width: 620px;
+        margin: 48px auto 0;
       }
       .banner {
-        padding: 0.75rem 1rem;
-        border-radius: 6px;
-        margin: 0 0 1rem;
-      }
-      .banner--error {
-        background: #fdecea;
-        color: #7a1f1f;
-        border: 1px solid #f3c6c2;
+        padding: 20px 24px;
+        margin: 0 0 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
       }
       .banner__message {
-        margin: 0 0 0.5rem;
+        margin: 0;
+        font-size: 15px;
+        line-height: 1.55;
+        font-weight: 500;
       }
       .banner__detail {
         display: block;
-        font-weight: 600;
-        margin-top: 0.25rem;
+        font-weight: 700;
+        margin-top: 6px;
       }
       .banner__actions {
         display: flex;
-        gap: 0.75rem;
+        gap: 10px;
         align-items: center;
+        flex-wrap: wrap;
       }
-      @media (min-width: 640px) {
-        .reader {
-          grid-template-columns: minmax(12rem, 16rem) 1fr;
+      .banner__back {
+        text-decoration: none;
+      }
+      .focus-skeleton {
+        border-radius: var(--mt-r-card);
+        box-shadow: var(--mt-lift-card);
+        padding: 32px 36px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .line {
+        display: block;
+        height: 17px;
+        width: 100%;
+      }
+      .line--92 {
+        width: 92%;
+      }
+      .line--78 {
+        width: 78%;
+      }
+      .line--46 {
+        width: 46%;
+      }
+      .focus-skeleton__note {
+        margin: 8px 0 0;
+        font-size: 15px;
+        line-height: 1.6;
+        font-weight: 500;
+        color: var(--mt-muted);
+        max-width: 56ch;
+        text-wrap: pretty;
+      }
+      @media (min-width: 768px) {
+        .reader__grid {
+          grid-template-columns: 260px minmax(0, 720px);
           align-items: start;
+        }
+      }
+      @media (max-width: 767px) {
+        .reader {
+          padding: 20px;
+        }
+        .focus-skeleton {
+          padding: 20px;
         }
       }
     `,
@@ -222,6 +317,36 @@ export class ReaderPageComponent {
    * transform of its slug. It is now a guess of last resort and not the only answer.
    */
   readonly topicLabel = computed(() => this.store.topicTitle() ?? this.labelFromSlug());
+
+  /** Words for the verb of the node in focus. The same map the trail rail uses, kept here rather
+   * than shared: two short maps are cheaper than a `core/` module that one more caller would
+   * justify. Add the third caller and move it. */
+  private static readonly VERB_WORDS: Readonly<Record<string, string>> = {
+    SEED: 'Topic',
+    EXPLAIN: 'Explain',
+    DIG_DEEPER: 'Dig deeper',
+    BROADER_PICTURE: 'Broader picture',
+    SIDE_VIEW: 'Side view',
+    VISUALIZE: 'Diagram',
+  };
+
+  /** The node in focus, or `null` while the session loads. */
+  private readonly currentNode = computed(() => {
+    const id = this.store.currentNodeId();
+    return this.store.tree().find((n) => n.nodeId === id) ?? null;
+  });
+
+  /** The position of the node in focus in the trail, counted from one. */
+  readonly step = computed(() => {
+    const node = this.currentNode();
+    return node === null ? null : node.depth + 1;
+  });
+
+  readonly verbLabel = computed(() => {
+    const node = this.currentNode();
+    if (node === null) return '';
+    return ReaderPageComponent.VERB_WORDS[node.verb] ?? node.verb;
+  });
 
   private labelFromSlug(): string {
     const slug = this.store.session()?.topicSlug ?? '';
