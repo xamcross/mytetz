@@ -15,7 +15,7 @@ import { rootTextMatchesBody, selectionToSpan } from './selection';
 /**
  * The card the learner actually reads, and the only place a selection is turned into a span.
  *
- * ## Two rules about what may live inside `.focus__body`, both load-bearing
+ * ## Three rules about what may live inside `.focus__body`, all load-bearing
  *
  * **Nothing but the body's own characters.** `selectionToSpan` returns offsets into
  * `root.textContent`, and the server validates them with `storedBody.substring(start, end) == text`.
@@ -27,7 +27,8 @@ import { rootTextMatchesBody, selectionToSpan } from './selection';
  *
  * **`streamingText` is rendered somewhere else.** A stream in progress is prose that is not yet in
  * any stored body, so a selection measured across it indexes a string the server has never seen. It
- * gets its own element outside the selectable root, and the verbs are disabled while it runs.
+ * gets its own element outside the selectable root. The picker is not on screen while a stream
+ * runs.
  *
  * **The picker is a sibling of the paragraph, never a child.** The design draws a highlighted
  * phrase with an amber background. A wrapper element inside `.focus__body` would break rule one,
@@ -35,7 +36,7 @@ import { rootTextMatchesBody, selectionToSpan } from './selection';
  * itself sits after the paragraph, inside the card. A test asserts both.
  *
  * Rule one is checked rather than merely documented: `rootTextMatchesBody` runs after every render
- * that changes the body, and a mismatch disables the verbs and says so. That is Task 1.14's
+ * that changes the body, and a mismatch means no picker opens, and says why. That is Task 1.14's
  * invariant given the caller it was written for — a request built from mismatched offsets cannot
  * succeed, so the affordance that builds it should not be live.
  *

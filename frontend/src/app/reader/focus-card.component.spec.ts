@@ -174,16 +174,6 @@ describe('FocusCardComponent', () => {
     expect(requests).toEqual([{ span: { text: 'pillars', start: 4, end: 11 }, verb: 'EXPLAIN' }]);
   });
 
-  it('disables every verb while a generation is streaming', async () => {
-    select(4, 11);
-    fixture.componentRef.setInput('isStreaming', true);
-    fixture.detectChanges();
-    await fixture.whenStable();
-    fixture.detectChanges();
-
-    expect(pickerLive()).toBe(false);
-  });
-
   it('keeps the picker out of the selectable root', () => {
     // The picker's own markup inside `.focus__body` would shift every offset by however many
     // characters it contributes, and every explain would come back SPAN_MISMATCH. The picker is a

@@ -63,9 +63,25 @@ test('pick a topic, highlight a phrase, and watch the explanation stream in prog
   await expect(page.locator('.focus__streaming')).toContainText('microscopic realm');
   await expect(page.locator('.focus__streaming')).not.toContainText('subatomic');
   await expect(page.locator('.focus__caret')).toBeVisible();
-  // The verbs used to be a row that was always on screen and went disabled. They are a picker
-  // now, so "not offered" is "not there". A stream in progress is prose in no stored body, and a
-  // selection over it indexes a string the server has never seen.
+
+  // The click at line 52 already closed the picker through `request()`. An assertion made here,
+  // with no new selection, would pass whether or not the streaming guard works, so it would prove
+  // nothing about that guard.
+  //
+  // This makes a fresh selection while the stream still runs, on a phrase the first selection did
+  // not touch. Reselecting "fundamental physical theory" itself was tried and rejected: the mouse
+  // would press down inside text still held by the earlier, uncleared selection, and a real
+  // browser reads that as the start of a drag of the selected text rather than a new selection —
+  // no `mouseup` ever reaches `.focus__body`, and the assertion below would pass whether or not
+  // the streaming guard works, same as the defect this fix replaces. "Quantum mechanics" sits
+  // outside the earlier selection, so this is an ordinary new drag.
+  //
+  // The phrase sits inside the seed body, which is still on screen and still matches the stored
+  // body, so the selection itself is valid. The picker must still not open: a generation for this
+  // node already runs, and the reader refuses a second generation for the same highlight until
+  // the first one finishes (`SessionStore.explain`'s own guard, named in its doc comment: one
+  // paid generation per highlight, not two).
+  await selectPhrase(page, 'focus-body', 'Quantum mechanics');
   await expect(page.locator('[role="dialog"]')).toHaveCount(0);
 
   await stream.send(sseFrame('delta', { t: CHILD.slice(splitAt) }));
