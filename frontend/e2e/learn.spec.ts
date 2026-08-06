@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import {
   CHILD,
   SEED,
@@ -10,6 +10,17 @@ import {
   sseFrame,
   stubCatalogueAndSession,
 } from './support';
+
+/**
+ * A verb inside the picker, and only inside it.
+ *
+ * The scope is load-bearing. Playwright matches an accessible name as a case-insensitive
+ * substring by default, and the trail rail renders a row whose text also holds "Explain". An
+ * unscoped query is ambiguous the moment a session holds an EXPLAIN node.
+ */
+function verb(page: Page, name: string) {
+  return page.locator('[role="dialog"]').getByRole('button', { name, exact: true });
+}
 
 /**
  * The end-to-end guard on the whole click path Task 1.17 exists to build: catalogue, session
@@ -38,7 +49,7 @@ test('pick a topic, highlight a phrase, and watch the explanation stream in prog
   // Problem C: a real mouse drag over "fundamental physical theory", not a fabricated Range plus a
   // synthetic mouseup — see `selectPhrase`'s doc comment.
   await selectPhrase(page, 'focus-body', 'fundamental physical theory');
-  await page.getByRole('button', { name: 'Explain' }).click();
+  await verb(page, 'Explain it').click();
 
   await stream.send(sseFrame('meta', { contentKey: 'k1', cached: false }));
   // Split where the second half's distinctive phrase begins, so "is this on screen yet" has an
@@ -52,7 +63,10 @@ test('pick a topic, highlight a phrase, and watch the explanation stream in prog
   await expect(page.locator('.focus__streaming')).toContainText('microscopic realm');
   await expect(page.locator('.focus__streaming')).not.toContainText('subatomic');
   await expect(page.locator('.focus__caret')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Explain' })).toBeDisabled();
+  // The verbs used to be a row that was always on screen and went disabled. They are a picker
+  // now, so "not offered" is "not there". A stream in progress is prose in no stored body, and a
+  // selection over it indexes a string the server has never seen.
+  await expect(page.locator('[role="dialog"]')).toHaveCount(0);
 
   await stream.send(sseFrame('delta', { t: CHILD.slice(splitAt) }));
   await stream.send(sseFrame('done', { contentKey: 'k1', grounded: false }));
@@ -103,7 +117,7 @@ test('replaces streamed text with the winning body on a superseded race, not the
   // discarded draft would be examined on prose they never actually saw.
   await openQuantumPhysicsSession(page);
   await selectPhrase(page, 'focus-body', 'fundamental physical theory');
-  await page.getByRole('button', { name: 'Explain' }).click();
+  await verb(page, 'Explain it').click();
 
   await stream.send(sseFrame('meta', { contentKey: 'k1', cached: false }));
   await stream.send(sseFrame('delta', { t: 'A losing draft that must not survive the race. ' }));
@@ -141,7 +155,7 @@ test('refuses with nothing rendered when the daily quota is exceeded', async ({ 
 
   await openQuantumPhysicsSession(page);
   await selectPhrase(page, 'focus-body', 'fundamental physical theory');
-  await page.getByRole('button', { name: 'Explain' }).click();
+  await verb(page, 'Explain it').click();
 
   const banner = page.locator('.banner--error');
   await expect(banner).toContainText("You've reached today's explanation limit.");
@@ -168,7 +182,7 @@ test('discards partial prose and offers a retry when generation fails mid-stream
   // screen), unlike the quota test above.
   await openQuantumPhysicsSession(page);
   await selectPhrase(page, 'focus-body', 'fundamental physical theory');
-  await page.getByRole('button', { name: 'Explain' }).click();
+  await verb(page, 'Explain it').click();
 
   await stream.send(sseFrame('meta', { contentKey: 'k1', cached: false }));
   await stream.send(sseFrame('delta', { t: 'Because ' }));
@@ -200,7 +214,7 @@ test('treats a stream that closes without its terminal event as truncated, not s
   // frame was ever sent. SessionStore's `!sawDone` branch is what this test is for.
   await openQuantumPhysicsSession(page);
   await selectPhrase(page, 'focus-body', 'fundamental physical theory');
-  await page.getByRole('button', { name: 'Explain' }).click();
+  await verb(page, 'Explain it').click();
 
   await stream.send(sseFrame('meta', { contentKey: 'k1', cached: false }));
   await stream.send(sseFrame('delta', { t: 'Because ' }));
@@ -238,7 +252,7 @@ test('aborts the in-flight fetch when the reader navigates away mid-stream', asy
 
   await openQuantumPhysicsSession(page);
   await selectPhrase(page, 'focus-body', 'fundamental physical theory');
-  await page.getByRole('button', { name: 'Explain' }).click();
+  await verb(page, 'Explain it').click();
 
   await stream.send(sseFrame('meta', { contentKey: 'k1', cached: false }));
   await stream.send(sseFrame('delta', { t: 'Some prose that never gets to finish streaming.' }));

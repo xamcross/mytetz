@@ -9,16 +9,8 @@ import {
   viewChild,
 } from '@angular/core';
 import { SpanPayload, Verb } from '../core/models';
+import { PICKER_HEIGHT, PickerAnchor, VerbPickerComponent } from '../ui/verb-picker.component';
 import { rootTextMatchesBody, selectionToSpan } from './selection';
-
-/** The four things a learner can ask of a highlighted phrase. `SEED` and `VISUALIZE` are not
- * offered: the first is the session's own root and the second is not in Slice 1. */
-const VERBS: ReadonlyArray<{ verb: Verb; label: string }> = [
-  { verb: 'EXPLAIN', label: 'Explain' },
-  { verb: 'DIG_DEEPER', label: 'Dig Deeper' },
-  { verb: 'BROADER_PICTURE', label: 'Broader Picture' },
-  { verb: 'SIDE_VIEW', label: 'Side View' },
-];
 
 /**
  * The card the learner actually reads, and the only place a selection is turned into a span.
@@ -37,6 +29,11 @@ const VERBS: ReadonlyArray<{ verb: Verb; label: string }> = [
  * any stored body, so a selection measured across it indexes a string the server has never seen. It
  * gets its own element outside the selectable root, and the verbs are disabled while it runs.
  *
+ * **The picker is a sibling of the paragraph, never a child.** The design draws a highlighted
+ * phrase with an amber background. A wrapper element inside `.focus__body` would break rule one,
+ * so the colour comes from `.focus__body::selection` instead and no node is added. The picker
+ * itself sits after the paragraph, inside the card. A test asserts both.
+ *
  * Rule one is checked rather than merely documented: `rootTextMatchesBody` runs after every render
  * that changes the body, and a mismatch disables the verbs and says so. That is Task 1.14's
  * invariant given the caller it was written for — a request built from mismatched offsets cannot
@@ -50,9 +47,18 @@ const VERBS: ReadonlyArray<{ verb: Verb; label: string }> = [
  */
 @Component({
   selector: 'app-focus-card',
-  imports: [],
+  imports: [VerbPickerComponent],
   template: `
-    <article class="focus">
+    <article #cardEl class="focus mt-card">
+      <div class="focus__head">
+        <span class="mt-eyebrow mt-eyebrow--coral">{{ eyebrow() }}</span>
+        @if (isStreaming()) {
+          <span class="focus__track" role="presentation"><span class="focus__band"></span></span>
+        }
+      </div>
+
+      <h1 class="focus__topic">{{ topicLabel() }}</h1>
+
       <!--
         Prettier is held off this element deliberately, and it is not cosmetic: run over it,
         Prettier moves the interpolation onto its own line, the Angular compiler keeps one space per
@@ -82,19 +88,14 @@ const VERBS: ReadonlyArray<{ verb: Verb; label: string }> = [
 
       <p class="focus__hint" [class.focus__hint--warning]="!bodyMatches()">{{ hint() }}</p>
 
-      <div class="focus__verbs" role="group" aria-label="Explain the highlighted phrase">
-        @for (v of verbs; track v.verb) {
-          <button
-            type="button"
-            class="focus__verb"
-            [attr.data-verb]="v.verb"
-            [disabled]="!canExplain()"
-            (click)="request(v.verb)"
-          >
-            {{ v.label }}
-          </button>
-        }
-      </div>
+      @if (pickerSpan(); as chosenSpan) {
+        <app-verb-picker
+          [span]="chosenSpan"
+          [anchor]="anchor()!"
+          (chosen)="request($event)"
+          (dismissed)="close()"
+        />
+      }
     </article>
   `,
   styles: [
@@ -103,55 +104,117 @@ const VERBS: ReadonlyArray<{ verb: Verb; label: string }> = [
         display: block;
       }
       .focus {
-        border: 1px solid #ddd;
-        border-radius: 10px;
-        background: #fff;
-        padding: 1.25rem 1.5rem;
+        position: relative;
+        border-radius: var(--mt-r-card);
+        box-shadow: var(--mt-lift-card);
+        padding: 32px 36px;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+      .focus__head {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      /* The design draws a filled bar with a percentage. No bounded quantity exists to bind one
+         to, and an invented percentage is a promise the app cannot keep. The track appears only
+         while a stream runs, and it says "something is happening" and nothing more. */
+      .focus__track {
+        flex: 1;
+        height: 8px;
+        border-radius: 4px;
+        background: var(--mt-rule);
+        overflow: hidden;
+      }
+      .focus__band {
+        display: block;
+        width: 40%;
+        height: 100%;
+        border-radius: 4px;
+        background: var(--mt-amber);
+        animation: focus-travel 1.6s ease-in-out infinite;
+      }
+      @keyframes focus-travel {
+        0% {
+          transform: translateX(-100%);
+        }
+        100% {
+          transform: translateX(250%);
+        }
+      }
+      .focus__topic {
+        font-size: 26px;
       }
       .focus__body {
         margin: 0;
-        font-size: 1.05rem;
+        font-size: 19px;
         line-height: 1.65;
+        font-weight: 500;
+        color: var(--mt-prose);
+        max-width: 62ch;
         white-space: pre-wrap;
+        text-wrap: pretty;
+      }
+      /* The design draws the highlighted phrase in amber. A wrapper element inside this paragraph
+         would shift every offset and break the invariant above, so the native selection carries
+         the colour instead. No node is added. */
+      .focus__body::selection {
+        background: var(--mt-amber);
+        color: var(--mt-amber-ink);
       }
       .focus__streaming {
-        margin: 1rem 0 0;
-        font-size: 1.05rem;
+        margin: 0;
+        padding: 16px;
+        font-size: 19px;
         line-height: 1.65;
+        font-weight: 500;
+        color: var(--mt-prose);
+        max-width: 62ch;
         white-space: pre-wrap;
-        color: #333;
-        border-left: 3px solid #1a56db;
-        padding-left: 0.75rem;
+        background: var(--mt-sunk);
+        border-radius: var(--mt-r-panel);
+        border-left: 3px solid var(--mt-coral-press);
         user-select: none;
       }
       .focus__caret {
-        color: #1a56db;
+        color: var(--mt-coral-text);
+        animation: focus-blink 1s step-end infinite;
+      }
+      @keyframes focus-blink {
+        0%,
+        49% {
+          opacity: 1;
+        }
+        50%,
+        100% {
+          opacity: 0;
+        }
       }
       .focus__hint {
-        margin: 1rem 0 0.5rem;
-        font-size: 0.85rem;
-        color: #666;
+        margin: 0;
+        font-size: 13px;
+        font-weight: 700;
+        color: var(--mt-muted);
       }
       .focus__hint--warning {
-        color: #7a1f1f;
-        font-weight: 600;
+        padding: 14px 16px;
+        border-radius: var(--mt-r-panel);
+        background: var(--mt-err-bg);
+        border: var(--mt-border-w) solid var(--mt-err-border);
+        color: var(--mt-err-ink);
       }
-      .focus__verbs {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 0.5rem;
-      }
-      .focus__verb {
-        padding: 0.45rem 0.9rem;
-        border: 1px solid #ccd;
-        border-radius: 999px;
-        background: #f7f8ff;
-        cursor: pointer;
-        font-size: 0.9rem;
-      }
-      .focus__verb:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
+      @media (max-width: 767px) {
+        .focus {
+          padding: 20px;
+        }
+        .focus__topic {
+          font-size: 22px;
+        }
+        .focus__body,
+        .focus__streaming {
+          font-size: 17px;
+        }
       }
     `,
   ],
@@ -160,19 +223,26 @@ export class FocusCardComponent {
   readonly body = input.required<string>();
   readonly streamingText = input.required<string>();
   readonly isStreaming = input.required<boolean>();
+  /** The step number and the verb of the node in focus, for the eyebrow. The reader page supplies
+   * both from `NodeView`. */
+  readonly step = input<number | null>(null);
+  readonly verbLabel = input<string>('');
+  /** The topic's name, which the design draws as the card's own heading. It sits outside
+   * `.focus__body`, so it contributes no character to the string the offsets index. */
+  readonly topicLabel = input<string>('');
 
   /** The span *and* the verb, together: the learner picks the phrase first and the verb second, and
    * the request needs both. A bare `spanSelected` output would leave the page holding one half of a
    * request whose other half lives on buttons it does not own. */
   readonly explainRequested = output<{ span: SpanPayload; verb: Verb }>();
 
-  readonly verbs = VERBS;
-
   // `#bodyEl`, not `#body`: a template reference variable shadows the component's own members
   // inside the template, so `#body` would make `{{ body() }}` resolve to the HTMLParagraphElement
   // instead of the input — a compile error here, and a silent shadowing hazard in general.
   private readonly bodyRef = viewChild.required<ElementRef<HTMLElement>>('bodyEl');
+  private readonly cardRef = viewChild.required<ElementRef<HTMLElement>>('cardEl');
   private readonly selectedSpan = signal<SpanPayload | null>(null);
+  protected readonly anchor = signal<PickerAnchor | null>(null);
   /** False when the rendered root and the stored body have diverged — see the class comment. */
   protected readonly bodyMatches = signal(true);
   /** The body the last post-render check ran against, so a change can be told from a re-render. */
@@ -182,14 +252,25 @@ export class FocusCardComponent {
     () => this.bodyMatches() && !this.isStreaming() && this.selectedSpan() !== null,
   );
 
-  readonly hint = computed(() => {
+  /** The span the picker should show, or `null` when the picker must not be on screen at all. */
+  protected readonly pickerSpan = computed(() =>
+    this.canExplain() && this.anchor() !== null ? this.selectedSpan() : null,
+  );
+
+  protected readonly eyebrow = computed(() => {
+    const step = this.step();
+    const verb = this.verbLabel();
+    if (this.isStreaming()) return 'Writing the next explanation';
+    if (step === null || verb === '') return 'Your explanation';
+    return `Step ${step} · ${verb}`;
+  });
+
+  protected readonly hint = computed(() => {
     if (!this.bodyMatches()) {
       return 'This passage cannot be highlighted right now — what is on screen does not match the stored explanation. Reload the page to try again.';
     }
     if (this.isStreaming()) return 'Generating…';
-    const span = this.selectedSpan();
-    if (span === null) return 'Highlight a phrase, then choose how to go deeper.';
-    return `Selected: “${span.text}”`;
+    return 'Highlight a phrase, then choose how to go deeper.';
   });
 
   constructor() {
@@ -205,6 +286,7 @@ export class FocusCardComponent {
           // The offsets held here index the body that was on screen a moment ago. Against the new
           // one they name a phrase the learner never highlighted.
           this.selectedSpan.set(null);
+          this.anchor.set(null);
         }
       },
     });
@@ -216,7 +298,7 @@ export class FocusCardComponent {
    * `getRangeAt(0)` raises `IndexSizeError` when `rangeCount` is 0, which is every mouseup that
    * ends a click rather than a drag — so the count is checked rather than the range assumed.
    * `selectionToSpan` returns `null` for a collapsed, whitespace-only, or escaping selection, and
-   * all of those land in the same place: no span, verbs disabled.
+   * all of those land in the same place: no span, picker closed.
    */
   onSelectionChanged(): void {
     const root = this.bodyRef().nativeElement;
@@ -232,20 +314,69 @@ export class FocusCardComponent {
     this.bodyMatches.set(matches);
     if (!matches) {
       this.selectedSpan.set(null);
+      this.anchor.set(null);
       return;
     }
 
     const selection = window.getSelection();
     if (!selection || selection.rangeCount === 0) {
       this.selectedSpan.set(null);
+      this.anchor.set(null);
       return;
     }
-    this.selectedSpan.set(selectionToSpan(root, selection.getRangeAt(0)));
+
+    const range = selection.getRangeAt(0);
+    const span = selectionToSpan(root, range);
+    this.selectedSpan.set(span);
+    this.anchor.set(span === null ? null : this.anchorFor(range));
+  }
+
+  /**
+   * Where the picker goes, in the card's own coordinates.
+   *
+   * Every read here happens inside the `mouseup`/`touchend` handler that called this method, and
+   * never on the render path. That is what keeps the reader server-renderable.
+   *
+   * jsdom has no layout engine. `Element.getBoundingClientRect` still exists there and returns a
+   * zero rect, but `Range.getClientRects`/`Range.getBoundingClientRect` are not implemented at
+   * all (checked against this project's own jsdom 28, not assumed) — a plain call throws. The
+   * `typeof` checks below stand in for that missing pair so a unit test still gets a zero rect
+   * and the picker still renders, the same outcome the class doc comment for this method
+   * promises. Neither check plays any part in a real browser, where both methods exist.
+   */
+  private anchorFor(range: Range): PickerAnchor {
+    const card = this.cardRef().nativeElement.getBoundingClientRect();
+    const rects = typeof range.getClientRects === 'function' ? range.getClientRects() : null;
+    // The last rect, not the union: a selection that wraps over two lines should open the picker
+    // under where it ended, which is where the learner's pointer is.
+    const rect =
+      rects && rects.length > 0
+        ? rects[rects.length - 1]
+        : typeof range.getBoundingClientRect === 'function'
+          ? range.getBoundingClientRect()
+          : ({ top: 0, right: 0, bottom: 0, left: 0, width: 0, height: 0 } as DOMRect);
+
+    const width = Math.min(520, card.width);
+    const left = Math.max(0, Math.min(rect.left - card.left, card.width - width));
+
+    const below = rect.bottom - card.top + 8;
+    // If the picker would run past the bottom of the card, it goes above the phrase instead.
+    const fits = below + PICKER_HEIGHT <= card.height;
+    const top = fits ? below : Math.max(0, rect.top - card.top - PICKER_HEIGHT - 8);
+
+    return { top, left };
+  }
+
+  /** The learner dismissed the picker. The affordance goes; the selection is theirs to remake. */
+  close(): void {
+    this.selectedSpan.set(null);
+    this.anchor.set(null);
   }
 
   request(verb: Verb): void {
     const span = this.selectedSpan();
     if (span === null || !this.canExplain()) return;
     this.explainRequested.emit({ span, verb });
+    this.close();
   }
 }

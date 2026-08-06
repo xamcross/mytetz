@@ -35,8 +35,10 @@ describe('FocusCardComponent', () => {
   afterEach(() => window.getSelection()?.removeAllRanges());
 
   const bodyEl = (): HTMLElement => fixture.nativeElement.querySelector('.focus__body');
-  const verbButton = (verb: Verb): HTMLButtonElement =>
+  const verbButton = (verb: Verb): HTMLButtonElement | null =>
     fixture.nativeElement.querySelector(`button[data-verb="${verb}"]`);
+  /** True when the picker is on screen, which is the only time a verb can be pressed. */
+  const pickerLive = (): boolean => verbButton('EXPLAIN') !== null;
 
   function select(start: number, end: number): void {
     const range = document.createRange();
@@ -77,8 +79,8 @@ describe('FocusCardComponent', () => {
   it('emits the highlighted span with the verb of the button pressed', () => {
     select(4, 11);
 
-    expect(verbButton('DIG_DEEPER').disabled).toBe(false);
-    verbButton('DIG_DEEPER').click();
+    expect(pickerLive()).toBe(true);
+    verbButton('DIG_DEEPER')!.click();
 
     expect(requests).toEqual([
       { span: { text: 'pillars', start: 4, end: 11 }, verb: 'DIG_DEEPER' },
@@ -87,7 +89,7 @@ describe('FocusCardComponent', () => {
 
   it('clears the span, rather than throwing, on a mouseup that selected nothing', () => {
     select(4, 11);
-    expect(verbButton('EXPLAIN').disabled).toBe(false);
+    expect(pickerLive()).toBe(true);
 
     // A click that ends without a drag — the commonest mouseup there is. `getRangeAt(0)` raises
     // IndexSizeError at rangeCount 0 (verified against this project's own jsdom, not assumed).
@@ -103,13 +105,13 @@ describe('FocusCardComponent', () => {
     fixture.detectChanges();
 
     expect(errors).toEqual([]);
-    expect(verbButton('EXPLAIN').disabled).toBe(true);
+    expect(pickerLive()).toBe(false);
     expect(requests).toEqual([]);
   });
 
   it('drops a selection that no longer indexes the body on screen', async () => {
     select(4, 11);
-    expect(verbButton('EXPLAIN').disabled).toBe(false);
+    expect(pickerLive()).toBe(true);
 
     fixture.componentRef.setInput('body', 'A different explanation entirely.');
     fixture.detectChanges();
@@ -118,10 +120,10 @@ describe('FocusCardComponent', () => {
 
     // The offsets were measured against the previous body. Kept, they would name a phrase of the
     // new one that the learner never highlighted.
-    expect(verbButton('EXPLAIN').disabled).toBe(true);
+    expect(pickerLive()).toBe(false);
   });
 
-  it('disables every verb, and says why, when the rendered root stops matching the body', async () => {
+  it('offers no verb, and says why, when the rendered root stops matching the body', async () => {
     // Exactly the hazard `selectionToSpan`'s doc comment names: something inside the root
     // contributing characters the server's stored string does not have.
     bodyEl().appendChild(document.createTextNode(' Explain'));
@@ -132,9 +134,7 @@ describe('FocusCardComponent', () => {
 
     select(4, 11);
 
-    for (const verb of ['EXPLAIN', 'DIG_DEEPER', 'BROADER_PICTURE', 'SIDE_VIEW'] as Verb[]) {
-      expect(verbButton(verb).disabled).toBe(true);
-    }
+    expect(pickerLive()).toBe(false);
     expect(requests).toEqual([]);
     // Disabling without saying why is its own small "nothing happened".
     expect(fixture.nativeElement.textContent).toContain('cannot be highlighted');
@@ -150,7 +150,7 @@ describe('FocusCardComponent', () => {
 
     select(4, 11);
 
-    expect(verbButton('EXPLAIN').disabled).toBe(true);
+    expect(pickerLive()).toBe(false);
     expect(fixture.nativeElement.textContent).toContain('cannot be highlighted');
     expect(requests).toEqual([]);
   });
@@ -158,7 +158,7 @@ describe('FocusCardComponent', () => {
   it('recovers on the next selection when the rewritten text is put back', () => {
     (bodyEl().firstChild as Text).data = 'Los pilares de la física moderna.';
     select(4, 11);
-    expect(verbButton('EXPLAIN').disabled).toBe(true);
+    expect(pickerLive()).toBe(false);
 
     // Turning the translation off, or dismissing the extension, restores the text — and `body()`
     // has not changed through any of this, so the post-render check is still not dirty. Recovery
@@ -168,9 +168,9 @@ describe('FocusCardComponent', () => {
 
     select(4, 11);
 
-    expect(verbButton('EXPLAIN').disabled).toBe(false);
+    expect(pickerLive()).toBe(true);
     expect(fixture.nativeElement.textContent).not.toContain('cannot be highlighted');
-    verbButton('EXPLAIN').click();
+    verbButton('EXPLAIN')!.click();
     expect(requests).toEqual([{ span: { text: 'pillars', start: 4, end: 11 }, verb: 'EXPLAIN' }]);
   });
 
@@ -181,6 +181,32 @@ describe('FocusCardComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    expect(verbButton('EXPLAIN').disabled).toBe(true);
+    expect(pickerLive()).toBe(false);
+  });
+
+  it('keeps the picker out of the selectable root', () => {
+    // The picker's own markup inside `.focus__body` would shift every offset by however many
+    // characters it contributes, and every explain would come back SPAN_MISMATCH. The picker is a
+    // sibling of the paragraph and never a child of it.
+    select(4, 11);
+
+    expect(pickerLive()).toBe(true);
+    expect(bodyEl().querySelector('[role="dialog"]')).toBeNull();
+    expect(bodyEl().textContent).toBe(BODY);
+    expect(rootTextMatchesBody(bodyEl(), BODY)).toBe(true);
+  });
+
+  it('closes the picker when a stream starts', async () => {
+    select(4, 11);
+    expect(pickerLive()).toBe(true);
+
+    // A stream in progress is prose that is in no stored body yet, so no selection over it can be
+    // turned into a request. The affordance goes away rather than staying on screen and refusing.
+    fixture.componentRef.setInput('isStreaming', true);
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(pickerLive()).toBe(false);
   });
 });

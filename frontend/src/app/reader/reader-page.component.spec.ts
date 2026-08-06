@@ -114,7 +114,10 @@ describe('ReaderPageComponent', () => {
     selection?.addRange(range);
     bodyEl.dispatchEvent(new Event('mouseup'));
     harness.detectChanges();
-    harness.routeNativeElement?.querySelector<HTMLButtonElement>('[data-verb="EXPLAIN"]')?.click();
+    const explain =
+      harness.routeNativeElement?.querySelector<HTMLButtonElement>('[data-verb="EXPLAIN"]');
+    if (!explain) throw new Error('the verb picker did not open for the highlighted phrase');
+    explain.click();
     selection?.removeAllRanges();
   }
 
