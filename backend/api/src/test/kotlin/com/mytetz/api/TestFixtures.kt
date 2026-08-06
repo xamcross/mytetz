@@ -126,7 +126,7 @@ object TestFixtures {
         }
 
         val llm = FakeLlmClient().apply {
-            bodyByPromptSubstring["opening paragraph"] = SEED_BODY
+            bodyByPromptSubstring["1 to 3 sentences that introduce"] = SEED_BODY
             nextBody = CHILD_BODY
         }
 

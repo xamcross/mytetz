@@ -38,7 +38,7 @@ object PromptBuilder {
      * content key, so bumping invalidates every downstream explanation: old documents
      * orphan harmlessly and new ones regenerate lazily. Reverting the string rolls back.
      */
-    const val VERSION: String = "v2"
+    const val VERSION: String = "v3"
 
     /**
      * Puts a stored value on one line.
@@ -117,8 +117,12 @@ object PromptBuilder {
     }.trim()
 
     private fun instructionFor(context: PromptContext): String = when (context.verb) {
+        // "1 to 3 sentences" repeats rule 1 on purpose. The earlier text said "the opening
+        // paragraph", and the model obeyed the task and not the rule: every seed came back longer
+        // than the validator's 600-character limit, so no session could start. A task instruction
+        // that contradicts a rule wins. Keep every instruction inside the length that rule 1 sets.
         Verb.SEED ->
-            "Write the opening paragraph introducing this topic to someone new to it."
+            "Write 1 to 3 sentences that introduce this topic to someone new to it."
 
         Verb.EXPLAIN ->
             "Explain that highlighted phrase as it is used in this context."

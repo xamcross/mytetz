@@ -98,7 +98,7 @@ class SessionServiceTest {
         ids = 0
         llm.calls.clear()
         llm.bodyByPromptSubstring.clear()
-        llm.bodyByPromptSubstring["opening paragraph"] = seedBody
+        llm.bodyByPromptSubstring["1 to 3 sentences that introduce"] = seedBody
         llm.nextBody = childBody
         llm.nextStopReason = "end_turn"
     }

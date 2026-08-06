@@ -200,7 +200,7 @@ class PromptBuilderTest {
 
         // Each verb must ask for its own thing, not a generic "explain this".
         val signature = mapOf(
-            Verb.SEED to "opening paragraph",
+            Verb.SEED to "1 to 3 sentences that introduce",
             Verb.EXPLAIN to "as it is used in this context",
             Verb.DIG_DEEPER to "deeper",
             Verb.BROADER_PICTURE to "Zoom out",
@@ -237,7 +237,7 @@ class PromptBuilderTest {
         )
 
         assertContains(prompt, "Quantum Physics")
-        assertContains(prompt, "opening paragraph")
+        assertContains(prompt, "1 to 3 sentences that introduce")
         assertTrue(prompt.isNotBlank())
 
         // A builder that rendered the span block unconditionally would emit
@@ -351,13 +351,13 @@ class PromptBuilderTest {
         }.digest().joinToString("") { "%02x".format(it) }
 
         assertEquals(
-            // Re-pinned with the VERSION bump to v2 in the final review of slices 0-1. The prompt
-            // text for this fixture is byte-identical: it holds no quotation mark, no backslash and
-            // no newline, so `flattened` and `quoted` do not change it. VERSION is bumped anyway,
-            // because the RULE for rendering a stored value changed and `instructionFor(VISUALIZE)`
-            // is a verb instruction. A document generated before this change came from a
-            // differently shaped prompt, and content addressing has no edit path.
-            "7df5a6f240a05c22c6837314c36a8d4c09443bc99dbd6e633f92779e76ee17e0",
+            // Re-pinned with the VERSION bump to v3. The first deployment found that the SEED
+            // instruction said "the opening paragraph" while rule 1 of the system prompt said
+            // "1 to 3 sentences. Never longer." The model obeyed the task and not the rule, so
+            // every seed came back longer than the validator's 600-character limit and no session
+            // could start. The instruction now repeats rule 1. This test caught the edit and
+            // demanded the bump, which is what it exists for.
+            "6b1d1ce5db8c96cb6fce240c6692afcd4088756b265f9abb3f9f918fd029dd2d",
             digest,
             "The prompt text or VERSION changed. If you edited the prompts: bump PromptBuilder.VERSION " +
                 "and re-pin this digest. If you bumped VERSION: re-pin this digest.",
