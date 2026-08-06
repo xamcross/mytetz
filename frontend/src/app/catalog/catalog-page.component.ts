@@ -18,165 +18,329 @@ import { SessionView, TopicSummary } from '../core/models';
   imports: [],
   template: `
     <main class="catalog">
-      <header class="catalog__header">
-        <h1>mytetz</h1>
-        <p class="catalog__tagline">Pick a topic, highlight anything confusing, keep going.</p>
-      </header>
+      <div class="catalog__inner">
+        <header class="catalog__header">
+          <h1 class="catalog__title">What do you want to understand?</h1>
+        </header>
 
-      <div class="catalog__filter">
-        <label for="topic-filter">Filter topics</label>
-        <input
-          id="topic-filter"
-          type="search"
-          placeholder="Search by title, category, or summary…"
-          [value]="query()"
-          (input)="onQueryInput($event)"
-        />
-      </div>
+        <div class="catalog__filter">
+          <label class="catalog__label" for="topic-filter">Filter topics</label>
+          <div class="catalog__row">
+            <input
+              id="topic-filter"
+              class="catalog__search"
+              type="search"
+              placeholder="Search by title, category, or summary…"
+              [value]="query()"
+              (input)="onQueryInput($event)"
+            />
+            <div class="catalog__cats" role="group" aria-label="Filter by category">
+              @for (c of categories(); track categoryId(c)) {
+                <button
+                  type="button"
+                  class="mt-pill catalog__cat"
+                  [class.mt-pill--teal]="category() === c"
+                  [attr.data-category]="categoryId(c)"
+                  [attr.aria-pressed]="category() === c"
+                  (click)="category.set(c)"
+                >
+                  {{ categoryLabel(c) }}
+                </button>
+              }
+            </div>
+          </div>
+        </div>
 
-      @if (sessionError(); as err) {
-        <p class="banner banner--error" role="alert">
-          {{ err.message }}
-          @if (err.retryLabel) {
-            <span class="banner__retry">{{ err.retryLabel }}</span>
-          }
-          @if (err.reopenSessionId; as sessionId) {
-            <button type="button" class="banner__retry-button" (click)="reopen(sessionId)">
-              Try again
-            </button>
-          }
-        </p>
-      }
-
-      @if (topicsLoading()) {
-        <p class="status" role="status">Loading topics…</p>
-      } @else if (topicsError(); as loadError) {
-        <p class="banner banner--error" role="alert">
-          {{ loadError }}
-          <button type="button" class="banner__retry-button" (click)="loadTopics()">Retry</button>
-        </p>
-      } @else {
-        <ul class="topics" [attr.aria-busy]="tilesLocked()">
-          @for (t of filteredTopics(); track t.slug) {
-            <li class="topic">
+        @if (sessionError(); as err) {
+          <div class="mt-card mt-card--error banner banner--error" role="alert">
+            <p class="banner__message">{{ err.message }}</p>
+            @if (err.retryLabel) {
+              <p class="banner__retry">{{ err.retryLabel }}</p>
+            }
+            @if (err.reopenSessionId; as sessionId) {
               <button
                 type="button"
-                class="topic__button"
-                [attr.data-slug]="t.slug"
-                [disabled]="tilesLocked()"
-                [attr.title]="tileLockedReason()"
-                (click)="open(t)"
+                class="mt-pill mt-pill--coral banner__retry-button"
+                (click)="reopen(sessionId)"
               >
-                <span class="topic__category">{{ t.category }}</span>
-                <h2 class="topic__title">{{ t.title }}</h2>
-                <p class="topic__summary">{{ t.summary }}</p>
-                @if (pendingSlug() === t.slug) {
-                  <span class="topic__pending" aria-live="polite">Starting…</span>
-                }
+                Try again
               </button>
-            </li>
-          } @empty {
-            <li class="topics__empty">
-              @if (query()) {
-                No topics match "{{ query() }}".
-              } @else {
-                No topics available yet.
-              }
-            </li>
-          }
-        </ul>
-      }
+            }
+          </div>
+        }
+
+        @if (topicsLoading()) {
+          <p class="visually-hidden" role="status">Loading topics…</p>
+          <ul class="topics" aria-hidden="true">
+            @for (i of skeletons; track i) {
+              <li class="topic topic--skeleton mt-card">
+                <span class="mt-skeleton bar bar--eyebrow"></span>
+                <span class="mt-skeleton bar bar--title"></span>
+                <span class="mt-skeleton bar bar--line"></span>
+                <span class="mt-skeleton bar bar--line bar--short"></span>
+              </li>
+            }
+          </ul>
+        } @else if (topicsError(); as loadError) {
+          <div class="mt-card mt-card--error banner banner--error" role="alert">
+            <p class="banner__message">{{ loadError }}</p>
+            <button
+              type="button"
+              class="mt-pill mt-pill--coral banner__retry-button"
+              (click)="loadTopics()"
+            >
+              Retry
+            </button>
+          </div>
+        } @else {
+          <ul class="topics" [attr.aria-busy]="tilesLocked()">
+            @for (t of filteredTopics(); track t.slug; let first = $first) {
+              <li class="topic">
+                <button
+                  type="button"
+                  class="mt-card topic__button"
+                  [attr.data-slug]="t.slug"
+                  [disabled]="tilesLocked()"
+                  [attr.title]="tileLockedReason()"
+                  (click)="open(t)"
+                >
+                  <span class="mt-eyebrow topic__category" [class.mt-eyebrow--coral]="first">{{
+                    t.category
+                  }}</span>
+                  <h2 class="topic__title">{{ t.title }}</h2>
+                  <p class="topic__summary">{{ t.summary }}</p>
+                  @if (pendingSlug() === t.slug) {
+                    <span class="mt-chip mt-chip--teal topic__pending" aria-live="polite"
+                      >Starting…</span
+                    >
+                  }
+                </button>
+              </li>
+            } @empty {
+              <li class="topics__empty mt-card mt-card--dashed">
+                @if (query() || category() !== null) {
+                  <h2 class="topics__empty-title">Nothing under that name yet.</h2>
+                  <p class="topics__empty-body">
+                    The catalogue is {{ topics().length }} hand-written topics for now. Try a
+                    shorter word, or clear the category.
+                  </p>
+                  <button type="button" class="mt-pill mt-pill--ghost" (click)="clearFilters()">
+                    Clear the filters
+                  </button>
+                } @else {
+                  <h2 class="topics__empty-title">No topics yet.</h2>
+                  <p class="topics__empty-body">The catalogue is empty. Please come back later.</p>
+                }
+              </li>
+            }
+          </ul>
+        }
+      </div>
     </main>
   `,
   styles: [
     `
       :host {
         display: block;
-        font-family: system-ui, sans-serif;
-        color: #1a1a1a;
-        max-width: 720px;
+      }
+      .catalog {
+        padding: 36px 40px;
+      }
+      .catalog__inner {
+        max-width: 1120px;
         margin: 0 auto;
-        padding: 2rem 1rem;
-      }
-      .catalog__tagline {
-        color: #555;
-      }
-      .catalog__filter {
-        margin: 1.5rem 0;
         display: flex;
         flex-direction: column;
-        gap: 0.25rem;
+        gap: 16px;
       }
-      .catalog__filter input {
-        padding: 0.5rem 0.75rem;
-        border: 1px solid #ccc;
-        border-radius: 6px;
-        font-size: 1rem;
+      .catalog__title {
+        font-size: 34px;
+        line-height: 1.15;
       }
-      .banner {
-        padding: 0.75rem 1rem;
-        border-radius: 6px;
-        margin: 1rem 0;
+      .catalog__label {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip-path: inset(50%);
+        white-space: nowrap;
       }
-      .banner--error {
-        background: #fdecea;
-        color: #7a1f1f;
-        border: 1px solid #f3c6c2;
+      .visually-hidden {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip-path: inset(50%);
+        white-space: nowrap;
       }
-      .banner__retry {
-        display: block;
+      .catalog__row {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+      }
+      .catalog__search {
+        flex: 1;
+        min-width: 0;
+        padding: 14px 18px;
+        border: var(--mt-border-w) solid var(--mt-border);
+        border-radius: var(--mt-r-row);
+        background: var(--mt-surface);
+        color: var(--mt-ink);
+        font: inherit;
+        font-size: 15px;
         font-weight: 600;
-        margin-top: 0.25rem;
       }
-      .banner__retry-button {
-        margin-left: 0.75rem;
+      .catalog__search::placeholder {
+        color: var(--mt-muted);
       }
-      .status {
-        color: #555;
+      .catalog__search:focus-visible {
+        border-color: var(--mt-teal);
+      }
+      .catalog__cats {
+        display: flex;
+        gap: 8px;
       }
       .topics {
         list-style: none;
         padding: 0;
-        margin: 0;
+        margin: 6px 0 0;
         display: grid;
-        gap: 0.75rem;
+        grid-template-columns: 1fr;
+        gap: 16px;
+      }
+      .topic {
+        display: flex;
+        min-width: 0;
       }
       .topic__button {
+        position: relative;
         width: 100%;
         text-align: left;
-        padding: 1rem;
-        border: 1px solid #ddd;
-        border-radius: 8px;
-        background: #fff;
-        cursor: pointer;
+        padding: 20px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        color: inherit;
+        transition:
+          transform 80ms ease-out,
+          box-shadow 80ms ease-out;
+      }
+      .topic__button:hover:not(:disabled) {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 0 var(--mt-border);
+      }
+      .topic__button:active:not(:disabled) {
+        transform: translateY(2px);
+        box-shadow: 0 2px 0 var(--mt-border);
       }
       .topic__button:disabled {
-        opacity: 0.6;
-        cursor: not-allowed;
-      }
-      .topic__category {
-        font-size: 0.75rem;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-        color: #888;
+        opacity: 0.55;
+        box-shadow: none;
       }
       .topic__title {
-        margin: 0.25rem 0;
-        font-size: 1.1rem;
+        font-size: 23px;
       }
       .topic__summary {
         margin: 0;
-        color: #444;
+        font-size: 14px;
+        line-height: 1.55;
+        font-weight: 500;
+        color: var(--mt-muted);
+        text-wrap: pretty;
       }
       .topic__pending {
+        position: absolute;
+        top: 14px;
+        right: 14px;
+      }
+      .topic--skeleton {
+        flex-direction: column;
+        gap: 10px;
+        padding: 20px;
+      }
+      .bar {
         display: block;
-        margin-top: 0.5rem;
-        font-weight: 600;
-        color: #1a56db;
+        height: 14px;
+      }
+      .bar--eyebrow {
+        width: 30%;
+        height: 10px;
+      }
+      .bar--title {
+        width: 60%;
+        height: 22px;
+      }
+      .bar--line {
+        width: 100%;
+      }
+      .bar--short {
+        width: 72%;
       }
       .topics__empty {
-        color: #555;
-        padding: 1rem 0;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 10px;
+        padding: 24px;
+      }
+      .topics__empty-title {
+        font-size: 22px;
+      }
+      .topics__empty-body {
+        margin: 0;
+        font-size: 15px;
+        line-height: 1.55;
+        font-weight: 500;
+        color: var(--mt-muted);
+        max-width: 52ch;
+        text-wrap: pretty;
+      }
+      .banner {
+        padding: 18px 20px;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 10px;
+      }
+      .banner__message,
+      .banner__retry {
+        margin: 0;
+        font-size: 15px;
+        line-height: 1.55;
+        font-weight: 500;
+      }
+      .banner__retry {
+        font-weight: 700;
+      }
+      @media (min-width: 768px) {
+        .topics {
+          grid-template-columns: repeat(2, 1fr);
+        }
+      }
+      @media (min-width: 1120px) {
+        .topics {
+          grid-template-columns: repeat(3, 1fr);
+        }
+      }
+      @media (max-width: 767px) {
+        .catalog {
+          padding: 24px 20px;
+        }
+        .catalog__title {
+          font-size: 26px;
+        }
+        .catalog__row {
+          flex-direction: column;
+          align-items: stretch;
+        }
+        /* A wrapped pill list pushes the first tile below the fold. It scrolls sideways instead. */
+        .catalog__cats {
+          overflow-x: auto;
+          padding-bottom: 4px;
+        }
+        .catalog__cat {
+          flex: none;
+        }
       }
     `,
   ],
@@ -231,27 +395,58 @@ export class CatalogPageComponent implements OnInit {
   });
 
   /**
+   * The chosen category, or `null` for every category.
+   *
+   * `null` rather than the string `'All'`, so a catalogue that one day publishes a category
+   * actually named "All" does not collide with the control that clears the filter.
+   */
+  readonly category = signal<string | null>(null);
+
+  /** `null` first, then each distinct category of the loaded topics, in alphabetical order. */
+  readonly categories = computed<Array<string | null>>(() => {
+    const distinct = [...new Set(this.topics().map((t) => t.category))];
+    distinct.sort((a, b) => a.localeCompare(b));
+    return [null, ...distinct];
+  });
+
+  /**
    * Client-side, deliberately. `?q=` exists on the backend (Task 1.3), but Slice 1's whole
-   * catalogue is ~20 hand-curated topics (design spec §14) — already fetched in full by
-   * `loadTopics()` below — so filtering it locally is instant and issues zero additional
-   * requests, which sidesteps "one request per keystroke against a rate-limited backend"
-   * entirely rather than solving it with debouncing. Matches the backend's own fields (title,
-   * category, summary — `aliases` is not part of the `TopicSummary` the API exposes) with a
-   * case-insensitive substring test, mirroring `TopicRepository.listPublished`'s semantics as
-   * closely as the client-visible fields allow. Revisit if Slice 5 grows the catalogue to the
-   * "few hundred topics" the design spec anticipates — at that size client-side filtering may no
-   * longer be the right trade-off.
+   * catalogue is ~29 hand-curated topics — already fetched in full by `loadTopics()` — so
+   * filtering it locally is instant and issues zero additional requests. The category filter is
+   * free for the same reason: `TopicSummary.category` arrives with every topic.
+   *
+   * The two filters combine with AND. Revisit if Slice 5 grows the catalogue to the few hundred
+   * topics the design spec anticipates.
    */
   readonly filteredTopics = computed(() => {
     const q = this.query().trim().toLowerCase();
-    if (!q) return this.topics();
-    return this.topics().filter(
-      (t) =>
+    const cat = this.category();
+    return this.topics().filter((t) => {
+      if (cat !== null && t.category !== cat) return false;
+      if (q === '') return true;
+      return (
         t.title.toLowerCase().includes(q) ||
         t.category.toLowerCase().includes(q) ||
-        t.summary.toLowerCase().includes(q),
-    );
+        t.summary.toLowerCase().includes(q)
+      );
+    });
   });
+
+  categoryId(category: string | null): string {
+    return category ?? '__all__';
+  }
+
+  categoryLabel(category: string | null): string {
+    return category ?? 'All';
+  }
+
+  /** Six placeholders, which is one full row of the widest grid. */
+  readonly skeletons = [0, 1, 2, 3, 4, 5];
+
+  clearFilters(): void {
+    this.query.set('');
+    this.category.set(null);
+  }
 
   ngOnInit(): void {
     void this.loadTopics();

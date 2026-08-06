@@ -133,7 +133,9 @@ describe('CatalogPageComponent', () => {
     input.dispatchEvent(new Event('input'));
     fixture.detectChanges();
 
-    expect(fixture.nativeElement.textContent as string).toContain('No topics match');
+    // The old copy read `No topics match "{{ query() }}"`. The new copy states how large the
+    // catalogue is, so the check moves to that wording rather than the old one.
+    expect(fixture.nativeElement.textContent as string).toContain('Nothing under that name yet.');
   });
 
   it('creates a session and navigates on selection', async () => {
@@ -453,5 +455,57 @@ describe('CatalogPageComponent', () => {
     fixture.detectChanges();
 
     expect(button.disabled).toBe(false);
+  });
+
+  it('offers one pill per distinct category, with All first', async () => {
+    // The categories are derived from the topics already on screen. The API returns `category`
+    // with every topic, so this costs no request and no backend change.
+    const fixture = TestBed.createComponent(CatalogPageComponent);
+    fixture.detectChanges();
+    http.expectOne('/api/catalog/topics').flush([quantumPhysics, microbiology]);
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const labels = Array.from(fixture.nativeElement.querySelectorAll('button[data-category]')).map(
+      (b) => (b as HTMLElement).textContent?.trim(),
+    );
+
+    expect(labels).toEqual(['All', 'Biology', 'Physics']);
+  });
+
+  it('shows only the topics of the selected category', async () => {
+    const fixture = TestBed.createComponent(CatalogPageComponent);
+    fixture.detectChanges();
+    http.expectOne('/api/catalog/topics').flush([quantumPhysics, microbiology]);
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    fixture.nativeElement.querySelector('button[data-category="Biology"]').click();
+    fixture.detectChanges();
+
+    const text = fixture.nativeElement.textContent as string;
+    expect(text).toContain('Microbiology');
+    expect(text).not.toContain('Quantum Physics');
+  });
+
+  it('combines the category pill with the text query', async () => {
+    const fixture = TestBed.createComponent(CatalogPageComponent);
+    fixture.detectChanges();
+    http.expectOne('/api/catalog/topics').flush([quantumPhysics, microbiology]);
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    fixture.nativeElement.querySelector('button[data-category="Biology"]').click();
+    fixture.detectChanges();
+
+    const input = fixture.nativeElement.querySelector('#topic-filter') as HTMLInputElement;
+    input.value = 'quantum';
+    input.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+
+    // Quantum Physics matches the query but not the category. Microbiology matches the category
+    // but not the query. An AND leaves nothing. An OR would leave both, so this distinguishes the
+    // two rather than merely showing that some filter runs.
+    expect(fixture.nativeElement.querySelectorAll('.topic').length).toBe(0);
   });
 });
