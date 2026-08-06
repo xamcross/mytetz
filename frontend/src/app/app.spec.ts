@@ -1,19 +1,27 @@
-import { TestBed } from '@angular/core/testing';
+import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
-import { provideHttpClientTesting, HttpTestingController } from '@angular/common/http/testing';
+import {
+  HttpTestingController,
+  TestRequest,
+  provideHttpClientTesting,
+} from '@angular/common/http/testing';
 import { provideRouter } from '@angular/router';
 import { App } from './app';
 import { routes } from './app.routes';
 
+/**
+ * The root's own guard.
+ *
+ * The root had almost no test until the Candy work. That gap once let the whole app ship with no
+ * `<router-outlet>`: every component test passed, and the running site showed the scaffold and
+ * nothing else. Playwright found it. These tests are the cheaper guard.
+ */
 describe('App', () => {
   let http: HttpTestingController;
 
   beforeEach(async () => {
     await TestBed.configureTestingModule({
       imports: [App],
-      // `provideRouter` so the root `<router-outlet>` (added alongside this scaffold's health line —
-      // see `app.ts`'s class comment) can construct; nothing here navigates, so the outlet itself
-      // stays empty and every assertion below is unchanged from before the outlet existed.
       providers: [provideHttpClient(), provideHttpClientTesting(), provideRouter(routes)],
     }).compileComponents();
     http = TestBed.inject(HttpTestingController);
@@ -21,21 +29,43 @@ describe('App', () => {
 
   afterEach(() => http.verify());
 
-  it('should create the app', () => {
+  /** Creates the root, answers the health request the way `answer` says, and settles the view. */
+  async function render(answer: (request: TestRequest) => void): Promise<ComponentFixture<App>> {
     const fixture = TestBed.createComponent(App);
     fixture.detectChanges();
-    http.expectOne('/api/health').flush({ status: 'ok', mongo: true });
-    const app = fixture.componentInstance;
-    expect(app).toBeTruthy();
-  });
-
-  it('shows backend status once health resolves', async () => {
-    const fixture = TestBed.createComponent(App);
-    fixture.detectChanges();
-    http.expectOne('/api/health').flush({ status: 'ok', mongo: true });
+    answer(http.expectOne('/api/health'));
     await fixture.whenStable();
     fixture.detectChanges();
-    const compiled = fixture.nativeElement as HTMLElement;
-    expect(compiled.querySelector('p')?.textContent).toContain('backend: ok');
+    return fixture;
+  }
+
+  const label = (fixture: ComponentFixture<App>): string | null =>
+    (fixture.nativeElement.querySelector('.dot') as HTMLElement).getAttribute('aria-label');
+
+  it('renders the shell and the router outlet', async () => {
+    const fixture = await render((r) => r.flush({ status: 'ok', mongo: true }));
+
+    expect(fixture.nativeElement.querySelector('app-shell')).not.toBeNull();
+    expect(fixture.nativeElement.querySelector('router-outlet')).not.toBeNull();
+    // The scaffold said "backend: ok" in words. The dot says it now.
+    expect(fixture.nativeElement.textContent).not.toContain('backend:');
+  });
+
+  it('reports a healthy backend', async () => {
+    expect(label(await render((r) => r.flush({ status: 'ok', mongo: true })))).toBe('Backend ok');
+  });
+
+  it('reports a backend that answers without Mongo as degraded', async () => {
+    expect(label(await render((r) => r.flush({ status: 'ok', mongo: false })))).toBe(
+      'Backend degraded',
+    );
+  });
+
+  it('reports a backend that does not answer as unreachable', async () => {
+    // A transport failure, which is what a reader on a dead connection actually meets. A thrown
+    // stub would prove the catch runs but not that it runs for the real reason.
+    expect(label(await render((r) => r.error(new ProgressEvent('error'))))).toBe(
+      'Backend unreachable',
+    );
   });
 });

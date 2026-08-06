@@ -1,36 +1,38 @@
-import { Component, inject, signal, OnInit } from '@angular/core';
+import { Component, OnInit, inject, signal } from '@angular/core';
 import { RouterOutlet } from '@angular/router';
 import { ApiService } from './core/api.service';
+import { AppShellComponent } from './ui/app-shell.component';
+import { BackendState } from './ui/status-dot.component';
 
 /**
  * The bootstrapped root. `app.routes.ts` wires `/` to the catalogue and `/learn/:sessionId` to the
- * reader, but nothing rendered either without a `<router-outlet>` here — the app compiled and every
- * component-level test passed (each drives its component directly through `RouterTestingHarness` or
- * a bare `TestBed`, never through this root), while the real, router-driven app showed nothing but
- * this scaffold's own health line. Found by Task 1.17's Playwright suite, which is the first thing in
- * this codebase to load the app the way a browser actually does — `page.goto('/')` and read the DOM.
+ * reader.
+ *
+ * The `<router-outlet>` is load-bearing and it is tested. Without it the app compiles, every
+ * component test passes, and the running site shows nothing.
+ *
+ * The health check is the same one the scaffold ran. Its result now reaches the dot in the top
+ * bar rather than a line of text.
  */
 @Component({
   selector: 'app-root',
-  imports: [RouterOutlet],
+  imports: [RouterOutlet, AppShellComponent],
   template: `
-    <main>
-      <h1>mytetz</h1>
-      <p>backend: {{ status() }}</p>
-    </main>
-    <router-outlet />
+    <app-shell [backend]="backend()">
+      <router-outlet />
+    </app-shell>
   `,
 })
 export class App implements OnInit {
   private readonly api = inject(ApiService);
-  readonly status = signal('checking…');
+  readonly backend = signal<BackendState>('checking');
 
   async ngOnInit(): Promise<void> {
     try {
       const health = await this.api.health();
-      this.status.set(health.mongo ? 'ok' : 'degraded');
+      this.backend.set(health.mongo ? 'ok' : 'degraded');
     } catch {
-      this.status.set('unreachable');
+      this.backend.set('unreachable');
     }
   }
 }
