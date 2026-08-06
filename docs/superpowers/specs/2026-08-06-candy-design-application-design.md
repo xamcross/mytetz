@@ -580,6 +580,27 @@ empty search, the reader, the picker on both modes, a stream in progress, and an
 6. Every contrast pair of §3.4 measures at or above its AA threshold.
 7. `frontend/public/fonts/OFL.txt` exists.
 
+### 11.1 Verification record — Task 8
+
+Date: 2026-08-07. Browser: Chromium 151.0.7922.34, run through Playwright 1.62.1.
+
+Counts: MEASURED 19 / SCREENSHOT ONLY 0 / NOT REACHABLE 0. A real Chromium checked every row of
+§9.4's manual pass, at each width the row applies to, with a real assertion — not only a look.
+
+Two rows need a fix. Neither is fixed yet:
+
+- Row 9, reader session load: at 390px the page moves down 19px when the loaded session replaces
+  the skeleton. The loaded trail rail is taller than its own skeleton placeholder. This breaks
+  the "the page does not jump" claim.
+- Row 14, Escape: focus returns to `<body>`, not to the body paragraph. `.focus__body` has no
+  `tabindex`, so it cannot receive focus.
+
+One expectation in Task 8's own brief was stale, and is not a product defect: Step 6 expects four
+font requests, but the design's own unicode-range choice correctly loads only two fonts for
+English text.
+
+Full detail: `.superpowers/sdd/2026-08-06-candy-design-application/task-8-report.md`.
+
 ---
 
 ## 12. What comes next
