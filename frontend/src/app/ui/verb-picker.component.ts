@@ -2,7 +2,6 @@ import {
   Component,
   ElementRef,
   afterNextRender,
-  computed,
   inject,
   input,
   output,
@@ -62,7 +61,7 @@ const VERBS: ReadonlyArray<{ verb: Verb; name: string; caption: string }> = [
       [style.--picker-top]="anchor().top + 'px'"
       [style.--picker-left]="anchor().left + 'px'"
       (keydown.escape)="dismissed.emit()"
-      (keydown.tab)="onTab($any($event))"
+      (keydown.tab)="onTab($event)"
     >
       <p class="picker__lead">“{{ span().text }}” — go on:</p>
       <div class="picker__grid">
@@ -204,17 +203,20 @@ export class VerbPickerComponent {
   }
 
   /** Keeps Tab inside the picker. Without this, Tab walks into the page behind an open dialog. */
-  onTab(event: KeyboardEvent): void {
+  onTab(event: Event): void {
+    // Angular types `$event` as `Event` for a compound key pseudo-event, so the narrow happens
+    // here. The template call site stays type-checked.
+    const key = event as KeyboardEvent;
     const buttons = this.verbButtons().map((b) => b.nativeElement);
     if (buttons.length === 0) return;
     const first = buttons[0];
     const last = buttons[buttons.length - 1];
     const active = this.host.nativeElement.ownerDocument.activeElement;
-    if (event.shiftKey && active === first) {
-      event.preventDefault();
+    if (key.shiftKey && active === first) {
+      key.preventDefault();
       last.focus();
-    } else if (!event.shiftKey && active === last) {
-      event.preventDefault();
+    } else if (!key.shiftKey && active === last) {
+      key.preventDefault();
       first.focus();
     }
   }
