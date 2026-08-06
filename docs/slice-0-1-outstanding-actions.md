@@ -47,11 +47,36 @@ quota reset.
 
 ### Step 2.1 — Set the cookie signing key
 
-```
-fly secrets set MYTETZ_COOKIE_SIGNING_KEY="$(openssl rand -base64 32)" --app mytetz
+The key must have 32 characters or more. The application refuses a shorter key at startup.
+
+**In PowerShell.** This is the shell on the development machine.
+
+```powershell
+$bytes = New-Object byte[] 32
+[System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+$key = ($bytes | ForEach-Object { $_.ToString('x2') }) -join ''
+fly secrets set MYTETZ_COOKIE_SIGNING_KEY="$key" --app mytetz
 ```
 
-The key must have 32 characters or more. The application refuses a shorter key at startup.
+**In bash.**
+
+```bash
+fly secrets set MYTETZ_COOKIE_SIGNING_KEY="$(openssl rand -hex 32)" --app mytetz
+```
+
+Both commands give 64 hexadecimal characters. That is 256 bits of entropy.
+
+Do not use `openssl rand -base64 32`. The machine has no `openssl` command in PowerShell. A
+base64 value also contains `+`, `/` and `=`. A shell or a deployment system can change those
+characters.
+
+**How to know it worked.**
+
+```
+fly secrets list --app mytetz
+```
+
+The list must show `MYTETZ_COOKIE_SIGNING_KEY` with a digest. The list never shows the value.
 
 ### Step 2.2 — Set the Anthropic API key
 
