@@ -31,9 +31,10 @@ const VERB_LABELS: Readonly<Record<string, string>> = {
   imports: [],
   template: `
     <nav class="trail" aria-label="Session trail">
+      <p class="mt-eyebrow trail__head">Your trail · {{ nodes().length }} steps</p>
       <button
         type="button"
-        class="trail__toggle"
+        class="mt-pill mt-pill--ghost trail__toggle"
         [attr.aria-expanded]="!collapsed()"
         (click)="collapsed.set(!collapsed())"
       >
@@ -41,7 +42,7 @@ const VERB_LABELS: Readonly<Record<string, string>> = {
       </button>
       <ol class="trail__list" [class.trail__list--collapsed]="collapsed()">
         @for (node of nodes(); track node.nodeId) {
-          <li class="trail__row" [style.padding-left.rem]="node.depth * 0.75">
+          <li class="trail__row" [style.margin-left.px]="node.depth * 16">
             <button
               type="button"
               class="trail__item"
@@ -50,8 +51,13 @@ const VERB_LABELS: Readonly<Record<string, string>> = {
               [attr.aria-current]="node.nodeId === currentNodeId() ? 'true' : null"
               (click)="navigate.emit(node.nodeId)"
             >
-              <span class="trail__verb">{{ label(node.verb) }}</span>
-              <span class="trail__span">{{ node.span || topicLabel() }}</span>
+              <span class="trail__dot" aria-hidden="true"></span>
+              <span class="trail__text">
+                <span class="mt-eyebrow trail__verb">{{
+                  label(node.verb) + (node.nodeId === currentNodeId() ? ' · here' : '')
+                }}</span>
+                <span class="trail__span">{{ node.span || topicLabel() }}</span>
+              </span>
             </button>
           </li>
         }
@@ -64,63 +70,84 @@ const VERB_LABELS: Readonly<Record<string, string>> = {
         display: block;
       }
       .trail {
-        border-right: 1px solid #eee;
-        padding-right: 1rem;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
       }
-      .trail__toggle {
-        width: 100%;
-        text-align: left;
-        padding: 0.5rem 0.75rem;
-        border: 1px solid #ddd;
-        border-radius: 6px;
-        background: #fafafa;
-        font: inherit;
-        cursor: pointer;
+      .trail__head {
+        margin: 0;
       }
       .trail__list {
         list-style: none;
-        margin: 0.5rem 0 0;
+        margin: 0;
         padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 7px;
       }
       .trail__list--collapsed {
         display: none;
       }
       .trail__item {
-        display: block;
         width: 100%;
         text-align: left;
-        background: none;
-        border: 0;
-        border-left: 2px solid #eee;
-        padding: 0.35rem 0.5rem;
-        font: inherit;
-        font-size: 0.85rem;
-        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        padding: 11px 13px;
+        border: var(--mt-border-w) solid var(--mt-border);
+        border-radius: var(--mt-r-row);
+        background: var(--mt-surface);
+        color: var(--mt-ink);
+      }
+      .trail__item--current {
+        background: var(--mt-teal);
+        border-color: var(--mt-teal);
+        color: var(--mt-surface);
+        box-shadow: var(--mt-lift-teal);
+      }
+      .trail__dot {
+        width: 22px;
+        height: 22px;
+        flex: none;
+        border-radius: 999px;
+        background: var(--mt-amber);
+      }
+      .trail__text {
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+        min-width: 0;
+      }
+      .trail__verb {
+        font-size: 10px;
+      }
+      .trail__item--current .trail__verb {
+        color: var(--mt-teal-pale);
+      }
+      .trail__span {
+        font-family: var(--mt-display);
+        font-size: 15px;
+        font-weight: 600;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
       }
-      .trail__item--current {
-        border-left-color: #1a56db;
-        background: #f0f4ff;
-        font-weight: 600;
-      }
-      .trail__verb {
-        display: block;
-        font-size: 0.7rem;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-        color: #888;
-      }
-      @media (min-width: 640px) {
+      /* Wide screens never collapse: the rail is a permanent column there, so the initial
+         collapsed state — chosen for the narrow case, without measuring anything — is overridden
+         here rather than in TypeScript. 768px, so the drawer and the verb picker change mode
+         together. */
+      @media (min-width: 768px) {
         .trail__toggle {
           display: none;
         }
-        /* Wide screens never collapse: the rail is a permanent column there, so the initial
-           collapsed state — chosen for the narrow case, without measuring anything — is overridden
-           here rather than in TypeScript. */
         .trail__list--collapsed {
-          display: block;
+          display: flex;
+        }
+      }
+      @media (max-width: 767px) {
+        .trail__head {
+          display: none;
         }
       }
     `,

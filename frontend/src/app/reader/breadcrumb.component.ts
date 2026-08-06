@@ -20,7 +20,8 @@ import { NodeView } from '../core/models';
           <li class="crumb">
             <button
               type="button"
-              class="crumb__button"
+              class="mt-chip crumb__button"
+              [class.mt-chip--teal]="last"
               [attr.data-node-id]="node.nodeId"
               [attr.aria-current]="last ? 'page' : null"
               [disabled]="last"
@@ -45,37 +46,31 @@ import { NodeView } from '../core/models';
         list-style: none;
         display: flex;
         flex-wrap: wrap;
-        align-items: baseline;
-        gap: 0.25rem;
-        margin: 0 0 0.75rem;
+        align-items: center;
+        gap: 6px;
+        margin: 0 0 16px;
         padding: 0;
-        font-size: 0.85rem;
       }
       .crumb {
         display: flex;
-        align-items: baseline;
-        gap: 0.25rem;
+        align-items: center;
+        gap: 6px;
         min-width: 0;
       }
       .crumb__button {
-        background: none;
-        border: 0;
-        padding: 0.1rem 0.2rem;
-        color: #1a56db;
-        cursor: pointer;
-        font: inherit;
         max-width: 22ch;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+        display: block;
       }
       .crumb__button:disabled {
-        color: #333;
-        font-weight: 600;
         cursor: default;
+        opacity: 1;
       }
       .crumb__separator {
-        color: #999;
+        color: var(--mt-faint);
+        font-weight: 800;
       }
     `,
   ],
