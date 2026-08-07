@@ -16,8 +16,21 @@ export interface PickerAnchor {
 }
 
 /**
- * The picker's own height cap. The CSS below enforces it, and the host uses the same number to
- * decide whether the picker fits below the phrase or must go above it. One number, two readers.
+ * Why the picker closed. The host must treat the two paths differently.
+ *
+ * `escape` is a keyboard dismissal, so the host returns focus to the text the learner was reading.
+ * `outside-press` arrives from a `mousedown` listener, and a focus move inside `mousedown` cancels
+ * a drag the learner has just started — which is how a learner reselects a phrase.
+ */
+export type PickerDismissal = 'escape' | 'outside-press';
+
+/**
+ * The picker's own height cap. The host uses the same number to decide whether the picker fits
+ * below the phrase or must go above it.
+ *
+ * The `max-height` in the styles below repeats the value. An Angular `styles` block is a plain
+ * string and cannot read a TypeScript constant, so the two are separate literals. Change one and
+ * change the other.
  */
 export const PICKER_HEIGHT = 240;
 
@@ -60,8 +73,9 @@ const VERBS: ReadonlyArray<{ verb: Verb; name: string; caption: string }> = [
       aria-label="Explain the highlighted phrase"
       [style.--picker-top]="anchor().top + 'px'"
       [style.--picker-left]="anchor().left + 'px'"
-      (keydown.escape)="dismissed.emit()"
+      (keydown.escape)="dismissed.emit('escape')"
       (keydown.tab)="onTab($event)"
+      (keydown.shift.tab)="onTab($event)"
     >
       <p class="picker__lead">“{{ span().text }}” — go on:</p>
       <div class="picker__grid">
@@ -129,7 +143,13 @@ const VERBS: ReadonlyArray<{ verb: Verb; name: string; caption: string }> = [
       }
       /* The fill is --mt-coral-press and not --mt-coral. The name is 16px, so white on
          --mt-coral measures 3.01:1 and fails AA. Both lines are white; the face and the size
-         keep them apart. */
+         keep them apart.
+         These four declarations are also what .mt-pill--coral draws, and the duplication is
+         deliberate. That class is a modifier of .mt-pill, and .mt-pill--coral:active changes only
+         the shadow — .mt-pill itself supplies the 2px move that goes with it. On a button that is
+         not a pill, the modifier would press half way. The button would also have to give up its
+         own background and border shorthands to let the modifier through the cascade, which
+         trades a visible duplication for a hidden dependency on specificity. */
       .picker__verb--primary {
         background: var(--mt-coral-press);
         border-color: var(--mt-coral-press);
@@ -183,7 +203,9 @@ export class VerbPickerComponent {
   readonly anchor = input.required<PickerAnchor>();
 
   readonly chosen = output<Verb>();
-  readonly dismissed = output<void>();
+  /** One output for every dismissal, with the reason attached — see [PickerDismissal]. A second
+   * output for the keyboard path would let a host subscribe to one and forget the other. */
+  readonly dismissed = output<PickerDismissal>();
 
   readonly verbs = VERBS;
 
@@ -199,10 +221,16 @@ export class VerbPickerComponent {
   onDocumentPress(event: Event): void {
     const target = event.target;
     if (target instanceof Node && this.host.nativeElement.contains(target)) return;
-    this.dismissed.emit();
+    this.dismissed.emit('outside-press');
   }
 
-  /** Keeps Tab inside the picker. Without this, Tab walks into the page behind an open dialog. */
+  /**
+   * Keeps Tab inside the picker. Without this, Tab walks into the page behind an open dialog.
+   *
+   * The template binds this to `keydown.tab` **and** to `keydown.shift.tab`. Angular builds a full
+   * key name from the modifiers that are held, so `keydown.tab` alone never fires while Shift is
+   * down, and the backward half of the trap below would be dead code.
+   */
   onTab(event: Event): void {
     // Angular types `$event` as `Event` for a compound key pseudo-event, so the narrow happens
     // here. The template call site stays type-checked.

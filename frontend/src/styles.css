@@ -155,8 +155,9 @@ a:hover {
   text-decoration-thickness: 2px;
 }
 
-/* A control that loses its focus ring is a control a keyboard cannot find. No rule sets
-   outline: none. */
+/* A control that loses its focus ring is a control a keyboard cannot find. One rule in the
+   project sets outline: none, and it names one element that is not a control:
+   `.focus__body:focus-visible` in focus-card.component.ts. That comment carries the reason. */
 :focus-visible {
   outline: 3px solid var(--mt-teal);
   outline-offset: 2px;

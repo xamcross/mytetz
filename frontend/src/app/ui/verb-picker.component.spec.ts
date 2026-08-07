@@ -1,6 +1,6 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { Verb } from '../core/models';
-import { VerbPickerComponent } from './verb-picker.component';
+import { PickerDismissal, VerbPickerComponent } from './verb-picker.component';
 
 /**
  * The picker replaces a static row of four buttons. The row was always on screen and was disabled
@@ -15,21 +15,36 @@ describe('VerbPickerComponent', () => {
   let chosen: Verb[];
   let dismissed: number;
 
-  beforeEach(() => {
+  let reasons: PickerDismissal[];
+
+  beforeEach(async () => {
     TestBed.configureTestingModule({ imports: [VerbPickerComponent] });
     fixture = TestBed.createComponent(VerbPickerComponent);
     chosen = [];
     dismissed = 0;
+    reasons = [];
     fixture.componentInstance.chosen.subscribe((v) => chosen.push(v));
-    fixture.componentInstance.dismissed.subscribe(() => (dismissed += 1));
+    fixture.componentInstance.dismissed.subscribe((r) => {
+      dismissed += 1;
+      reasons.push(r);
+    });
     fixture.componentRef.setInput('span', { text: 'escape velocity', start: 4, end: 19 });
     fixture.componentRef.setInput('anchor', { top: 0, left: 0 });
     fixture.detectChanges();
+    // The initial focus runs in `afterNextRender`, which needs the fixture to settle first.
+    await fixture.whenStable();
   });
 
   const button = (verb: Verb): HTMLButtonElement =>
     fixture.nativeElement.querySelector(`button[data-verb="${verb}"]`);
   const root = (): HTMLElement => fixture.nativeElement.querySelector('[role="dialog"]');
+  /** A real Tab press on whatever holds focus, which is how the trap is reached in a browser. */
+  const pressTab = (shiftKey: boolean): void => {
+    document.activeElement?.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Tab', shiftKey, bubbles: true }),
+    );
+    fixture.detectChanges();
+  };
 
   it('offers the four text verbs and no other', () => {
     // SEED is the session's own root and VISUALIZE is slice 4. Neither belongs to a highlight.
@@ -66,23 +81,57 @@ describe('VerbPickerComponent', () => {
     expect(root().getAttribute('aria-label')).toBe('Explain the highlighted phrase');
   });
 
-  it('dismisses on Escape', () => {
+  it('dismisses on Escape, and says the reason was the keyboard', () => {
     root().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     fixture.detectChanges();
     expect(dismissed).toBe(1);
+    // The host returns focus to the text on this reason alone. See `PickerDismissal`.
+    expect(reasons).toEqual(['escape']);
     expect(chosen).toEqual([]);
   });
 
-  it('dismisses on a press outside itself', () => {
+  it('dismisses on a press outside itself, and says the reason was that press', () => {
     document.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
     fixture.detectChanges();
     expect(dismissed).toBe(1);
+    // This path runs inside `mousedown`. A host that moved focus here would cancel the drag the
+    // learner has just started, so the reason keeps the two paths apart.
+    expect(reasons).toEqual(['outside-press']);
   });
 
   it('stays open on a press inside itself', () => {
     button('EXPLAIN').dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
     fixture.detectChanges();
     expect(dismissed).toBe(0);
+  });
+
+  it('moves focus to the first verb when it opens', () => {
+    // §7.6 makes this load-bearing. The picker replaces a row of buttons that was always on
+    // screen, so a keyboard learner reached the verbs by tabbing to them. Now the picker appears
+    // under the phrase, and nothing takes the learner there unless the component does it.
+    expect(document.activeElement).toBe(button('EXPLAIN'));
+  });
+
+  it('wraps Tab from the last verb back to the first', () => {
+    button('SIDE_VIEW').focus();
+    pressTab(false);
+    expect(document.activeElement).toBe(button('EXPLAIN'));
+  });
+
+  it('wraps Shift+Tab from the first verb back to the last', () => {
+    // The backward half of the trap needs its own binding: Angular builds a full key name from
+    // the modifiers that are held, so `keydown.tab` alone never fires while Shift is down.
+    button('EXPLAIN').focus();
+    pressTab(true);
+    expect(document.activeElement).toBe(button('SIDE_VIEW'));
+  });
+
+  it('leaves Tab alone away from the two ends', () => {
+    // The trap holds the first and the last verb only. Between them the browser's own Tab order
+    // applies, and a trap that moved focus on every press would break it.
+    button('DIG_DEEPER').focus();
+    pressTab(false);
+    expect(document.activeElement).toBe(button('DIG_DEEPER'));
   });
 
   it('places itself where the anchor says', () => {

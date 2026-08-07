@@ -186,6 +186,54 @@ describe('FocusCardComponent', () => {
     expect(rootTextMatchesBody(bodyEl(), BODY)).toBe(true);
   });
 
+  it('renders the topic label as the card heading', () => {
+    // `topicLabel` defaults to `''`. A caller that forgets the binding therefore renders an empty
+    // <h1> and nothing reports it — that defect shipped once already, past the whole suite. This
+    // component owns the risky default, so the guard lives here.
+    fixture.componentRef.setInput('topicLabel', 'Quantum Physics');
+    fixture.detectChanges();
+    const heading: HTMLElement = fixture.nativeElement.querySelector('.focus__topic');
+    expect(heading).not.toBeNull();
+    expect(heading.textContent?.trim()).toBe('Quantum Physics');
+  });
+
+  it('returns focus to the body paragraph when Escape closes the picker', () => {
+    select(4, 11);
+    expect(pickerLive()).toBe(true);
+
+    verbButton('EXPLAIN')!.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+    );
+    fixture.detectChanges();
+
+    // Without this the learner lands on <body> and loses their place in the text. The paragraph
+    // carries `tabindex="-1"` so it can hold focus at all.
+    expect(pickerLive()).toBe(false);
+    expect(document.activeElement).toBe(bodyEl());
+  });
+
+  it('moves focus nowhere when a press outside closes the picker', () => {
+    select(4, 11);
+    expect(pickerLive()).toBe(true);
+
+    document.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    fixture.detectChanges();
+
+    // This path runs inside `mousedown`. A focus move here cancels the drag a learner starts when
+    // they reselect a phrase, which is the path the end-to-end suite exercises. So the paragraph
+    // must not take focus, although Escape gives it focus in the test above.
+    expect(pickerLive()).toBe(false);
+    expect(document.activeElement).not.toBe(bodyEl());
+  });
+
+  it('adds no character to the selectable root when the paragraph gains a tabindex', () => {
+    // An attribute lives in the open tag and contributes nothing to `textContent`. This states it
+    // rather than assuming it, because the whole invariant rests on that string.
+    expect(bodyEl().getAttribute('tabindex')).toBe('-1');
+    expect(bodyEl().textContent).toBe(BODY);
+    expect(rootTextMatchesBody(bodyEl(), BODY)).toBe(true);
+  });
+
   it('closes the picker when a stream starts', async () => {
     select(4, 11);
     expect(pickerLive()).toBe(true);

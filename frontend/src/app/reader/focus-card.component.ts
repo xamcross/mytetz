@@ -9,7 +9,12 @@ import {
   viewChild,
 } from '@angular/core';
 import { SpanPayload, Verb } from '../core/models';
-import { PICKER_HEIGHT, PickerAnchor, VerbPickerComponent } from '../ui/verb-picker.component';
+import {
+  PICKER_HEIGHT,
+  PickerAnchor,
+  PickerDismissal,
+  VerbPickerComponent,
+} from '../ui/verb-picker.component';
 import { rootTextMatchesBody, selectionToSpan } from './selection';
 
 /**
@@ -50,7 +55,7 @@ import { rootTextMatchesBody, selectionToSpan } from './selection';
   selector: 'app-focus-card',
   imports: [VerbPickerComponent],
   template: `
-    <article #cardEl class="focus mt-card">
+    <article #cardEl class="focus mt-card mt-card--raised">
       <div class="focus__head">
         <span class="mt-eyebrow mt-eyebrow--coral">{{ eyebrow() }}</span>
         @if (isStreaming()) {
@@ -74,6 +79,7 @@ import { rootTextMatchesBody, selectionToSpan } from './selection';
         #bodyEl
         class="focus__body"
         data-testid="focus-body"
+        tabindex="-1"
         (mouseup)="onSelectionChanged()"
         (touchend)="onSelectionChanged()"
       >{{ body() }}</p>
@@ -94,7 +100,7 @@ import { rootTextMatchesBody, selectionToSpan } from './selection';
           [span]="chosenSpan"
           [anchor]="anchor()!"
           (chosen)="request($event)"
-          (dismissed)="close()"
+          (dismissed)="close($event)"
         />
       }
     </article>
@@ -106,8 +112,6 @@ import { rootTextMatchesBody, selectionToSpan } from './selection';
       }
       .focus {
         position: relative;
-        border-radius: var(--mt-r-card);
-        box-shadow: var(--mt-lift-card);
         padding: 32px 36px;
         display: flex;
         flex-direction: column;
@@ -156,6 +160,15 @@ import { rootTextMatchesBody, selectionToSpan } from './selection';
         max-width: 62ch;
         white-space: pre-wrap;
         text-wrap: pretty;
+      }
+      /* The one place in the project that removes a focus ring, and it is deliberate.
+         The paragraph carries tabindex="-1" so Escape can give a keyboard learner their place in
+         the text back. Measured in a real Chromium: the return does match :focus-visible, because
+         Escape is a key press, so a 3px teal ring would draw around 62ch of prose. The paragraph
+         is not a control, and tabindex="-1" keeps it out of the Tab order, so no learner can
+         arrive here by tabbing and then be lost. Every control keeps its ring. */
+      .focus__body:focus-visible {
+        outline: none;
       }
       /* The design draws the highlighted phrase in amber. A wrapper element inside this paragraph
          would shift every offset and break the invariant above, so the native selection carries
@@ -368,16 +381,31 @@ export class FocusCardComponent {
     return { top, left };
   }
 
-  /** The learner dismissed the picker. The affordance goes; the selection is theirs to remake. */
-  close(): void {
-    this.selectedSpan.set(null);
-    this.anchor.set(null);
+  /**
+   * The learner dismissed the picker. The affordance goes; the selection is theirs to remake.
+   *
+   * Escape also returns focus to the paragraph, so a keyboard reader keeps their place in the
+   * text. The paragraph carries `tabindex="-1"` for that. An attribute contributes no character to
+   * `textContent`, and it sits in the open tag, so the invariant above is untouched.
+   *
+   * A press outside the picker returns nothing. That path runs inside a `mousedown` listener, and
+   * a focus move there cancels the drag the learner has started — which is how they reselect.
+   */
+  close(reason: PickerDismissal): void {
+    this.clearSelection();
+    if (reason === 'escape') this.bodyRef().nativeElement.focus();
   }
 
   request(verb: Verb): void {
     const span = this.selectedSpan();
     if (span === null || !this.canExplain()) return;
     this.explainRequested.emit({ span, verb });
-    this.close();
+    this.clearSelection();
+  }
+
+  /** Drops the phrase and its anchor, which together take the picker off screen. */
+  private clearSelection(): void {
+    this.selectedSpan.set(null);
+    this.anchor.set(null);
   }
 }
