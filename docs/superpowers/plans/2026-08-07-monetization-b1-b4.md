@@ -828,6 +828,11 @@ data class FreemiusEvent(
 
 The exact Freemius event-type strings come from their dashboard. Put them in one `private val` map so an operator can correct a name in one place. **When the type is unknown, log `BILLING_UNKNOWN_EVENT` and change nothing.** Do not guess a default.
 
+**Carried from the task 8 review.** `Entitlement.resolve` reads no date on `ACTIVE`, by design. An
+`ACTIVE` row therefore keeps the full subscriber allowance for ever, and this webhook is the only
+thing that moves it out of `ACTIVE`. A missed cancellation event is free access with no expiry.
+Task 12's reconciliation is the safety net, so it must cover exactly this row.
+
 Required test names:
 
 ```
@@ -876,6 +881,14 @@ Subject: `feat(billing): verify and apply Freemius webhook events`
 **Nothing the browser sends back is trusted.** The checkout return URL only tells the app to refresh the account view. The webhook is the only source of truth.
 
 **Reconciliation** is a suspend function that reads every non-terminal subscription, asks Freemius for its current state, and corrects the mirror. It logs `BILLING_DRIFT` for each change. Wire it behind `MYTETZ_RECONCILE_ON_BOOT`, off by default, with the same polarity rule as `MYTETZ_MIGRATE_ON_BOOT`: only the exact word `true` turns it on.
+
+**This flag is boot-scoped, and `fly.toml` sets `min_machines_running = 0`.** A machine therefore
+runs reconciliation on every cold start while the flag stands, and never runs it while the machine
+sleeps. That is acceptable here and it was not acceptable for `MYTETZ_MIGRATE_ON_BOOT`: the
+migration spends money on each run, and this sweep only reads. Two consequences the task must
+handle. Bound the work with `listNonTerminal(limit)` so a restart under load cannot flood the
+Freemius API. State in `docs/deploy.md` that this flag is safe to leave set, and say why the
+migration flag is not.
 
 **The alert tokens this slice adds:** `BILLING_DRIFT`, `BILLING_UNKNOWN_EVENT`, `WEBHOOK_SIGNATURE_MISMATCH`, `ACCOUNT_LINK_CONFLICT`, `MAIL_SEND_FAILED`. Add them to the table in `docs/deploy.md` beside the four that exist.
 
