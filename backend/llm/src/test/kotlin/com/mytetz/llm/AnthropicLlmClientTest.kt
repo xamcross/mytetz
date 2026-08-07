@@ -121,8 +121,8 @@ class AnthropicLlmClientTest {
         val server = sseServer { out -> out.write(body.toByteArray()) }
 
         try {
-            // modelId is pinned here and not left on the default: the assertion below names an
-            // exact model, and it must hold regardless of which model the code default is.
+            // modelId is pinned here and not left on the default. The assertion below names an exact
+            // model. It must hold whatever the code default becomes.
             val failure = assertFailsWith<LlmStreamTruncatedException> {
                 withTimeout(30_000) {
                     AnthropicLlmClient(clientFor(server), modelId = "claude-opus-5")
