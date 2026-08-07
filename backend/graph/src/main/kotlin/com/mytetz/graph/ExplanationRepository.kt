@@ -52,4 +52,21 @@ open class ExplanationRepository(database: MongoDatabase) {
     suspend fun incrementRequestCount(key: String) {
         collection.updateOne(Filters.eq("_id", key), Updates.inc("requestCount", 1L))
     }
+
+    /**
+     * Removes every explanation that a change of model family stranded. Reports how many it removed.
+     *
+     * The content key holds `modelFamily`. A document written under a different family is therefore
+     * unreachable. No key that a caller can compute finds it. The predicate is exact and not a
+     * heuristic. The operation loses nothing that the system can serve.
+     *
+     * You can run this method twice. The second run matches nothing.
+     *
+     * **Do not run it while two application versions are live on different families.** Each version
+     * deletes the other's documents. `fly.toml` runs one machine. The caller in
+     * `Components.bootstrap` also sits behind an explicit flag. A mistake here costs a regeneration
+     * and not a corruption. The system can reproduce every deleted document from its inputs.
+     */
+    suspend fun deleteWhereModelFamilyIsNot(modelFamily: String): Long =
+        collection.deleteMany(Filters.ne("modelFamily", modelFamily)).deletedCount
 }

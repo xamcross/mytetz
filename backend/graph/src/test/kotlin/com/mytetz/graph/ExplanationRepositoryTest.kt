@@ -8,6 +8,7 @@ import kotlinx.coroutines.test.runTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 
 class ExplanationRepositoryTest {
@@ -15,7 +16,11 @@ class ExplanationRepositoryTest {
     private val database = MongoTestSupport.database("explanations")
     private val repository = ExplanationRepository(database)
 
-    private fun explanation(key: String, body: String) = Explanation(
+    private fun explanation(
+        key: String,
+        body: String,
+        modelFamily: String = "claude-opus-5",
+    ) = Explanation(
         key = key,
         topicSlug = "quantum-physics",
         parentKey = null,
@@ -28,7 +33,7 @@ class ExplanationRepositoryTest {
         grounded = false,
         sources = emptyList(),
         promptVersion = "v1",
-        modelFamily = "claude-opus-5",
+        modelFamily = modelFamily,
         modelId = "claude-opus-5",
         inputTokens = 10,
         outputTokens = 20,
@@ -99,5 +104,36 @@ class ExplanationRepositoryTest {
         repeat(3) { repository.incrementRequestCount("k3") }
 
         assertEquals(3, repository.findByKey("k3")?.requestCount)
+    }
+
+    @Test
+    fun `deleting by family removes every other family and reports the count`() = runTest {
+        repository.insertIfAbsent(explanation("a", "an old body", modelFamily = "claude-opus-5"))
+        repository.insertIfAbsent(explanation("b", "another old body", modelFamily = "claude-opus-5"))
+        repository.insertIfAbsent(explanation("c", "a current body", modelFamily = "claude-sonnet-5"))
+
+        val deleted = repository.deleteWhereModelFamilyIsNot("claude-sonnet-5")
+
+        assertEquals(2, deleted)
+        assertNull(repository.findByKey("a"))
+        assertNull(repository.findByKey("b"))
+        assertNotNull(repository.findByKey("c"), "the current family survives")
+    }
+
+    @Test
+    fun `deleting by family is idempotent`() = runTest {
+        repository.insertIfAbsent(explanation("a", "an old body", modelFamily = "claude-opus-5"))
+
+        assertEquals(1, repository.deleteWhereModelFamilyIsNot("claude-sonnet-5"))
+        assertEquals(
+            0,
+            repository.deleteWhereModelFamilyIsNot("claude-sonnet-5"),
+            "a second run finds nothing",
+        )
+    }
+
+    @Test
+    fun `deleting by family on an empty store reports zero`() = runTest {
+        assertEquals(0, repository.deleteWhereModelFamilyIsNot("claude-sonnet-5"))
     }
 }
