@@ -932,6 +932,76 @@ class SessionServiceTest {
         assertNull(service.load("no-such-session"))
     }
 
+    // ------------------------------------------------------------------ prewarmSeed
+
+    @Test
+    fun `prewarming a missing seed generates it and reports the spend`() = runTest {
+        val spent = mutableListOf<Long>()
+
+        val generated = service.prewarmSeed("quantum-physics") { spent += it }
+
+        assertTrue(generated, "the store held no seed. This call generated one.")
+        assertEquals(1, spent.size, "the cost is reported once, the instant it is known")
+        assertTrue(spent.single() > 0, "FakeLlmClient reports real token counts")
+    }
+
+    @Test
+    fun `prewarming stores a seed that a later create finds`() = runTest {
+        service.prewarmSeed("quantum-physics") { }
+
+        val spent = mutableListOf<Long>()
+        service.create("anon:alice", "quantum-physics") { spent += it }
+
+        assertEquals(emptyList(), spent, "create found the pre-warmed seed and called no model")
+        assertEquals(1, llm.calls.size, "the one call is the pre-warm's own")
+    }
+
+    @Test
+    fun `prewarming an existing seed generates nothing and spends nothing`() = runTest {
+        service.prewarmSeed("quantum-physics") { }
+
+        val spent = mutableListOf<Long>()
+        val generated = service.prewarmSeed("quantum-physics") { spent += it }
+
+        assertFalse(generated, "the second call found the seed and stopped")
+        assertEquals(emptyList(), spent, "a cache hit costs nothing and must record nothing")
+    }
+
+    @Test
+    fun `prewarming creates no learning session`() = runTest {
+        service.prewarmSeed("quantum-physics") { }
+
+        assertEquals(
+            0,
+            database.getCollection<org.bson.Document>("sessions").countDocuments(),
+            "a maintenance step must not leave a session that no learner started",
+        )
+    }
+
+    @Test
+    fun `prewarming an unknown topic raises exactly as create does`() = runTest {
+        assertFailsWith<IllegalArgumentException> {
+            service.prewarmSeed("no-such-topic") { }
+        }
+    }
+
+    @Test
+    fun `prewarming a draft topic raises exactly as create does`() = runTest {
+        topics.upsert(
+            Topic(
+                slug = "a-draft-topic",
+                title = "A Draft Topic",
+                category = "test",
+                summary = "not ready for browsing",
+                status = TopicStatus.DRAFT,
+            )
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            service.prewarmSeed("a-draft-topic") { }
+        }
+    }
+
     private companion object {
         const val FIXED_NOW = 1_764_000_000_000L
     }

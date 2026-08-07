@@ -296,6 +296,43 @@ class SessionService(
         return explanations.findByKey(graph.keyFor(seedRequest(topic))) == null
     }
 
+    /**
+     * The method generates this topic's seed when the store holds none. The method creates no
+     * session.
+     *
+     * A published topic must have a seed. No other method here can establish that. [create] is
+     * the only other path to a seed. [create] also inserts a [LearningSession]. A maintenance
+     * loop built on [create] therefore leaves one abandoned session for each topic.
+     *
+     * The method returns true when it generated the seed itself. The method returns false when
+     * it found an existing seed.
+     *
+     * The method calls [onSpend] with the caller's own cost at the moment it learns that cost.
+     * The method does this before any later step can fail. [create]'s parameter of the same name
+     * holds the same contract for the same reason.
+     *
+     * The method raises an error for an unknown topic and for an unpublished topic. [create] and
+     * [createWillGenerate] raise the same error.
+     */
+    suspend fun prewarmSeed(topicSlug: String, onSpend: suspend (Long) -> Unit): Boolean {
+        val topic = requirePublishedTopic(topicSlug)
+        val request = seedRequest(topic)
+
+        if (explanations.findByKey(graph.keyFor(request)) != null) return false
+
+        var generated = false
+        graph.getOrGenerate(request).collect { chunk ->
+            when (chunk) {
+                is GraphChunk.Spent -> {
+                    generated = true
+                    onSpend(chunk.costMicros)
+                }
+                is GraphChunk.Done, is GraphChunk.Meta, is GraphChunk.Delta, is GraphChunk.Superseded -> Unit
+            }
+        }
+        return generated
+    }
+
     // ------------------------------------------------------------------ explain
 
     /**
