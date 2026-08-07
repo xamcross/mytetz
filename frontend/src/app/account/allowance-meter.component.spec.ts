@@ -30,6 +30,21 @@ const active: AccountView = {
   resetsAtEpochMillis: FIXED_EPOCH_MILLIS,
 };
 
+// `allowance: 12, remaining: 3` on purpose, and not zero: a `NONE`/`EXPIRED` row must show no
+// digits at all, even though the account genuinely carries non-zero numbers underneath. Zero
+// values would let a regression that renders them slip past unnoticed.
+const none: AccountView = {
+  email: 'learner@example.com',
+  status: 'NONE',
+  trialEndsAtEpochMillis: null,
+  currentPeriodEndsAtEpochMillis: null,
+  allowance: 12,
+  remaining: 3,
+  resetsAtEpochMillis: null,
+};
+
+const expired: AccountView = { ...none, status: 'EXPIRED' };
+
 describe('AllowanceMeterComponent', () => {
   let fixture: ComponentFixture<AllowanceMeterComponent>;
   let store: AccountStore;
@@ -53,8 +68,10 @@ describe('AllowanceMeterComponent', () => {
     store.view.set(active);
     fixture.detectChanges();
 
-    expect(text()).toContain('9');
-    expect(text()).toContain('25');
+    // Asserted as one relation, not as two separate `toContain` calls: two separate checks pass
+    // just as well against `{{ allowance }} of {{ remaining }}` swapped, because both numbers are
+    // still somewhere in the text. Only the joined string proves the order.
+    expect(text()).toContain('9 of 25');
   });
 
   it('the meter names the trial end in a trial', () => {
@@ -93,7 +110,49 @@ describe('AllowanceMeterComponent', () => {
     await loaded;
     fixture.detectChanges();
 
-    expect(text()).toContain('9');
-    expect(text()).toContain('25');
+    expect(text()).toContain('9 of 25');
+  });
+
+  it('the meter says nothing about a trial end when there is none', () => {
+    // The counterpart to the reset-text guard above, for the trial branch: a `TRIALING` row whose
+    // `trialEndsAtEpochMillis` is `null` must print no sentinel value either.
+    store.view.set({ ...trialing, trialEndsAtEpochMillis: null });
+    fixture.detectChanges();
+
+    expect(text()).not.toContain('null');
+    expect(text()).not.toContain('NaN');
+    expect(text()).not.toContain('1970');
+  });
+
+  it('a NONE status shows no counts', () => {
+    store.view.set(none);
+    fixture.detectChanges();
+
+    // No digit at all — not `allowance`, not `remaining`, neither the real 12 nor 3 above nor a
+    // fallback zero. There is nothing true to count for an account with no active allowance.
+    expect(text()).not.toMatch(/\d/);
+    expect(text()).toContain('Subscribe');
+  });
+
+  it('an EXPIRED status shows no counts', () => {
+    store.view.set(expired);
+    fixture.detectChanges();
+
+    expect(text()).not.toMatch(/\d/);
+    expect(text()).toContain('Subscribe');
+  });
+
+  it('the subscribe button in the meter is inert', () => {
+    // Task 13 wires this button to `POST /api/billing/checkout`. That route does not exist yet,
+    // so a click today must call nothing.
+    store.view.set(none);
+    fixture.detectChanges();
+
+    const button = fixture.nativeElement.querySelector(
+      '.allowance-meter__subscribe',
+    ) as HTMLButtonElement;
+    button.click();
+
+    http.expectNone('/api/billing/checkout');
   });
 });

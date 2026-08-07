@@ -69,4 +69,56 @@ describe('AccountStore', () => {
     // null, so the error signal is what tells them apart.
     expect(store.error()).not.toBeNull();
   });
+
+  it('a failed refresh keeps the last known view', async () => {
+    // The last commit made `load()` run after every explanation. One dropped connection must not
+    // empty the header meter in the middle of a session.
+    const first = store.load();
+    http.expectOne('/api/account').flush(view);
+    await first;
+
+    const second = store.load();
+    http.expectOne('/api/account').flush(null, { status: 500, statusText: 'Server Error' });
+    await second;
+
+    expect(store.view()).toEqual(view);
+    expect(store.error()).not.toBeNull();
+  });
+
+  it('a 401 clears the view', async () => {
+    // A 401 genuinely means "signed out", so it is the one failure that must still clear a view
+    // already on screen — unlike every other failure, which now keeps it.
+    const first = store.load();
+    http.expectOne('/api/account').flush(view);
+    await first;
+
+    const second = store.load();
+    http
+      .expectOne('/api/account')
+      .flush(
+        { code: 'SIGN_IN_REQUIRED', message: 'sign in to continue' },
+        { status: 401, statusText: '' },
+      );
+    await second;
+
+    expect(store.view()).toBeNull();
+    expect(store.error()).toBeNull();
+  });
+
+  it('a slow first read does not overwrite a later one', async () => {
+    // A slow boot read landing after a fast post-explain read must not write stale numbers over
+    // fresh ones.
+    const first = store.load();
+    const second = store.load();
+
+    const requests = http.match('/api/account');
+    expect(requests.length).toBe(2);
+
+    requests[1].flush(view);
+    await second;
+    requests[0].flush({ ...view, remaining: 999 });
+    await first;
+
+    expect(store.view()).toEqual(view);
+  });
 });

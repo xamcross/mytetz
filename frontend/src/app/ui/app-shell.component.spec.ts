@@ -45,7 +45,8 @@ describe('AppShellComponent', () => {
 
     fixture.detectChanges();
 
-    expect(fixture.nativeElement.textContent).toContain('20');
-    expect(fixture.nativeElement.textContent).toContain('25');
+    // Asserted as one relation, not as two separate `toContain` calls, which would pass just as
+    // well against the two numbers swapped in the template.
+    expect(fixture.nativeElement.textContent).toContain('20 of 25');
   });
 });

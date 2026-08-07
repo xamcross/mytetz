@@ -21,27 +21,41 @@ export class AccountStore {
 
   readonly signedIn = computed(() => this.view() !== null);
 
+  /** The count of calls to [load]. Each call captures its own number and checks it again after
+   * its request settles — see [load]. A slow call whose number is no longer the latest may not
+   * write [view], [error], or [loading]. */
+  private generation = 0;
+
   /**
    * Reads the account.
    *
-   * `401 SIGN_IN_REQUIRED` is the ordinary answer for a visitor with no session cookie, or an
-   * expired one. It clears [view] and leaves [error] at `null` — a signed-out learner is not a
-   * fault. Any other failure also clears [view], because there is no account to show, but it sets
-   * [error] too, so a caller can tell "signed out" from "the request itself failed" instead of
-   * reading both the same way.
+   * A `401` means the learner is signed out. The method clears [view] and leaves [error] at
+   * `null`, because a signed-out learner is not a fault.
+   *
+   * Any other failure keeps the last known [view] and sets [error] with a message. A stale count
+   * is a better answer than a meter that empties in the middle of a session.
+   *
+   * A generation counter guards every write, so two overlapping calls cannot race. Only the call
+   * that is still the most recent one when its request settles may change [view], [error], or
+   * [loading].
    */
   async load(): Promise<void> {
+    const generation = ++this.generation;
     this.loading.set(true);
     this.error.set(null);
     try {
-      this.view.set(await this.api.account());
+      const view = await this.api.account();
+      if (this.generation !== generation) return;
+      this.view.set(view);
     } catch (err) {
-      this.view.set(null);
-      if (!(err instanceof HttpErrorResponse) || err.status !== 401) {
+      if (this.generation !== generation) return;
+      if (err instanceof HttpErrorResponse && err.status === 401) {
+        this.view.set(null);
+      } else {
         this.error.set('Could not load your account. Check your connection and try again.');
       }
     } finally {
-      this.loading.set(false);
+      if (this.generation === generation) this.loading.set(false);
     }
   }
 }

@@ -514,6 +514,19 @@ describe('SessionStore', () => {
     expect(loadAccount).toHaveBeenCalledTimes(1);
   });
 
+  it('a SIGN_IN_REQUIRED refusal does not refresh the account', async () => {
+    // A signed-out visitor gets this same code on every attempt, so the read would always answer
+    // 401. Every other refusal still refreshes — see the test above.
+    script = async function* (): AsyncGenerator<ExplainEvent> {
+      throw new ExplainStreamError('SIGN_IN_REQUIRED', 'sign in to keep going', null, false);
+    };
+
+    await loadSession();
+    await store.explain(span, 'EXPLAIN');
+
+    expect(loadAccount).not.toHaveBeenCalled();
+  });
+
   it('an abandoned explanation does not refresh the account', async () => {
     // Written so it goes red if the refresh sits in a plain `finally` with no abort guard: this
     // generation never reaches `done`, and the assertion below is that `load` was never called.

@@ -475,8 +475,14 @@ describe('ReaderPageComponent', () => {
   });
 
   it('the trail stays visible behind every panel', async () => {
-    const codes = ['SIGN_IN_REQUIRED', 'TRIAL_EXHAUSTED', 'SUBSCRIPTION_REQUIRED'];
-    for (const [index, code] of codes.entries()) {
+    // Each code names the panel it must open, so a silent no-op — no panel at all — cannot pass
+    // this test merely because the trail item count is unaffected by it.
+    const codes: Array<[string, string]> = [
+      ['SIGN_IN_REQUIRED', 'app-sign-in-panel'],
+      ['TRIAL_EXHAUSTED', 'app-wall-panel'],
+      ['SUBSCRIPTION_REQUIRED', 'app-wall-panel'],
+    ];
+    for (const [index, [code, panelSelector]] of codes.entries()) {
       // A distinct session id for each code, on the one harness this test is allowed: it is what
       // makes each iteration a genuine parameter-only route change, so the reader's own reuse of
       // this component instance — proven separately below — is exercised by this loop rather than
@@ -489,8 +495,28 @@ describe('ReaderPageComponent', () => {
       await component.store.explain({ text: 'pillars', start: 4, end: 11 }, 'EXPLAIN');
       harness.detectChanges();
 
+      expect(harness.routeNativeElement?.querySelector(panelSelector)).toBeTruthy();
       expect(harness.routeNativeElement?.querySelectorAll('.trail__item').length).toBe(2);
     }
+  });
+
+  it('a trail click clears the wall and shows the stored explanation', async () => {
+    script = async function* (): AsyncGenerator<ExplainEvent> {
+      throw new ExplainStreamError('TRIAL_EXHAUSTED', 'your trial ran out', null, false);
+    };
+    const component = await open();
+
+    await component.store.explain({ text: 'pillars', start: 4, end: 11 }, 'EXPLAIN');
+    harness.detectChanges();
+    expect(harness.routeNativeElement?.querySelector('app-wall-panel')).toBeTruthy();
+
+    // n0's body is already in the session response — it costs nothing to show, and the learner
+    // paid for it already.
+    harness.routeNativeElement?.querySelector<HTMLButtonElement>('[data-node-id="n0"]')?.click();
+    harness.detectChanges();
+
+    expect(harness.routeNativeElement?.querySelector('app-wall-panel')).toBeNull();
+    expect(text()).toContain('Quantum mechanics is odd.');
   });
 
   it('a subscribe code raises no banner', async () => {

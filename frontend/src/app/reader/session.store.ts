@@ -294,11 +294,18 @@ export class SessionStore {
     }
   }
 
-  /** Moves the focus within the loaded session. No request: every body is already here. */
+  /**
+   * Moves the focus within the loaded session. No request: every body is already here.
+   *
+   * Clears [error] too. Without this, a wall or a sign-in panel raised by a failed explain stays
+   * on screen after the learner moves to another node, and a page reload is the only escape. A
+   * learner who has moved on is no longer looking at the request that failed.
+   */
   goTo(nodeId: string): void {
     const exists = this.session()?.nodes.some((n) => n.nodeId === nodeId) ?? false;
     if (!exists) return;
     this.currentNodeId.set(nodeId);
+    this.error.set(null);
   }
 
   /**
@@ -453,7 +460,12 @@ export class SessionStore {
         // means the pool is now zero, and the meter must say so at once, not after a reload. The
         // read is one small GET, so its cost is worth paying on both outcomes. A cache hit spends
         // nothing, so this same call then returns the same numbers, which needs no special case.
-        void this.account.load();
+        //
+        // SIGN_IN_REQUIRED is the one refusal this skips. A signed-out visitor gets that same
+        // code on every attempt, and the account read would only ever answer 401 in reply.
+        if (this.error()?.code !== 'SIGN_IN_REQUIRED') {
+          void this.account.load();
+        }
       }
     }
   }
