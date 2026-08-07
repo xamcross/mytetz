@@ -10,6 +10,7 @@ include(
     ":backend:catalog",
     ":backend:graph",
     ":backend:quota",
+    ":backend:account",
     ":backend:session",
     ":backend:assess",
     ":backend:api",
