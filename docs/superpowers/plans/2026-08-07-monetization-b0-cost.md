@@ -698,7 +698,7 @@ Add these at the end of `SessionServiceTest.kt`. The file's `reset()` drops the 
         val generated = service.prewarmSeed("quantum-physics") { spent += it }
 
         assertTrue(generated, "the store held no seed. This call generated one.")
-        assertEquals(1, spent.size, "the cost is reported once, the instant it is known")
+        assertEquals(1, spent.size, "the method reports the cost one time")
         assertTrue(spent.single() > 0, "FakeLlmClient reports real token counts")
     }
 
