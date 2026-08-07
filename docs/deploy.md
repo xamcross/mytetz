@@ -315,11 +315,16 @@ not in the app.
 
 ## The B0 model migration
 
-Do this one time, after the deployment that carries the `claude-sonnet-5` default.
+**Warning: this release orphans the store.** `modelFamily` is part of every content key. The new
+model changes that key. Every stored explanation becomes unreachable when this image boots. This
+is true whether or not `MYTETZ_MIGRATE_ON_BOOT` is set.
 
-The model family is part of every content key. A change to it therefore makes every stored
-explanation unreachable. The migration removes them and generates a fresh seed for each published
-topic.
+The migration below removes the orphaned documents. The migration then regenerates a seed for
+each published topic. A learner may open a topic before the migration runs. That learner still
+gets an explanation. The app generates it fresh, for that topic, at the ordinary cost of one
+generation.
+
+Do this one time, after the deployment that carries the `claude-sonnet-5` default.
 
 1. Confirm the Anthropic account holds credit. Step 2 of the migration makes about 29 model calls.
 
@@ -355,16 +360,25 @@ topic.
    You must see two lines: one count of removed explanations and one count of pre-warmed seeds.
    The `--no-tail` flag is necessary, because the lines are already in the past.
 
-5. Turn the migration off.
+5. Turn the migration off immediately after step 4. Do not wait until later.
 
    ```
    fly secrets unset MYTETZ_MIGRATE_ON_BOOT --app mytetz
    ```
 
-   The machine restarts. The migration is idempotent. A boot that runs it again therefore costs
-   nothing. But a deployment that keeps the flag set runs two extra collection scans on every
-   cold start.
+   The flag is not run-once. `fly.toml` sets `auto_stop_machines = "stop"` and
+   `min_machines_running = 0`. The machine therefore stops when idle. The fly proxy starts it
+   again on the next request. Every cold start between step 2 and this step re-runs the whole
+   migration.
+
+   A topic can fail after its model call. That topic still spent money. The migration does not
+   persist a failed generation. The next cold start spends money on that topic again. The real
+   ceiling on that cost is the $50 daily spend breaker in section 2.1. One full run costs about
+   $0.30.
 
 **If the second log line reports fewer seeds than the catalogue holds,** the spend breaker stopped
-the loop. Check the day's ledger, raise `MYTETZ_GLOBAL_DAILY_COST_CEILING_USD_MICROS` if it is
-correct to do so, and run the migration again tomorrow. The existing seeds remain.
+the loop. The existing seeds remain. Do the following:
+
+1. Check the day's ledger.
+2. Raise `MYTETZ_GLOBAL_DAILY_COST_CEILING_USD_MICROS`, only if that is the correct action.
+3. Run the migration again tomorrow.

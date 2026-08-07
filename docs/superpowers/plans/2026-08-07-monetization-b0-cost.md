@@ -546,7 +546,7 @@ Specification section 13. Two sets of orphans exist after Task 2: the documents 
 
 - [ ] **Step 1: Write the failing test**
 
-First widen the file's fixture. It is `private fun explanation(key: String, body: String)` at line 18 and it hardcodes `modelFamily = "claude-opus-5"` at line 31. Add a third parameter with that literal as its default, so all nine existing call sites keep compiling unchanged:
+First widen the file's fixture. It is `private fun explanation(key: String, body: String)` at line 18 and it hardcodes `modelFamily = "claude-opus-5"` at line 31. Add a third parameter with that literal as its default, so all five existing call sites keep compiling unchanged:
 
 ```kotlin
     private fun explanation(
