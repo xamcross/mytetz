@@ -2,6 +2,7 @@ import { Component, computed, effect, inject } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { map } from 'rxjs';
+import { WallCode, WallPanelComponent } from '../account/wall-panel.component';
 import { SignInPanelComponent } from '../auth/sign-in-panel.component';
 import { SpanPayload, Verb } from '../core/models';
 import { BreadcrumbComponent } from './breadcrumb.component';
@@ -51,6 +52,7 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
     TrailRailComponent,
     RouterLink,
     SignInPanelComponent,
+    WallPanelComponent,
   ],
   providers: [SessionStore],
   template: `
@@ -154,6 +156,8 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
 
             @if (signInRequired()) {
               <app-sign-in-panel />
+            } @else if (subscribeRequired(); as code) {
+              <app-wall-panel [code]="code" />
             } @else {
               <app-focus-card
                 [body]="store.currentBody()"
@@ -321,12 +325,19 @@ export class ReaderPageComponent {
     const failure = this.store.error();
     return failure !== null && this.store.session() === null ? failure : null;
   });
+  /** Codes that open a panel in place of the focus card: `SIGN_IN_REQUIRED` for `signInRequired`,
+   * and the two wall codes for `subscribeRequired`. Each panel already says what happened, so a
+   * banner on top of it would say the same thing twice. */
+  private static readonly PANEL_CODES: ReadonlySet<string> = new Set([
+    'SIGN_IN_REQUIRED',
+    'TRIAL_EXHAUSTED',
+    'SUBSCRIPTION_REQUIRED',
+  ]);
+
   readonly bannerError = computed(() => {
     const failure = this.store.error();
     if (failure === null || this.store.session() === null) return null;
-    // SIGN_IN_REQUIRED gets its own branch below — see `signInRequired` — and not this banner:
-    // the sign-in panel already says what happened, and a banner on top of it would say it twice.
-    if (failure.code === 'SIGN_IN_REQUIRED') return null;
+    if (ReaderPageComponent.PANEL_CODES.has(failure.code)) return null;
     return failure;
   });
 
@@ -338,6 +349,19 @@ export class ReaderPageComponent {
    * trail at the moment they are asked to sign in would be the most expensive thing this could do.
    */
   readonly signInRequired = computed(() => this.store.error()?.code === 'SIGN_IN_REQUIRED');
+
+  /**
+   * The wall code from the last refusal, or `null` when none applies.
+   *
+   * `TRIAL_EXHAUSTED` and `SUBSCRIPTION_REQUIRED` both open `WallPanelComponent`, and neither ever
+   * reaches `bannerError`'s wait message. A trial pool does not roll over, so the wait message would
+   * tell a spent trial to wait for a reset that never comes — the reason the backend answers these
+   * two codes instead of `429 QUOTA_EXCEEDED`.
+   */
+  readonly subscribeRequired = computed<WallCode | null>(() => {
+    const code = this.store.error()?.code;
+    return code === 'TRIAL_EXHAUSTED' || code === 'SUBSCRIPTION_REQUIRED' ? code : null;
+  });
 
   /**
    * The topic's name for the root crumb and the root rail row.

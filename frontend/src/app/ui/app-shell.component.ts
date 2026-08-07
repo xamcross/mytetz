@@ -1,5 +1,6 @@
 import { Component, input } from '@angular/core';
 import { RouterLink, RouterLinkActive } from '@angular/router';
+import { AllowanceMeterComponent } from '../account/allowance-meter.component';
 import { BackendState, StatusDotComponent } from './status-dot.component';
 
 /**
@@ -13,7 +14,7 @@ import { BackendState, StatusDotComponent } from './status-dot.component';
  */
 @Component({
   selector: 'app-shell',
-  imports: [RouterLink, RouterLinkActive, StatusDotComponent],
+  imports: [RouterLink, RouterLinkActive, StatusDotComponent, AllowanceMeterComponent],
   template: `
     <header class="bar">
       <div class="bar__left">
@@ -29,7 +30,10 @@ import { BackendState, StatusDotComponent } from './status-dot.component';
           >
         </nav>
       </div>
-      <app-status-dot [state]="backend()" />
+      <div class="bar__right">
+        <app-allowance-meter />
+        <app-status-dot [state]="backend()" />
+      </div>
     </header>
     <ng-content />
   `,
@@ -66,6 +70,11 @@ import { BackendState, StatusDotComponent } from './status-dot.component';
       .bar__nav {
         display: flex;
         gap: 20px;
+      }
+      .bar__right {
+        display: flex;
+        align-items: center;
+        gap: 16px;
       }
       .bar__link {
         font-size: 15px;
