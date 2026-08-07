@@ -6,6 +6,10 @@ import com.mytetz.account.GoogleConfig
 import com.mytetz.account.GoogleOAuth
 import com.mytetz.account.MagicLinkService
 import com.mytetz.account.MailSender
+import com.mytetz.billing.BillingConfig
+import com.mytetz.billing.BillingRepository
+import com.mytetz.billing.BillingService
+import com.mytetz.billing.SubscriptionStatus
 import com.mytetz.quota.QuotaConfig
 import com.sun.net.httpserver.HttpServer
 import io.ktor.client.HttpClient
@@ -63,6 +67,7 @@ class AuthRoutesTest {
         val account: AccountService,
         val mailSender: CapturingMailSender,
         val stack: TestFixtures.SessionStack,
+        val billingRepository: BillingRepository,
     ) {
         /** Completes a real magic-link sign-in for [http], and returns the address it signed in as. */
         suspend fun signIn(http: HttpClient = client, email: String = "learner-${UUID.randomUUID()}@example.com"): String {
@@ -112,6 +117,12 @@ class AuthRoutesTest {
 
     private fun authApp(
         googleOAuthFactory: () -> GoogleOAuth = { defaultGoogleOAuth() },
+        // Matches `QuotaConfig.DEFAULT_DAILY_EXPLAINS` so the two tests below that pin the account
+        // view's allowance against that constant keep meaning what they said before this task: a
+        // trial pool this size, rather than the quota module's own daily default, is what the view
+        // now reports. `the account view reports the entitlement allowance and not the quota
+        // default` overrides this to prove the two are no longer the same number.
+        trialGenerations: Int = QuotaConfig.DEFAULT_DAILY_EXPLAINS,
         block: suspend Scope.() -> Unit,
     ) = testApplication {
         val stack = TestFixtures.sessionApp()
@@ -119,6 +130,8 @@ class AuthRoutesTest {
         val account = AccountService(accountRepository)
         val mailSender = CapturingMailSender()
         val magicLink = MagicLinkService(accountRepository, mailSender, baseUrl = "http://localhost")
+        val billingRepository = BillingRepository(stack.database)
+        val billing = BillingService(billingRepository, config = BillingConfig(trialGenerations = trialGenerations))
 
         application {
             install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) }
@@ -133,6 +146,7 @@ class AuthRoutesTest {
                 sessionRoutes(
                     sessions = { stack.sessions },
                     quota = stack.quota,
+                    billing = billing,
                     account = account,
                     cookies = TestFixtures.cookieConfig,
                     clientAddresses = ClientAddressConfig(trustedHeader = null),
@@ -146,13 +160,14 @@ class AuthRoutesTest {
                     google = googleOAuthFactory,
                     cookies = TestFixtures.cookieConfig,
                     quotaRepository = stack.quotaRepository,
+                    billing = billing,
                     clientAddresses = ClientAddressConfig(trustedHeader = null),
                 )
             }
         }
 
         val client = createClient { install(HttpCookies); followRedirects = false }
-        Scope(client, account, mailSender, stack).block()
+        Scope(client, account, mailSender, stack, billingRepository).block()
     }
 
     // ------------------------------------------------------------------ the magic link
@@ -351,6 +366,37 @@ class AuthRoutesTest {
         assertTrue(response.bodyAsText().contains("event: done"))
     }
 
+    // ------------------------------------------------------------------ the trial
+
+    @Test
+    fun `signing in starts a trial`() = authApp {
+        val before = System.currentTimeMillis()
+
+        val email = signIn()
+        val userId = account.findOrCreateByEmail(email).id
+
+        val subscription = assertNotNull(billingRepository.find(userId))
+        assertEquals(SubscriptionStatus.TRIALING, subscription.status)
+        val trialEndsAt = assertNotNull(subscription.trialEndsAtEpochMillis)
+        assertTrue(trialEndsAt > before, "a trial that has already ended admits nothing")
+    }
+
+    @Test
+    fun `signing in twice leaves the first trial alone`() = authApp {
+        val email = "twice-trial-${UUID.randomUUID()}@example.com"
+        signIn(email = email)
+        val userId = account.findOrCreateByEmail(email).id
+        val first = assertNotNull(billingRepository.find(userId))
+
+        // The same address, a second magic link, the way a learner who signs out and back in
+        // really would.
+        signIn(email = email)
+
+        val second = assertNotNull(billingRepository.find(userId))
+        assertEquals(first.trialEndsAtEpochMillis, second.trialEndsAtEpochMillis)
+        assertEquals(first.createdAtEpochMillis, second.createdAtEpochMillis)
+    }
+
     // ------------------------------------------------------------------ the gate
 
     @Test
@@ -463,6 +509,19 @@ class AuthRoutesTest {
         assertEquals(QuotaConfig.DEFAULT_DAILY_EXPLAINS, view.allowance)
         assertEquals(QuotaConfig.DEFAULT_DAILY_EXPLAINS, view.remaining)
     }
+
+    @Test
+    fun `the account view reports the entitlement allowance and not the quota default`() =
+        authApp(trialGenerations = 40) {
+            signIn()
+
+            val response = client.get("/api/account")
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            val view = wireJson.decodeFromString<AccountView>(response.bodyAsText())
+            assertEquals(40, view.allowance)
+            assertNotEquals(QuotaConfig.DEFAULT_DAILY_EXPLAINS, view.allowance)
+        }
 
     @Test
     fun `the account view counts a signed-in learner's spend`() = authApp {

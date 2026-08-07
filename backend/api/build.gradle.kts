@@ -7,6 +7,7 @@ dependencies {
     implementation(project(":backend:session"))
     implementation(project(":backend:assess"))
     implementation(project(":backend:quota"))
+    implementation(project(":backend:billing"))
     implementation(project(":backend:graph"))
     implementation(project(":backend:catalog"))
     implementation(project(":backend:llm"))

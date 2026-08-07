@@ -9,6 +9,8 @@ import com.mytetz.account.MagicLinkService
 import com.mytetz.account.MailConfig
 import com.mytetz.account.MailSender
 import com.mytetz.account.ResendMailSender
+import com.mytetz.billing.BillingRepository
+import com.mytetz.billing.BillingService
 import com.mytetz.catalog.CatalogService
 import com.mytetz.catalog.TopicRepository
 import com.mytetz.catalog.TopicRequestRepository
@@ -88,6 +90,9 @@ open class Components(
 
     /** Public so `Application.kt` can pass it to `authRoutes`, which reads a counter for `GET /api/account`. */
     val quotaRepository = QuotaRepository(mongo.database)
+
+    /** `bootstrap()` calls `ensureIndexes()` on it, the same as every other repository here. */
+    val billingRepository = BillingRepository(mongo.database)
     private val accountRepository = AccountRepository(mongo.database)
 
     val catalog = CatalogService(topics)
@@ -117,6 +122,8 @@ open class Components(
     )
 
     val quota = QuotaService(quotaRepository)
+
+    val billing: BillingService = BillingService(billingRepository)
 
     private val llm: LlmClient by lazy(llmFactory)
 
@@ -158,6 +165,7 @@ open class Components(
         explanations.ensureIndexes()
         sessionRepository.ensureIndexes()
         quotaRepository.ensureIndexes()
+        billingRepository.ensureIndexes()
         accountRepository.ensureIndexes()
         catalog.seedFromResource()
         migrate()

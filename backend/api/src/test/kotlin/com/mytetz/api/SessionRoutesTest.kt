@@ -1,12 +1,19 @@
 package com.mytetz.api
 
+import com.mongodb.client.model.Filters
 import com.mytetz.account.AccountRepository
 import com.mytetz.account.AccountService
 import com.mytetz.account.MagicLinkService
 import com.mytetz.account.MailSender
+import com.mytetz.billing.BillingConfig
+import com.mytetz.billing.BillingRepository
+import com.mytetz.billing.BillingService
+import com.mytetz.billing.Subscription
+import com.mytetz.billing.SubscriptionStatus
 import com.mytetz.graph.Explanation
 import com.mytetz.graph.GraphChunk
 import com.mytetz.graph.Verb
+import com.mytetz.quota.Allowance
 import com.mytetz.quota.PrincipalId
 import com.mytetz.quota.QuotaConfig
 import com.mytetz.session.SpanSelection
@@ -29,10 +36,12 @@ import io.ktor.server.testing.ApplicationTestBuilder
 import io.ktor.server.testing.testApplication
 import kotlinx.coroutines.flow.toList
 import kotlinx.serialization.json.Json
+import org.bson.Document
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -73,6 +82,7 @@ class SessionRoutesTest {
         val client: HttpClient,
         val stack: TestFixtures.SessionStack,
         private val mailSender: CapturingMailSender,
+        val billingRepository: BillingRepository,
     ) {
         /**
          * A second learner: its own cookie jar, its own anonymous principal, and — since
@@ -84,20 +94,32 @@ class SessionRoutesTest {
             return http
         }
 
+        /**
+         * Removes [userId]'s subscription row entirely, reaching past [BillingRepository], which
+         * has no delete method of its own — the same reasoning as
+         * `TestFixtures.SessionStack.deleteSession`. Every real sign-in starts a trial, so this is
+         * the only way to put a signed-in learner back into the state of never having subscribed.
+         */
+        suspend fun deleteSubscription(userId: String) {
+            stack.database.getCollection<Document>("subscriptions").deleteOne(Filters.eq("_id", userId))
+        }
+
         /** No cookie jar at all, so every request mints a fresh principal. */
         val cookieless: HttpClient get() = builder.client
 
         /**
          * Completes a real magic-link sign-in for [http], so the explain endpoint's sign-in gate
-         * does not refuse it.
+         * does not refuse it, and starts the caller's trial.
          *
-         * Ownership and quota on `POST /api/sessions/{id}/explain` still key on the caller's
-         * anonymous principal, unchanged — see `AuthRoutes.kt`'s class KDoc. Signing in reassigns
-         * only sessions that already exist for that principal, so calling this before any session
-         * exists (as [app] does for its default [client]) reassigns nothing, and every existing
-         * assertion in this file keeps testing exactly what it tested before.
+         * Ownership and quota on `POST /api/sessions/{id}/explain` key on the signed-in user's own
+         * principal, not on the caller's anonymous cookie — a fix-round correction; see
+         * `SessionRoutes.kt`'s `effectivePrincipal`. Signing in here, before any test has created a
+         * session, therefore changes which principal every explain and create call in this file
+         * accrues against, from the caller's anonymous cookie to `user:<id>`.
+         *
+         * Returns the email signed in as, for a test that wants it.
          */
-        suspend fun signIn(http: HttpClient = client) {
+        suspend fun signIn(http: HttpClient = client): String {
             val email = "learner-${UUID.randomUUID()}@example.com"
             val requested = http.post("/api/auth/magic-link") {
                 contentType(ContentType.Application.Json)
@@ -110,6 +132,7 @@ class SessionRoutesTest {
             check(consumed.status == HttpStatusCode.Found) {
                 "fixture error: sign-in did not redirect: ${consumed.status}"
             }
+            return email
         }
     }
 
@@ -123,6 +146,10 @@ class SessionRoutesTest {
         costCeilingMicros: Long = QuotaConfig.DEFAULT_COST_CEILING_MICROS,
         sessionsPerCaller: Int = SESSIONS_PER_CALLER,
         explainsPerCaller: Int = EXPLAINS_PER_CALLER,
+        // The explain endpoint's allowance now comes from the caller's entitlement, not from
+        // `dailyExplains` — see `SessionRoutes.kt`'s entitlement gate. A test that used to force
+        // principal exhaustion through `dailyExplains` sets this instead.
+        trialGenerations: Int = QuotaConfig.DEFAULT_DAILY_EXPLAINS,
         block: suspend Scope.() -> Unit,
     ) = testApplication {
         val stack = TestFixtures.sessionApp(
@@ -139,6 +166,18 @@ class SessionRoutesTest {
         val account = AccountService(accountRepository)
         val mailSender = CapturingMailSender()
         val magicLink = MagicLinkService(accountRepository, mailSender, baseUrl = "http://localhost")
+        val billingRepository = BillingRepository(stack.database)
+        // trialDays is fixed at one day here, matching the quota module's own default window. A
+        // signed-in learner's own session creation still spends against that default window and
+        // not against the entitlement — creating a session is not gated on one — so the two would
+        // otherwise disagree about how long this learner's window is, and `QuotaService.alignWindow`
+        // would clear the counter the moment the first explain ran. That is correct behaviour for a
+        // real change of entitlement; it is not what this suite's tests below are measuring, so the
+        // two windows are kept equal here on purpose.
+        val billing = BillingService(
+            billingRepository,
+            config = BillingConfig(trialGenerations = trialGenerations, trialDays = 1),
+        )
         application {
             install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) }
             installErrorMapping()
@@ -146,6 +185,7 @@ class SessionRoutesTest {
                 sessionRoutes(
                     sessions = { stack.sessions },
                     quota = stack.quota,
+                    billing = billing,
                     account = account,
                     cookies = TestFixtures.cookieConfig,
                     clientAddresses = ClientAddressConfig(trustedHeader = null),
@@ -159,14 +199,22 @@ class SessionRoutesTest {
                     google = { error("google sign-in is not exercised by SessionRoutesTest") },
                     cookies = TestFixtures.cookieConfig,
                     quotaRepository = stack.quotaRepository,
+                    billing = billing,
                     clientAddresses = ClientAddressConfig(trustedHeader = null),
                 )
             }
         }
-        val scope = Scope(this, createClient { install(HttpCookies); followRedirects = false }, stack, mailSender)
+        val scope = Scope(
+            this,
+            createClient { install(HttpCookies); followRedirects = false },
+            stack,
+            mailSender,
+            billingRepository,
+        )
         // Every test's default client must be signed in: the explain gate now refuses a signed-out
         // caller. Signing in here, before any test has created a session, reassigns nothing — see
-        // `Scope.signIn` — so ownership and quota stay anonymous-principal-based exactly as before.
+        // `Scope.signIn` — so ownership and quota stay principal-based exactly as every test below
+        // expects, and it starts this learner's trial.
         scope.signIn()
         scope.block()
     }
@@ -410,22 +458,160 @@ class SessionRoutesTest {
         assertEquals(ContentType.Text.EventStream.contentType, response.contentType()?.contentType)
     }
 
+    // ------------------------------------------------------------------ the entitlement gate
+
+    @Test
+    fun `a trial user reaches the pipeline`() = app {
+        val created = createSession()
+        val before = stack.generations
+
+        val response = explain(created.sessionId, sessionView(created.sessionId).spanOn("behavior of matter"))
+
+        assertEquals(HttpStatusCode.OK, response.status, response.bodyAsText())
+        assertTrue(stack.generations > before, "a trial user's explain did not reach the model")
+    }
+
+    @Test
+    fun `a user with no subscription answers SUBSCRIPTION_REQUIRED`() = app {
+        val created = createSession()
+        val userId = requireNotNull(stack.sessions.ownerOf(created.sessionId)).removePrefix("user:")
+        deleteSubscription(userId)
+        val before = stack.generations
+
+        val response = explain(created.sessionId, sessionView(created.sessionId).spanOn("behavior of matter"))
+
+        assertEquals(HttpStatusCode.Forbidden, response.status)
+        assertEquals("SUBSCRIPTION_REQUIRED", response.apiError().code)
+        assertEquals(before, stack.generations, "a caller with no subscription reached the model")
+    }
+
+    @Test
+    fun `a caller with no subscription is refused before the span is read`() = app {
+        val created = createSession()
+        val userId = requireNotNull(stack.sessions.ownerOf(created.sessionId)).removePrefix("user:")
+        deleteSubscription(userId)
+        val before = stack.generations
+
+        // A span that is not in the body at all. If span validation ran first this would answer
+        // 400 SPAN_MISMATCH — a statement about the session's contents that a caller with no
+        // entitlement must not receive.
+        val response = client.post("/api/sessions/${created.sessionId}/explain") {
+            contentType(ContentType.Application.Json)
+            setBody(
+                """{"parentNodeId":"${created.rootNodeId}",""" +
+                    """"span":{"text":"this text is not in the body at all","start":0,"end":5},"verb":"EXPLAIN"}"""
+            )
+        }
+
+        assertEquals(HttpStatusCode.Forbidden, response.status)
+        val error = response.apiError()
+        assertEquals("SUBSCRIPTION_REQUIRED", error.code)
+        assertNotEquals("SPAN_MISMATCH", error.code)
+        assertEquals(before, stack.generations)
+    }
+
+    @Test
+    fun `an expired trial answers SUBSCRIPTION_REQUIRED`() = app {
+        val created = createSession()
+        val userId = requireNotNull(stack.sessions.ownerOf(created.sessionId)).removePrefix("user:")
+        val past = System.currentTimeMillis() - 1_000
+        billingRepository.upsert(
+            Subscription(
+                userId = userId,
+                status = SubscriptionStatus.TRIALING,
+                trialEndsAtEpochMillis = past,
+                createdAtEpochMillis = past - 86_400_000L,
+                updatedAtEpochMillis = past,
+            )
+        )
+        val before = stack.generations
+
+        val response = explain(created.sessionId, sessionView(created.sessionId).spanOn("behavior of matter"))
+
+        assertEquals(HttpStatusCode.Forbidden, response.status)
+        assertEquals("SUBSCRIPTION_REQUIRED", response.apiError().code)
+        assertEquals(before, stack.generations, "an expired trial reached the model")
+    }
+
     // ------------------------------------------------------------------ the quota gate
 
     @Test
-    fun `an exhausted quota returns 429 with retryAfter and generates nothing`() = app(dailyExplains = 1) {
+    fun `an exhausted trial answers TRIAL_EXHAUSTED and not 429`() = app(trialGenerations = 1) {
         val created = createSession()
         val view = sessionView(created.sessionId)
-        // The first spends the allowance. The second must be a MISS, or the gate is never consulted
-        // and the test passes for the wrong reason.
+        // With a pool of one, the seed generation from `createSession` already spends it — the
+        // trial pool counts every generation this principal makes, seed included. Either way, by
+        // the time this first explain runs the pool is spent, and the property under test is that
+        // repeating the request keeps answering the same refusal and generates nothing more.
         explain(created.sessionId, view.spanOn("behavior of matter")).bodyAsText()
         val afterFirst = stack.generations
 
         val response = explain(created.sessionId, view.spanOn("fundamental physical theory"))
 
-        // The brief's version of this test checked neither the status nor the field it is named
-        // after; it asserted only that the string QUOTA_EXCEEDED appeared somewhere in the body,
-        // which a 200 carrying an error event satisfies just as well as a refusal.
+        assertEquals(HttpStatusCode.Forbidden, response.status)
+        assertNotEquals(HttpStatusCode.TooManyRequests, response.status, "a trial must not answer like a subscriber")
+        assertEquals("TRIAL_EXHAUSTED", response.apiError().code)
+        assertEquals(afterFirst, stack.generations, "a refused request generated anyway")
+    }
+
+    @Test
+    fun `an exhausted trial carries no retry-after`() = app(trialGenerations = 1) {
+        val created = createSession()
+        val view = sessionView(created.sessionId)
+        explain(created.sessionId, view.spanOn("behavior of matter")).bodyAsText()
+
+        val response = explain(created.sessionId, view.spanOn("fundamental physical theory"))
+
+        // A trial pool does not roll over, so there is no honest wait to name. A Retry-After here
+        // would promise a reset that a spent trial never reaches.
+        assertNull(response.apiError().retryAfter, "the body named a wait a trial pool cannot honour")
+        assertNull(response.headers[HttpHeaders.RetryAfter], "the header named a wait a trial pool cannot honour")
+    }
+
+    @Test
+    fun `the trial allowance bounds generation at the configured pool`() = app(trialGenerations = 2) {
+        val created = createSession()
+        val view = sessionView(created.sessionId)
+        // The seed from `createSession` is the pool's first generation; this explain is its second.
+        explain(created.sessionId, view.spanOn("behavior of matter")).bodyAsText()
+        val afterTwo = stack.generations
+
+        // The pool's third would-be generation. Refused, and it must not generate.
+        val refused = explain(created.sessionId, view.spanOn("fundamental physical theory"))
+
+        assertEquals(HttpStatusCode.Forbidden, refused.status)
+        assertEquals("TRIAL_EXHAUSTED", refused.apiError().code)
+        assertEquals(2, afterTwo)
+        assertEquals(2, stack.generations, "the refused request generated anyway")
+    }
+
+    @Test
+    fun `an exhausted subscriber answers 429 with a retry-after`() = app {
+        val created = createSession()
+        val userId = requireNotNull(stack.sessions.ownerOf(created.sessionId)).removePrefix("user:")
+        val now = System.currentTimeMillis()
+        billingRepository.upsert(
+            Subscription(
+                userId = userId,
+                status = SubscriptionStatus.ACTIVE,
+                createdAtEpochMillis = now,
+                updatedAtEpochMillis = now,
+            )
+        )
+        // The subscriber window is a fixed day, the same length `app`'s own default quota window
+        // uses, so it matches what the seed above already recorded and nothing is realigned away.
+        val subscriberAllowance = Allowance(
+            generations = BillingConfig.DEFAULT_SUBSCRIBER_DAILY_EXPLAINS,
+            windowMillis = 86_400_000L,
+        )
+        // The seed already spent one of the subscriber's daily explanations; fill the rest directly
+        // rather than through two dozen more real model calls.
+        repeat(BillingConfig.DEFAULT_SUBSCRIBER_DAILY_EXPLAINS - 1) {
+            stack.quota.recordGeneration(PrincipalId.user(userId), costMicros = 1, allowance = subscriberAllowance)
+        }
+
+        val response = explain(created.sessionId, sessionView(created.sessionId).spanOn("behavior of matter"))
+
         assertEquals(HttpStatusCode.TooManyRequests, response.status)
         val error = response.apiError()
         assertEquals("QUOTA_EXCEEDED", error.code)
@@ -436,7 +622,6 @@ class SessionRoutesTest {
             response.headers[HttpHeaders.RetryAfter],
             "the header and the body must agree; proxies read the header",
         )
-        assertEquals(afterFirst, stack.generations, "a refused request generated anyway")
     }
 
     @Test

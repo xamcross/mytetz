@@ -5,8 +5,9 @@ import com.mytetz.account.AccountService
 import com.mytetz.account.GoogleOAuth
 import com.mytetz.account.MagicLinkService
 import com.mytetz.account.User
+import com.mytetz.billing.BillingService
+import com.mytetz.billing.EntitlementDecision
 import com.mytetz.quota.PrincipalId
-import com.mytetz.quota.QuotaConfig
 import com.mytetz.quota.QuotaRepository
 import com.mytetz.session.SessionService
 import io.ktor.http.Cookie
@@ -58,9 +59,9 @@ data class MagicLinkRequest(val email: String)
 /**
  * The view `GET /api/account` answers.
  *
- * [status], [trialEndsAtEpochMillis] and [currentPeriodEndsAtEpochMillis] hold a placeholder until
- * slice B2 adds the `billing` module. [allowance] and [remaining] come from [QuotaConfig] and the
- * caller's own counter. A later task replaces this resolution with an entitlement.
+ * [status], [trialEndsAtEpochMillis] and [currentPeriodEndsAtEpochMillis] come from the caller's own
+ * subscription row. [allowance] and [remaining] come from the caller's resolved entitlement and
+ * their own counter — see [accountViewFor].
  */
 @Serializable
 data class AccountView(
@@ -112,7 +113,7 @@ fun Route.authRoutes(
     google: () -> GoogleOAuth,
     cookies: PrincipalCookieConfig,
     quotaRepository: QuotaRepository,
-    quotaConfig: QuotaConfig = QuotaConfig(),
+    billing: BillingService,
     clientAddresses: ClientAddressConfig = ClientAddressConfig(),
     clock: () -> Long = System::currentTimeMillis,
     magicLinkIpLimiter: FixedWindowRateLimiter = FixedWindowRateLimiter(
@@ -165,7 +166,7 @@ fun Route.authRoutes(
         }
 
         val user = account.findOrCreateByEmail(email)
-        call.completeSignIn(account, sessions, cookies, user)
+        call.completeSignIn(account, sessions, cookies, billing, user)
         call.respondRedirect("/")
     }
 
@@ -201,7 +202,7 @@ fun Route.authRoutes(
         try {
             val identity = google().exchange(code, verifier)
             val user = account.linkGoogle(identity)
-            call.completeSignIn(account, sessions, cookies, user)
+            call.completeSignIn(account, sessions, cookies, billing, user)
             call.respondRedirect("/")
         } catch (e: CancellationException) {
             throw e
@@ -236,45 +237,94 @@ fun Route.authRoutes(
             )
             return@get
         }
-        call.respond(accountViewFor(user, quotaRepository, quotaConfig, clock()))
+        call.respond(accountViewFor(user, quotaRepository, billing, clock()))
     }
 }
 
 /**
  * Finishes a sign-in for [user]: reads the caller's anonymous principal, opens a session, sets the
- * session cookie, and moves the anonymous principal's sessions onto the user. See the class KDoc on
- * [authRoutes] for why the order is fixed.
+ * session cookie, moves the anonymous principal's sessions onto the user, and starts a trial for the
+ * user when one has not already started. See the class KDoc on [authRoutes] for why the order of the
+ * first three is fixed.
+ *
+ * [BillingService.startTrialIfAbsent] is called last and unconditionally, because both callers of
+ * this function — the magic-link route and the Google route — are the two places a sign-in
+ * completes, and a trial that started only on one of them would leave a learner without one who
+ * happened to choose the other.
  */
 private suspend fun ApplicationCall.completeSignIn(
     account: AccountService,
     sessions: () -> SessionService,
     cookies: PrincipalCookieConfig,
+    billing: BillingService,
     user: User,
 ) {
     val anonymousPrincipal = Principals.resolve(this, cookies)
     val sessionId = account.openSession(user.id)
     Principals.setSessionCookie(this, cookies, sessionId)
     sessions().reassignPrincipal(anonymousPrincipal.value, PrincipalId.user(user.id).value)
+    billing.startTrialIfAbsent(user.id)
 }
 
 /**
- * The account view for [user]: [QuotaConfig.dailyExplains] as the allowance, and the caller's own
- * counter for how much of it remains. An absent counter, or one whose window has already ended,
- * reports the full allowance and no reset time — a fresh window has not started yet.
+ * The account view for [user].
+ *
+ * [BillingService.startTrialIfAbsent] is called here as a read, not a write: it returns the stored
+ * row untouched when one already exists, which is always true by the time a signed-in caller can
+ * reach this route, and it is the one place [BillingService] hands back the raw row this view needs
+ * for [AccountView.trialEndsAtEpochMillis] and [AccountView.currentPeriodEndsAtEpochMillis].
+ *
+ * [AccountView.allowance] and [AccountView.remaining] come from the caller's resolved entitlement
+ * and their own counter, not from the quota module's own daily default. A caller with
+ * [EntitlementDecision.SubscriptionRequired] reports zero for both — there is no allowance to count
+ * against. An absent counter, or one whose window has already ended, reports the full allowance and
+ * no reset time — a fresh window has not started yet.
  */
 private suspend fun accountViewFor(
     user: User,
     quotaRepository: QuotaRepository,
-    quotaConfig: QuotaConfig,
+    billing: BillingService,
     now: Long,
 ): AccountView {
-    val allowance = quotaConfig.dailyExplains
+    val subscription = billing.startTrialIfAbsent(user.id)
+    val entitlement = billing.entitlementFor(user.id)
+
+    val allowance = when (entitlement) {
+        is EntitlementDecision.Allowed -> entitlement.allowance.generations
+        EntitlementDecision.SubscriptionRequired -> 0
+    }
+    val status = when (entitlement) {
+        is EntitlementDecision.Allowed -> entitlement.status.name
+        EntitlementDecision.SubscriptionRequired -> "NONE"
+    }
+
+    if (entitlement is EntitlementDecision.SubscriptionRequired) {
+        return AccountView(
+            email = user.email,
+            status = status,
+            trialEndsAtEpochMillis = subscription.trialEndsAtEpochMillis,
+            currentPeriodEndsAtEpochMillis = subscription.currentPeriodEndsAtEpochMillis,
+            allowance = 0,
+            remaining = 0,
+        )
+    }
+
     val counter = quotaRepository.findCounter(PrincipalId.user(user.id).value)
     return if (counter == null || now >= counter.windowExpiresAtEpochMillis) {
-        AccountView(email = user.email, allowance = allowance, remaining = allowance)
+        AccountView(
+            email = user.email,
+            status = status,
+            trialEndsAtEpochMillis = subscription.trialEndsAtEpochMillis,
+            currentPeriodEndsAtEpochMillis = subscription.currentPeriodEndsAtEpochMillis,
+            allowance = allowance,
+            remaining = allowance,
+        )
     } else {
         AccountView(
             email = user.email,
+            status = status,
+            trialEndsAtEpochMillis = subscription.trialEndsAtEpochMillis,
+            currentPeriodEndsAtEpochMillis = subscription.currentPeriodEndsAtEpochMillis,
             allowance = allowance,
             remaining = (allowance - counter.explainCount).coerceAtLeast(0),
             resetsAtEpochMillis = counter.windowExpiresAtEpochMillis,

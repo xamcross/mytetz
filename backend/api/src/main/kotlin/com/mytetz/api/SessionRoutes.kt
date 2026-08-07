@@ -1,8 +1,12 @@
 package com.mytetz.api
 
 import com.mytetz.account.AccountService
+import com.mytetz.billing.BillingService
+import com.mytetz.billing.EntitlementDecision
+import com.mytetz.billing.SubscriptionStatus
 import com.mytetz.graph.GraphChunk
 import com.mytetz.graph.Verb
+import com.mytetz.quota.Allowance
 import com.mytetz.quota.PrincipalId
 import com.mytetz.quota.QuotaDecision
 import com.mytetz.quota.QuotaService
@@ -298,6 +302,7 @@ const val MAX_SESSION_BODY_BYTES: Long = 4_096
 fun Route.sessionRoutes(
     sessions: () -> SessionService,
     quota: QuotaService,
+    billing: BillingService,
     account: AccountService,
     cookies: PrincipalCookieConfig,
     clientAddresses: ClientAddressConfig = ClientAddressConfig(),
@@ -452,11 +457,30 @@ fun Route.sessionRoutes(
             return@post
         }
 
-        // Slice B2 inserts the entitlement check here, between sign-in and span validation.
+        val principal = PrincipalId.user(signedInUser.id)
+
+        // The entitlement gate. Second, right after sign-in and above span validation, for the same
+        // reason as the gate above: a caller with no entitlement must learn nothing about the
+        // session or the span either.
+        val entitlement = billing.entitlementFor(signedInUser.id)
+        if (entitlement !is EntitlementDecision.Allowed) {
+            call.respond(
+                HttpStatusCode.Forbidden,
+                ApiError("SUBSCRIPTION_REQUIRED", "a subscription is required to request an explanation"),
+            )
+            return@post
+        }
+
+        // A learner's entitlement can change under a counter that does not know it changed — a
+        // trial ending, a subscription starting. This is the write path, so this is where the
+        // counter's window is brought in line with the entitlement that was just resolved, and it
+        // runs before the check below so that check never sees a stale window. `GET /api/account`
+        // must never call this: it is a read, and a learner must not be able to clear their own
+        // count by opening the account page.
+        quota.alignWindow(principal, entitlement.allowance)
 
         val sessions = sessions()
 
-        val principal = PrincipalId.user(signedInUser.id)
         val sessionId = call.parameters["id"].orEmpty()
         val request = call.receive<ExplainRequest>()
 
@@ -477,7 +501,7 @@ fun Route.sessionRoutes(
         var plan = prepare()
 
         if (!plan.cached) {
-            val refusal = quota.refusalFor(principal) {
+            val refusal = quota.refusalFor(principal, entitlement.allowance, entitlement.status) {
                 // Re-read, and use the fresher plan: another caller may have persisted this key
                 // since. `prepare` calls no model. See property 2.
                 //
@@ -517,7 +541,7 @@ fun Route.sessionRoutes(
 
         call.respond(
             SSEServerContent(call) {
-                streamExplanation(sessions, quota, principal, plan)
+                streamExplanation(sessions, quota, principal, entitlement.allowance, plan)
             }
         )
     }
@@ -596,6 +620,7 @@ private suspend fun ServerSSESession.streamExplanation(
     sessions: SessionService,
     quota: QuotaService,
     principal: PrincipalId,
+    allowance: Allowance,
     plan: ExplainPlan,
 ) {
     // Outside the `try`, because the `finally` reads it.
@@ -621,7 +646,7 @@ private suspend fun ServerSSESession.streamExplanation(
     } catch (e: Exception) {
         send(ServerSentEvent(event = "error", data = json.encodeToString(sseErrorFor(e))))
     } finally {
-        withContext(NonCancellable) { quota.recordSpend(principal, spentMicros) }
+        withContext(NonCancellable) { quota.recordSpend(principal, spentMicros, allowance) }
     }
 }
 
@@ -692,13 +717,28 @@ private suspend fun ApplicationCall.respondRefusal(refusal: Refusal) {
  * still consulted, keeps serving everything the cache can answer for nothing. It gets its own code
  * rather than borrowing `SPEND_LIMIT`, because "we cannot tell" and "the budget is gone" need
  * different things from an operator.
+ *
+ * ## Why a trial and a subscriber get a different refusal
+ *
+ * [status] tells [QuotaDecision.PrincipalExceeded] apart into two different answers. A trial pool
+ * does not roll over: there is no midnight, no next window, nothing a `Retry-After` could honestly
+ * name. A `TRIALING` caller who has used the pool up gets `403 TRIAL_EXHAUSTED` and no `retryAfter`.
+ * Every other status — including null, for the one caller below with no entitlement to resolve —
+ * gets the original `429 QUOTA_EXCEEDED` with the real wait, unchanged.
+ *
+ * [allowance] and [status] both default to null for `POST /api/sessions`, which spends against a
+ * principal's baseline quota and is not gated on an entitlement at all; a null [allowance] keeps
+ * `checkGeneration`'s own default. `POST /api/sessions/{id}/explain` always passes both explicitly,
+ * resolved from that caller's entitlement.
  */
 private suspend fun QuotaService.refusalFor(
     principal: PrincipalId,
+    allowance: Allowance? = null,
+    status: SubscriptionStatus? = null,
     becameFree: suspend () -> Boolean,
 ): Refusal? {
     val decision = try {
-        checkGeneration(principal)
+        if (allowance != null) checkGeneration(principal, allowance) else checkGeneration(principal)
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
@@ -709,14 +749,24 @@ private suspend fun QuotaService.refusalFor(
     val refusal = when (decision) {
         QuotaDecision.Allowed -> return null
 
-        is QuotaDecision.PrincipalExceeded -> Refusal(
-            HttpStatusCode.TooManyRequests,
-            ApiError(
-                code = "QUOTA_EXCEEDED",
-                message = "you have used today's allowance of new explanations",
-                retryAfter = decision.retryAfterSeconds,
-            ),
-        )
+        is QuotaDecision.PrincipalExceeded -> if (status == SubscriptionStatus.TRIALING) {
+            Refusal(
+                HttpStatusCode.Forbidden,
+                ApiError(
+                    code = "TRIAL_EXHAUSTED",
+                    message = "the trial's explanations are used up; subscribe to keep going",
+                ),
+            )
+        } else {
+            Refusal(
+                HttpStatusCode.TooManyRequests,
+                ApiError(
+                    code = "QUOTA_EXCEEDED",
+                    message = "you have used today's allowance of new explanations",
+                    retryAfter = decision.retryAfterSeconds,
+                ),
+            )
+        }
 
         // 503, not 429: the caller did nothing wrong and there is nothing they can do differently.
         // No `retryAfter` — the budget resets at midnight UTC, and this layer holds no clock of its
@@ -744,11 +794,20 @@ private suspend fun QuotaService.refusalFor(
  *
  * Zero is not recorded. `recordGeneration` increments a *count* as well as a cost, so recording a
  * zero would spend one of the principal's daily explanations on a cache hit.
+ *
+ * [allowance] defaults to null for the create-session path, which has no entitlement to resolve and
+ * keeps `QuotaConfig`'s own default. The explain route always passes its resolved allowance
+ * explicitly, and by name — `recordGeneration` takes `costMicros` second and `allowance` third, both
+ * arguments below are given by name for that reason, so the two cannot be swapped silently.
  */
-private suspend fun QuotaService.recordSpend(principal: PrincipalId, spentMicros: Long) {
+private suspend fun QuotaService.recordSpend(principal: PrincipalId, spentMicros: Long, allowance: Allowance? = null) {
     if (spentMicros <= 0) return
     try {
-        recordGeneration(principal, spentMicros)
+        if (allowance != null) {
+            recordGeneration(principalId = principal, costMicros = spentMicros, allowance = allowance)
+        } else {
+            recordGeneration(principalId = principal, costMicros = spentMicros)
+        }
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {

@@ -116,6 +116,7 @@ fun Application.module(components: Components = Components()) {
             // with it. See the note on `sessionRoutes` and `Components`' own KDoc.
             sessions = { components.sessions },
             quota = components.quota,
+            billing = components.billing,
             account = components.account,
             cookies = components.cookies,
             clientAddresses = components.clientAddresses,
@@ -131,6 +132,7 @@ fun Application.module(components: Components = Components()) {
             google = { components.googleOAuth },
             cookies = components.cookies,
             quotaRepository = components.quotaRepository,
+            billing = components.billing,
             clientAddresses = components.clientAddresses,
         )
 
