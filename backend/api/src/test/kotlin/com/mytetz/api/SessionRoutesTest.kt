@@ -1,5 +1,9 @@
 package com.mytetz.api
 
+import com.mytetz.account.AccountRepository
+import com.mytetz.account.AccountService
+import com.mytetz.account.MagicLinkService
+import com.mytetz.account.MailSender
 import com.mytetz.graph.Explanation
 import com.mytetz.graph.GraphChunk
 import com.mytetz.graph.Verb
@@ -25,6 +29,7 @@ import io.ktor.server.testing.ApplicationTestBuilder
 import io.ktor.server.testing.testApplication
 import kotlinx.coroutines.flow.toList
 import kotlinx.serialization.json.Json
+import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -51,16 +56,61 @@ class SessionRoutesTest {
 
     // ------------------------------------------------------------------ harness
 
+    /**
+     * Records the link `MagicLinkService.request` would have mailed, keyed by address, so a test
+     * can complete a real sign-in without a mail provider.
+     */
+    private class CapturingMailSender : MailSender {
+        private val links = mutableMapOf<String, String>()
+        override suspend fun sendMagicLink(email: String, link: String) {
+            links[email] = link
+        }
+        fun tokenFor(email: String): String = links.getValue(email).substringAfterLast("/")
+    }
+
     private class Scope(
         private val builder: ApplicationTestBuilder,
         val client: HttpClient,
         val stack: TestFixtures.SessionStack,
+        private val mailSender: CapturingMailSender,
     ) {
-        /** A second learner: its own cookie jar is its own principal. */
-        fun anotherLearner(): HttpClient = builder.createClient { install(HttpCookies) }
+        /**
+         * A second learner: its own cookie jar, its own anonymous principal, and — since
+         * `POST /api/sessions/{id}/explain` now gates on sign-in — its own signed-in session.
+         */
+        suspend fun anotherLearner(): HttpClient {
+            val http = builder.createClient { install(HttpCookies); followRedirects = false }
+            signIn(http)
+            return http
+        }
 
         /** No cookie jar at all, so every request mints a fresh principal. */
         val cookieless: HttpClient get() = builder.client
+
+        /**
+         * Completes a real magic-link sign-in for [http], so the explain endpoint's sign-in gate
+         * does not refuse it.
+         *
+         * Ownership and quota on `POST /api/sessions/{id}/explain` still key on the caller's
+         * anonymous principal, unchanged — see `AuthRoutes.kt`'s class KDoc. Signing in reassigns
+         * only sessions that already exist for that principal, so calling this before any session
+         * exists (as [app] does for its default [client]) reassigns nothing, and every existing
+         * assertion in this file keeps testing exactly what it tested before.
+         */
+        suspend fun signIn(http: HttpClient = client) {
+            val email = "learner-${UUID.randomUUID()}@example.com"
+            val requested = http.post("/api/auth/magic-link") {
+                contentType(ContentType.Application.Json)
+                setBody("""{"email":"$email"}""")
+            }
+            check(requested.status == HttpStatusCode.NoContent) {
+                "fixture error: the magic-link request failed: ${requested.status}"
+            }
+            val consumed = http.get("/api/auth/magic-link/${mailSender.tokenFor(email)}")
+            check(consumed.status == HttpStatusCode.Found) {
+                "fixture error: sign-in did not redirect: ${consumed.status}"
+            }
+        }
     }
 
     /**
@@ -81,6 +131,14 @@ class SessionRoutesTest {
             sessionsPerCaller,
             explainsPerCaller,
         )
+        // The explain endpoint now gates on sign-in (see SessionRoutes.kt), so this harness wires
+        // the real auth routes too, backed by a mail sender that captures the link instead of
+        // sending one. Built locally rather than through `TestFixtures`, which this task does not
+        // touch.
+        val accountRepository = AccountRepository(stack.database)
+        val account = AccountService(accountRepository)
+        val mailSender = CapturingMailSender()
+        val magicLink = MagicLinkService(accountRepository, mailSender, baseUrl = "http://localhost")
         application {
             install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) }
             installErrorMapping()
@@ -88,14 +146,29 @@ class SessionRoutesTest {
                 sessionRoutes(
                     sessions = { stack.sessions },
                     quota = stack.quota,
+                    account = account,
                     cookies = TestFixtures.cookieConfig,
                     clientAddresses = ClientAddressConfig(trustedHeader = null),
                     sessionLimiter = stack.limiter,
                     explainLimiter = stack.explainLimiter,
                 )
+                authRoutes(
+                    account = account,
+                    sessions = { stack.sessions },
+                    magicLink = { magicLink },
+                    google = { error("google sign-in is not exercised by SessionRoutesTest") },
+                    cookies = TestFixtures.cookieConfig,
+                    quotaRepository = stack.quotaRepository,
+                    clientAddresses = ClientAddressConfig(trustedHeader = null),
+                )
             }
         }
-        Scope(this, createClient { install(HttpCookies) }, stack).block()
+        val scope = Scope(this, createClient { install(HttpCookies); followRedirects = false }, stack, mailSender)
+        // Every test's default client must be signed in: the explain gate now refuses a signed-out
+        // caller. Signing in here, before any test has created a session, reassigns nothing — see
+        // `Scope.signIn` — so ownership and quota stay anonymous-principal-based exactly as before.
+        scope.signIn()
+        scope.block()
     }
 
     private val json = Json { ignoreUnknownKeys = true }

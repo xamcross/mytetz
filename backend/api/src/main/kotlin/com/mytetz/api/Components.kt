@@ -1,5 +1,14 @@
 package com.mytetz.api
 
+import com.mytetz.account.AccountRepository
+import com.mytetz.account.AccountService
+import com.mytetz.account.GoogleConfig
+import com.mytetz.account.GoogleOAuth
+import com.mytetz.account.LoggingMailSender
+import com.mytetz.account.MagicLinkService
+import com.mytetz.account.MailConfig
+import com.mytetz.account.MailSender
+import com.mytetz.account.ResendMailSender
 import com.mytetz.catalog.CatalogService
 import com.mytetz.catalog.TopicRepository
 import com.mytetz.catalog.TopicRequestRepository
@@ -18,6 +27,10 @@ import com.mytetz.quota.QuotaRepository
 import com.mytetz.quota.QuotaService
 import com.mytetz.session.SessionRepository
 import com.mytetz.session.SessionService
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.cio.CIO
+import io.ktor.client.plugins.defaultRequest
+import io.ktor.client.request.url
 import org.slf4j.LoggerFactory
 import kotlin.coroutines.cancellation.CancellationException
 
@@ -53,15 +66,40 @@ open class Components(
     val cookies: PrincipalCookieConfig = PrincipalCookieConfig(),
     val clientAddresses: ClientAddressConfig = ClientAddressConfig(),
     llmFactory: () -> LlmClient = { AnthropicLlmClient() },
+    // Each factory default reads its own credential from the environment, and each throws when the
+    // credential is absent. Neither runs at construction: both sit inside a `by lazy` below, on the
+    // same reasoning [llmFactory] carries — a deployment with no mail key and no Google client must
+    // still serve the catalogue. See [defaultMailSender] and [defaultGoogleOAuth].
+    mailSenderFactory: () -> MailSender = { defaultMailSender() },
+    googleOAuthFactory: () -> GoogleOAuth = { defaultGoogleOAuth() },
+    // A factory, and not a plain `String`, for the same reason as the two above: the production
+    // default throws when the credential is absent, and it must not do that until `magicLink` is
+    // actually forced. A test overrides this to exercise a real sign-in without setting the real
+    // environment variable process-wide.
+    publicBaseUrl: () -> String = { resolvePublicBaseUrl(System.getenv(PUBLIC_BASE_URL_ENV)) },
     val migrateOnBoot: Boolean = resolveMigrateOnBoot(System.getenv(MIGRATE_ON_BOOT_ENV)),
 ) {
 
     private val topics = TopicRepository(mongo.database)
     private val explanations = ExplanationRepository(mongo.database)
     private val sessionRepository = SessionRepository(mongo.database)
-    private val quotaRepository = QuotaRepository(mongo.database)
+
+    /** Public so `Application.kt` can pass it to `authRoutes`, which reads a counter for `GET /api/account`. */
+    val quotaRepository = QuotaRepository(mongo.database)
+    private val accountRepository = AccountRepository(mongo.database)
 
     val catalog = CatalogService(topics)
+
+    /** Cheap to build and needs no credential, so — unlike [magicLink] and [googleOAuth] — this is not lazy. */
+    val account: AccountService = AccountService(accountRepository)
+
+    private val mail: MailSender by lazy(mailSenderFactory)
+
+    val magicLink: MagicLinkService by lazy {
+        MagicLinkService(accountRepository, mail, publicBaseUrl())
+    }
+
+    val googleOAuth: GoogleOAuth by lazy(googleOAuthFactory)
 
     val topicRequests = TopicRequestRepository(
         database = mongo.database,
@@ -118,6 +156,7 @@ open class Components(
         explanations.ensureIndexes()
         sessionRepository.ensureIndexes()
         quotaRepository.ensureIndexes()
+        accountRepository.ensureIndexes()
         catalog.seedFromResource()
         migrate()
     }
@@ -193,6 +232,9 @@ open class Components(
     companion object {
 
         const val MIGRATE_ON_BOOT_ENV: String = "MYTETZ_MIGRATE_ON_BOOT"
+        const val PUBLIC_BASE_URL_ENV: String = "MYTETZ_PUBLIC_BASE_URL"
+        const val GOOGLE_CLIENT_ID_ENV: String = "GOOGLE_CLIENT_ID"
+        const val GOOGLE_CLIENT_SECRET_ENV: String = "GOOGLE_CLIENT_SECRET"
 
         /**
          * Only the exact word `true` turns the migration on.
@@ -204,5 +246,67 @@ open class Components(
          */
         internal fun resolveMigrateOnBoot(raw: String?): Boolean =
             raw?.trim()?.equals("true", ignoreCase = true) == true
+
+        /**
+         * Resolves [PUBLIC_BASE_URL_ENV], and throws when it is unset.
+         *
+         * A magic link and a Google redirect both need an absolute URL of this deployment. There is
+         * no safe default for one, on the same reasoning `PrincipalCookieConfig.resolveSigningKey`
+         * gives for the cookie key: a wrong guess here mails a broken link to every learner, so the
+         * safe failure is to refuse rather than to guess.
+         */
+        internal fun resolvePublicBaseUrl(raw: String?): String {
+            val url = raw?.trim().orEmpty()
+            check(url.isNotEmpty()) {
+                "$PUBLIC_BASE_URL_ENV is not set. A magic link and a Google redirect both need an " +
+                    "absolute base url for this deployment, and there is no safe default."
+            }
+            return url
+        }
+
+        private fun requireEnv(name: String): String {
+            val value = System.getenv(name)?.trim().orEmpty()
+            check(value.isNotEmpty()) { "$name is not set, and Google sign-in needs it." }
+            return value
+        }
+
+        /**
+         * Builds the production [MailSender] from [MailConfig], read from the environment.
+         *
+         * `MailConfig`'s own default constructor throws when `MYTETZ_MAIL_MODE` is unset or
+         * unrecognised — see its KDoc. This function runs only inside [mail]'s `by lazy`, so that
+         * throw happens the first time a route actually sends a magic link, and never while
+         * [Components] is being constructed.
+         */
+        private fun defaultMailSender(): MailSender {
+            val config = MailConfig()
+            return when (config.mode) {
+                "resend" -> ResendMailSender(
+                    apiKey = config.apiKey?.takeIf { it.isNotBlank() }
+                        ?: error("${MailConfig.API_KEY_ENV} is not set, and MYTETZ_MAIL_MODE=resend needs it"),
+                    from = config.from?.takeIf { it.isNotBlank() }
+                        ?: error("${MailConfig.FROM_ENV} is not set, and MYTETZ_MAIL_MODE=resend needs it"),
+                    httpClient = HttpClient(CIO) { defaultRequest { url("https://api.resend.com") } },
+                )
+                else -> LoggingMailSender()
+            }
+        }
+
+        /**
+         * Builds the production [GoogleOAuth] from [GOOGLE_CLIENT_ID_ENV], [GOOGLE_CLIENT_SECRET_ENV]
+         * and [PUBLIC_BASE_URL_ENV]. Runs only inside [googleOAuth]'s `by lazy`, for the same reason
+         * [defaultMailSender] gives.
+         */
+        private fun defaultGoogleOAuth(): GoogleOAuth {
+            val baseUrl = resolvePublicBaseUrl(System.getenv(PUBLIC_BASE_URL_ENV))
+            return GoogleOAuth(
+                config = GoogleConfig(
+                    clientId = requireEnv(GOOGLE_CLIENT_ID_ENV),
+                    clientSecret = requireEnv(GOOGLE_CLIENT_SECRET_ENV),
+                    redirectUri = "$baseUrl/api/auth/google/callback",
+                ),
+                httpClient = HttpClient(CIO),
+            )
+        }
     }
 }

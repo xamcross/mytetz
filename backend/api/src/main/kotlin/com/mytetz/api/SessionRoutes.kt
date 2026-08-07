@@ -1,5 +1,6 @@
 package com.mytetz.api
 
+import com.mytetz.account.AccountService
 import com.mytetz.graph.GraphChunk
 import com.mytetz.graph.Verb
 import com.mytetz.quota.PrincipalId
@@ -297,6 +298,7 @@ const val MAX_SESSION_BODY_BYTES: Long = 4_096
 fun Route.sessionRoutes(
     sessions: () -> SessionService,
     quota: QuotaService,
+    account: AccountService,
     cookies: PrincipalCookieConfig,
     clientAddresses: ClientAddressConfig = ClientAddressConfig(),
     sessionLimiter: FixedWindowRateLimiter = FixedWindowRateLimiter(
@@ -430,6 +432,21 @@ fun Route.sessionRoutes(
             )
             return@post
         }
+
+        // The sign-in gate. Second, right after the rate limiter and before `sessions()` — which
+        // forces the lazy Anthropic client — and before anything reads the request body's span. An
+        // anonymous caller must learn nothing about the session or the span: a wrong-order gate
+        // would let a `400 SPAN_MISMATCH` tell an unauthenticated prober whether a guessed span was
+        // right. This check does not change which principal owns a session or a quota counter —
+        // that stays the caller's anonymous principal below, unchanged, exactly as this slice
+        // specifies. See `AuthRoutes.kt`'s class KDoc for why sign-in and ownership stay separate.
+        val signedInUser = Principals.readSessionId(call, cookies)?.let { account.resolveSession(it) }
+        if (signedInUser == null) {
+            call.respond(HttpStatusCode.Unauthorized, ApiError("SIGN_IN_REQUIRED", "sign in to request an explanation"))
+            return@post
+        }
+
+        // Slice B2 inserts the entitlement check here, between sign-in and span validation.
 
         val sessions = sessions()
 

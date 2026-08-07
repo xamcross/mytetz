@@ -11,6 +11,11 @@ dependencies {
     implementation(project(":backend:catalog"))
     implementation(project(":backend:llm"))
     implementation(project(":backend:persistence"))
+    // `:backend:account` declares `ktor-client-core` as `implementation`, so it does not reach this
+    // module's own compile classpath. `Components.kt` builds a real `HttpClient(CIO)` for
+    // `ResendMailSender` and `GoogleOAuth`, so both the client API and a real engine are needed here.
+    implementation(libs.ktor.client.core)
+    implementation(libs.ktor.client.cio)
     implementation(libs.ktor.server.core)
     implementation(libs.ktor.server.netty)
     implementation(libs.ktor.server.content.negotiation)
@@ -31,6 +36,9 @@ dependencies {
     testImplementation(testFixtures(project(":backend:llm")))
     testImplementation(libs.testcontainers.mongodb)
     testImplementation(libs.testcontainers.junit)
+    // AuthRoutesTest drives GoogleOAuth against a loopback com.sun.net.httpserver.HttpServer, the
+    // same way GoogleOAuthTest and MailSenderTest do in :backend:account. The CIO engine this needs
+    // already reaches the test classpath through the `implementation` dependency above.
 }
 
 val frontendDir = rootProject.file("frontend")

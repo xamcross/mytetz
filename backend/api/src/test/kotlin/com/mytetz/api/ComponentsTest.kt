@@ -5,9 +5,15 @@ import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.read.ListAppender
 import com.mongodb.client.model.Filters
 import com.mongodb.kotlin.client.coroutine.MongoDatabase
+import com.mytetz.account.GoogleConfig
+import com.mytetz.account.GoogleOAuth
+import com.mytetz.account.LoggingMailSender
+import com.mytetz.account.MailSender
 import com.mytetz.llm.FakeLlmClient
 import com.mytetz.persistence.Mongo
 import com.mytetz.persistence.MongoConfig
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.cookies.HttpCookies
 import io.ktor.client.request.get
 import io.ktor.client.request.head
@@ -24,6 +30,7 @@ import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import org.bson.Document
 import org.slf4j.LoggerFactory
+import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
@@ -44,6 +51,18 @@ import kotlin.test.assertTrue
  * suite would notice.
  */
 class ComponentsTest {
+
+    /**
+     * Records the link `MagicLinkService.request` would have mailed, keyed by address, so a test
+     * can complete a real sign-in without a mail provider.
+     */
+    private class CapturingMailSender : MailSender {
+        private val links = mutableMapOf<String, String>()
+        override suspend fun sendMagicLink(email: String, link: String) {
+            links[email] = link
+        }
+        fun tokenFor(email: String): String = links.getValue(email).substringAfterLast("/")
+    }
 
     private fun components(name: String, migrateOnBoot: Boolean = false) = Components(
         mongo = Mongo(MongoConfig(uri = TestFixtures.connectionString, databaseName = "test_api_$name")),
@@ -277,7 +296,19 @@ class ComponentsTest {
         // broadly: `route("/api/{...}")` is a tailcard over every method, and `default("index.html")`
         // makes the static handler match everything — and that catch-all exists precisely because
         // "specificity will handle it" was wrong once already.
-        application { module(components("session_routes")) }
+        //
+        // A bespoke `Components` rather than the `components(name)` helper: the explain gate now
+        // needs a real sign-in (see `SessionRoutes.kt`), and that needs `magicLink` to build without
+        // depending on the real `MYTETZ_PUBLIC_BASE_URL` process environment or a mail provider.
+        lateinit var mailSender: CapturingMailSender
+        val components = Components(
+            mongo = Mongo(MongoConfig(uri = TestFixtures.connectionString, databaseName = "test_api_session_routes")),
+            cookies = TestFixtures.cookieConfig,
+            llmFactory = { FakeLlmClient() },
+            mailSenderFactory = { CapturingMailSender().also { mailSender = it } },
+            publicBaseUrl = { "http://localhost" },
+        )
+        application { module(components) }
         // The catalogue is seeded in the background, and `POST /api/sessions` refuses a topic the
         // catalogue does not have — so without this the route answers 400 for the right reason and
         // the test fails for the wrong one.
@@ -287,7 +318,20 @@ class ComponentsTest {
         // principal for every cookie-less request, so the default test client would create a session
         // as one learner and then be refused it as another. That the plain client gets a 404 here is
         // the ownership check working through the real module, and it is asserted below.
-        val learner = createClient { install(HttpCookies) }
+        // `followRedirects = false` so the magic-link consume below reports its own 302 rather than
+        // whatever following it lands on.
+        val learner = createClient { install(HttpCookies); followRedirects = false }
+
+        // The explain route now gates on sign-in. A real round trip through the real `authRoutes`,
+        // the same wiring `module()` installs in production, rather than a shortcut into `Components`.
+        val email = "learner-${UUID.randomUUID()}@example.com"
+        val requested = learner.post("/api/auth/magic-link") {
+            contentType(ContentType.Application.Json)
+            setBody("""{"email":"$email"}""")
+        }
+        assertEquals(HttpStatusCode.NoContent, requested.status, "magic-link request failed: ${requested.bodyAsText()}")
+        val consumed = learner.get("/api/auth/magic-link/${mailSender.tokenFor(email)}")
+        assertEquals(HttpStatusCode.Found, consumed.status, "sign-in did not redirect: ${consumed.bodyAsText()}")
 
         val created = learner.post("/api/sessions") {
             contentType(ContentType.Application.Json)
@@ -356,6 +400,33 @@ class ComponentsTest {
         components.bootstrap()
 
         assertEquals(0, clientBuilds, "bootstrap must not build a model client when the flag is off")
+    }
+
+    @Test
+    fun `bootstrap builds no mail sender and no google client`() = runTest {
+        var mailBuilds = 0
+        var googleBuilds = 0
+
+        val components = Components(
+            mongo = Mongo(MongoConfig(uri = TestFixtures.connectionString, databaseName = "test_api_no_auth_creds")),
+            cookies = TestFixtures.cookieConfig,
+            llmFactory = { FakeLlmClient() },
+            // Neither factory reads an environment variable here, on purpose: this test must pass
+            // on a machine with no MYTETZ_MAIL_MODE and no Google client configured at all.
+            mailSenderFactory = { mailBuilds++; LoggingMailSender() },
+            googleOAuthFactory = {
+                googleBuilds++
+                GoogleOAuth(
+                    GoogleConfig("test-client-id", "test-client-secret", "https://example.com/api/auth/google/callback"),
+                    HttpClient(CIO),
+                )
+            },
+        )
+
+        components.bootstrap()
+
+        assertEquals(0, mailBuilds, "bootstrap must not build a mail sender")
+        assertEquals(0, googleBuilds, "bootstrap must not build a google client")
     }
 
     @Test
