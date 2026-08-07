@@ -25,7 +25,7 @@ describe('AuthLandingComponent', () => {
     harness = await RouterTestingHarness.create();
   });
 
-  it('the landing shows the expired reason', async () => {
+  it('the landing reads the expired reason', async () => {
     await harness.navigateByUrl('/auth?auth=expired', AuthLandingComponent);
     harness.detectChanges();
 

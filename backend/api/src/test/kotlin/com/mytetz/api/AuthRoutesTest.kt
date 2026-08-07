@@ -230,7 +230,7 @@ class AuthRoutesTest {
         val second = client.get("/api/auth/magic-link/$token")
 
         assertEquals(HttpStatusCode.Found, second.status)
-        assertEquals("/?auth=expired", second.headers[HttpHeaders.Location])
+        assertEquals("/auth?auth=expired", second.headers[HttpHeaders.Location])
     }
 
     @Test
@@ -238,7 +238,7 @@ class AuthRoutesTest {
         val response = client.get("/api/auth/magic-link/not-a-real-token")
 
         assertEquals(HttpStatusCode.Found, response.status)
-        assertEquals("/?auth=expired", response.headers[HttpHeaders.Location])
+        assertEquals("/auth?auth=expired", response.headers[HttpHeaders.Location])
     }
 
     // ------------------------------------------------------------------ Google
@@ -250,7 +250,7 @@ class AuthRoutesTest {
         val response = client.get("/api/auth/google/callback?state=not-the-real-state&code=some-code")
 
         assertEquals(HttpStatusCode.Found, response.status)
-        assertEquals("/?auth=failed", response.headers[HttpHeaders.Location])
+        assertEquals("/auth?auth=failed", response.headers[HttpHeaders.Location])
         assertTrue(
             response.headers.getAll(HttpHeaders.SetCookie)?.none { it.contains(SESSION_COOKIE_NAME) } ?: true,
             "a refused callback still set a session cookie",

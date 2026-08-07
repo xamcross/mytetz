@@ -1,5 +1,5 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { provideHttpClient } from '@angular/common/http';
+import { HttpErrorResponse, provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { ApiService } from '../core/api.service';
 import { SignInPanelComponent } from './sign-in-panel.component';
@@ -59,6 +59,24 @@ describe('SignInPanelComponent', () => {
 
     expect(knownText).toBe(unknownText);
     expect(spy).toHaveBeenCalledTimes(2);
+  });
+
+  it('the panel names a rate limit rather than the connection', async () => {
+    // AuthRoutes.kt answers 429 RATE_LIMITED on this route when either of its two limiters trips.
+    // "Check your connection" is wrong advice for a learner who is not offline — the request did
+    // reach the server, and the server said no.
+    vi.spyOn(api, 'requestMagicLink').mockRejectedValue(
+      new HttpErrorResponse({
+        status: 429,
+        error: { code: 'RATE_LIMITED', message: 'too many sign-in requests; try again later' },
+      }),
+    );
+    const fixture = create();
+
+    await submitWith(fixture, 'learner@example.com');
+
+    expect(fixture.nativeElement.textContent).toContain('Too many requests');
+    expect(fixture.nativeElement.textContent).not.toContain('connection');
   });
 
   it('the panel refuses an empty address without calling the api', async () => {

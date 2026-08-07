@@ -1,4 +1,5 @@
 import { Component, inject, signal } from '@angular/core';
+import { HttpErrorResponse } from '@angular/common/http';
 import { ApiService } from '../core/api.service';
 
 /**
@@ -133,13 +134,50 @@ export class SignInPanelComponent {
     try {
       await this.api.requestMagicLink(address);
       this.sent.set(true);
-    } catch {
-      // The request itself did not reach the server — a connectivity problem, not a refusal; the
-      // backend never refuses this endpoint. The address's known/unknown status stays unrevealed,
-      // because no answer about it was ever given.
-      this.validationError.set('Could not send the link. Check your connection and try again.');
+    } catch (err) {
+      this.validationError.set(describeRequestFailure(err));
     } finally {
       this.submitting.set(false);
     }
   }
+}
+
+/**
+ * What the learner reads when `requestMagicLink` itself fails.
+ *
+ * `AuthRoutes.kt` refuses this route two ways: `429 RATE_LIMITED` (`MAGIC_LINK_PER_IP`/
+ * `MAGIC_LINK_PER_ADDRESS`) and `413 PAYLOAD_TOO_LARGE` (`MAX_AUTH_BODY_BYTES`, which an ordinary
+ * address never reaches). `RATE_LIMITED` gets its own message: "check your connection" is wrong
+ * advice for a learner who is not offline and fixes nothing by retrying at once. Every other
+ * failure — a dropped connection, `PAYLOAD_TOO_LARGE`, a 500 — reduces to one generic message.
+ * Neither branch says anything about the address itself, so the address's known/unknown status
+ * stays unrevealed either way.
+ */
+function describeRequestFailure(err: unknown): string {
+  const body = err instanceof HttpErrorResponse ? asApiErrorBody(err.error) : null;
+  if (body?.code === 'RATE_LIMITED') {
+    return 'Too many requests have been made. Try again shortly.';
+  }
+  return 'Could not send the link. Check your connection and try again.';
+}
+
+/** The same `{code, message, retryAfter}` shape every backend refusal uses. Kept private here for
+ * the same reason `sse.client.ts`, `catalog-page.component.ts` and `session.store.ts` each keep
+ * their own copy: it is a wire shape, not a domain model. */
+interface ApiErrorBody {
+  code: string;
+  message: string;
+  retryAfter?: number | null;
+}
+
+function asApiErrorBody(value: unknown): ApiErrorBody | null {
+  if (
+    value !== null &&
+    typeof value === 'object' &&
+    typeof (value as Record<string, unknown>)['code'] === 'string' &&
+    typeof (value as Record<string, unknown>)['message'] === 'string'
+  ) {
+    return value as ApiErrorBody;
+  }
+  return null;
 }

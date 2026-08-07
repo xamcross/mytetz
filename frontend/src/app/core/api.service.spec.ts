@@ -108,6 +108,8 @@ describe('ApiService', () => {
     const account: AccountView = {
       email: 'learner@example.com',
       status: 'TRIALING',
+      trialEndsAtEpochMillis: null,
+      currentPeriodEndsAtEpochMillis: null,
       allowance: 20,
       remaining: 17,
       resetsAtEpochMillis: 1723027200000,

@@ -160,7 +160,7 @@ fun Route.authRoutes(
         val token = call.parameters["token"].orEmpty()
         val email = magicLink().consume(token)
         if (email == null) {
-            call.respondRedirect("/?auth=expired")
+            call.respondRedirect("/auth?auth=expired")
             return@get
         }
 
@@ -194,7 +194,7 @@ fun Route.authRoutes(
 
         if (!stateMatches || verifier == null || code == null) {
             log.info("google sign-in refused a missing or mismatched state")
-            call.respondRedirect("/?auth=failed")
+            call.respondRedirect("/auth?auth=failed")
             return@get
         }
 
@@ -207,10 +207,10 @@ fun Route.authRoutes(
             throw e
         } catch (e: AccountLinkConflictException) {
             log.warn("ACCOUNT_LINK_CONFLICT {}", e.message)
-            call.respondRedirect("/?auth=failed")
+            call.respondRedirect("/auth?auth=failed")
         } catch (e: Exception) {
             log.info("google sign-in failed", e)
-            call.respondRedirect("/?auth=failed")
+            call.respondRedirect("/auth?auth=failed")
         }
     }
 
