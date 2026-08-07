@@ -22,10 +22,10 @@ data class BillingConfig(
 ) {
 
     init {
-        // The resolvers above already reject a non-positive override, but a caller who builds this
-        // class directly bypasses them. A zero here would construct cleanly, and Entitlement.resolve
-        // would throw later, on the path that decides who pays. This guard turns that failure into
-        // a loud one, at construction, instead of a quiet one, on the money path.
+        // The resolvers above already reject a non-positive override. A caller who builds this
+        // class directly bypasses them. A zero value then constructs without error. Entitlement.resolve
+        // throws later, on the path that decides who pays. This guard moves that failure to
+        // construction, where it is loud and early.
         require(trialGenerations > 0) { "trialGenerations must be positive, was $trialGenerations" }
         require(trialDays > 0) { "trialDays must be positive, was $trialDays" }
         require(graceDays > 0) { "graceDays must be positive, was $graceDays" }

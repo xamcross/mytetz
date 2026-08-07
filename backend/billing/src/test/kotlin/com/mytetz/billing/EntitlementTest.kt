@@ -94,9 +94,9 @@ class EntitlementTest {
     @Test
     fun `a trial whose end is before its start requires a subscription`() {
         // trialEndsAt sits a day before createdAt, so the window is negative. `now` sits one
-        // millisecond before trialEndsAt, so the row clears the "still trialing" check and reaches
-        // the window guard itself. Allowance itself refuses a non-positive window; this guard
-        // catches the row first, and reports SubscriptionRequired rather than let it throw.
+        // millisecond before trialEndsAt. The row clears the "still trialing" check first, then
+        // reaches the window guard. Allowance refuses a non-positive window on its own. This guard
+        // catches the row first. It reports SubscriptionRequired instead.
         val row = subscription(SubscriptionStatus.TRIALING, trialEndsAt = CREATED, createdAt = CREATED + DAY_MILLIS)
 
         assertEquals(EntitlementDecision.SubscriptionRequired, Entitlement.resolve(row, CREATED - 1, config))
