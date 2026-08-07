@@ -361,7 +361,8 @@ topic.
    ```
 
    The machine restarts. The migration is idempotent. A boot that runs it again therefore costs
-   nothing. But leaving the flag set makes every cold start run two extra collection scans.
+   nothing. But a deployment that keeps the flag set runs two extra collection scans on every
+   cold start.
 
 **If the second log line reports fewer seeds than the catalogue holds,** the spend breaker stopped
 the loop. Check the day's ledger, raise `MYTETZ_GLOBAL_DAILY_COST_CEILING_USD_MICROS` if it is
