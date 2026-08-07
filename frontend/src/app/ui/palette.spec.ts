@@ -77,13 +77,16 @@ describe('the Candy palette', () => {
 
   const normal: ReadonlyArray<[string, string, string]> = [
     ['prose on the card', PALETTE.prose, PALETTE.surface],
+    ['prose on the sunk surface', PALETTE.prose, PALETTE.sunk],
     ['ink on the card', PALETTE.ink, PALETTE.surface],
+    ['ink on the page', PALETTE.ink, PALETTE.page],
     ['muted on the page', PALETTE.muted, PALETTE.page],
     ['muted on the card', PALETTE.muted, PALETTE.surface],
     ['muted on the sunk surface', PALETTE.muted, PALETTE.sunk],
     ['muted on a chip', PALETTE.muted, PALETTE.chip],
     ['small coral text on the card', PALETTE.coralText, PALETTE.surface],
     ['small coral text on the page', PALETTE.coralText, PALETTE.page],
+    ['small coral text on the sunk surface', PALETTE.coralText, PALETTE.sunk],
     ['teal on the card', PALETTE.teal, PALETTE.surface],
     ['teal on the page', PALETTE.teal, PALETTE.page],
     ['white on a small coral control', PALETTE.surface, PALETTE.coralPress],
@@ -121,5 +124,20 @@ describe('the Candy palette', () => {
     expect(contrast(PALETTE.surface, PALETTE.coral)).toBeLessThan(AA_NORMAL);
     // teal-pale on teal fails AA for normal text, which is why the eyebrow uses chip instead.
     expect(contrast(PALETTE.tealPale, PALETTE.teal)).toBeLessThan(AA_NORMAL);
+  });
+
+  it('separates a coral control from an error by fill and by surface, not by hue', () => {
+    // The spec once said the error family "is never coral". That wording was wrong. The coral
+    // fill and the error ink measure about 1.09:1 against each other — as colours they are the
+    // same. Hue was never the discriminator, and no palette change can make it one.
+    expect(contrast(PALETTE.coralPress, PALETTE.errInk)).toBeLessThan(1.5);
+
+    // What genuinely holds. A coral primary is a filled pill with white text. An error is dark
+    // red text on a pale pink card with a pink border. The surfaces are far apart, and both text
+    // pairs clear AA, so the two read apart for every reader — including a reader with
+    // red-green colour blindness, because fill against text carries the difference and not hue.
+    expect(contrast(PALETTE.errBg, PALETTE.coralPress)).toBeGreaterThanOrEqual(AA_NORMAL);
+    expect(contrast(PALETTE.surface, PALETTE.coralPress)).toBeGreaterThanOrEqual(AA_NORMAL);
+    expect(contrast(PALETTE.errInk, PALETTE.errBg)).toBeGreaterThanOrEqual(AA_NORMAL);
   });
 });
