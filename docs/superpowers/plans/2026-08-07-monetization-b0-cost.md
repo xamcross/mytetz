@@ -13,7 +13,7 @@
 - Read the specification first: `docs/superpowers/specs/2026-08-07-monetization-design.md`. Sections 3, 4.4, 8.3 and 13 cover this slice.
 - **No behaviour a learner can see changes in B0.** No existing **assertion** may change, and no existing test may be deleted, renamed or disabled. An assertion that has to change to pass is a signal that the change is not behaviour-neutral — stop and report it.
 - **Widening a test fixture is allowed and expected.** Tasks 3 and 5 each add a parameter to an existing fixture builder, with the current literal as its default, so every existing call site keeps its exact meaning. That is not an edit to a test; it is an addition to a helper. Adding a near-duplicate builder instead is the worse outcome.
-- Write all prose, KDoc and commit message bodies in ASD-STE100 Simplified Technical English. Keep the conventional-commit subject line format.
+- Write all prose, KDoc and commit message bodies in ASD-STE100 Simplified Technical English. Keep the conventional-commit subject line format. **This rule binds the KDoc in this plan too.** A code block here is a specification of behaviour and not a licence to copy prose that breaks the rule. When a KDoc block in a task looks non-compliant, rewrite it and say so in your report.
 - **Do not add a unique index to `principals` or `costLedger`.** `QuotaRepository.ensureIndexes` explains why: the upsert race resolution depends on it.
 - Every new TTL field is written through `EpochMillisAsBsonDateTime`. A `Long` makes a TTL index do nothing. This slice adds no TTL field, so the rule only matters if you add one.
 - The backend test command is `./gradlew build` from the repository root. It runs 325 tests today.
@@ -101,15 +101,15 @@ package com.mytetz.quota
 /**
  * How many generations a principal may make, and the length of the window they share.
  *
- * This type is the reason [QuotaService] still knows nothing about a tier, a trial or a
- * subscription. A caller resolves an allowance and passes it in; this module counts and refuses.
- * The `billing` module owns the question "which allowance", and it is a separate module for exactly
- * that reason.
+ * This type keeps [QuotaService] free of a tier, a trial and a subscription. A caller resolves an
+ * allowance and gives it to this module. This module then counts and refuses. The `billing` module
+ * owns the question "which allowance".
  *
- * Both bounds are checked here and not at the call site. A count of zero refuses every generation
- * for ever, and a window of zero makes every stored window already expired — which makes
- * [QuotaRepository.rollWindowIfExpired] reset the counter on every call and removes the allowance
- * with nothing in the log to say so. The same failure, and the same reasoning, as [QuotaConfig].
+ * This class checks both bounds. The call site does not.
+ *
+ * A count of zero refuses every generation for ever. A window of zero makes every stored window
+ * already expired. [QuotaRepository.rollWindowIfExpired] then resets the counter on every call, and
+ * the allowance disappears. The log says nothing. [QuotaConfig] holds the same reasoning.
  */
 data class Allowance(val generations: Int, val windowMillis: Long) {
 
@@ -128,9 +128,9 @@ In `QuotaConfig.kt`, after the `init` block and before the `companion object`:
     /**
      * What a caller gets when it names no allowance.
      *
-     * Until the `billing` module ships, this is every principal's allowance, and it holds the two
-     * fields this class already validated. It is a computed property and not a stored one, so it
-     * cannot disagree with them.
+     * The `billing` module does not exist yet. Every principal therefore gets this allowance. It
+     * holds the two fields that this class validates above. It is a computed property and not a
+     * stored one. It therefore cannot disagree with them.
      */
     val defaultAllowance: Allowance get() = Allowance(dailyExplains, windowMillis)
 ```
@@ -263,13 +263,13 @@ Add this paragraph to the class KDoc of `QuotaService`, at the end, before the c
 ```
  * ## The allowance is a parameter and not a field
  *
- * A tier decides an allowance and this module must not learn what a tier is. So the caller resolves
- * an [Allowance] and passes it, and [QuotaConfig.defaultAllowance] keeps every caller that has no
- * tier working unchanged.
+ * A tier decides an allowance. This module must not learn what a tier is. The caller therefore
+ * resolves an [Allowance] and gives it to this class. [QuotaConfig.defaultAllowance] keeps every
+ * caller that has no tier unchanged.
  *
- * On [recordGeneration] the allowance is the THIRD parameter and `costMicros` stays the second.
- * `SessionRoutes` calls it positionally. An allowance in the second position would bind a cost to an
- * allowance silently, and both are numbers, so nothing would fail to compile.
+ * On [recordGeneration] the allowance is the THIRD parameter. `costMicros` stays the second.
+ * `SessionRoutes` calls the method positionally. An allowance in the second position binds a cost
+ * to an allowance. Both values are numbers, so the compiler reports nothing.
 ```
 
 - [ ] **Step 10: Run the whole quota suite**
@@ -396,30 +396,33 @@ Then add to the class's `companion object` — create one if the class has none,
         const val MODEL_FAMILY_ENV: String = "MYTETZ_MODEL_FAMILY"
 
         /**
-         * Sonnet 5, and not Opus 5, for a reason that is arithmetic and not preference.
+         * Sonnet 5, and not Opus 5. The reason is arithmetic and not preference.
          *
-         * One explanation is about 1 000 input tokens and 500 output tokens. On Opus 5 at $5 and
-         * $25 for each 1M tokens that is $0.0175. On Sonnet 5 at $3 and $15 it is $0.0105. The
-         * subscription is €10 each month, which is €9.53 after the Freemius fee and about $10.29.
-         * The allowance of 25 each day therefore costs $7.88 at full use on Sonnet 5 and $13.13 on
-         * Opus 5. Only one of those two numbers leaves a margin.
+         * One explanation is about 1 000 input tokens and 500 output tokens. Opus 5 costs $5 and
+         * $25 for each 1M tokens, so one explanation costs $0.0175. Sonnet 5 costs $3 and $15, so
+         * one explanation costs $0.0105.
+         *
+         * The subscription is €10 each month. The Freemius fee leaves €9.53, which is about $10.29.
+         * An allowance of 25 each day therefore costs $7.88 on Sonnet 5 and $13.13 on Opus 5. Only
+         * the first number leaves a margin.
          *
          * See section 3 of `docs/superpowers/specs/2026-08-07-monetization-design.md`.
          *
-         * **This value is hashed into every content key through `modelFamily`.** A change here
-         * orphans the whole explanation store. That is designed behaviour and not an accident — see
-         * section 13 of the same document — but it is not a value to change without reading it.
+         * **`modelFamily` hashes this value into every content key.** A change here orphans the
+         * whole explanation store. The design intends that behaviour — see section 13 of the same
+         * document. Read that section before you change this value.
          */
         const val DEFAULT_MODEL: String = "claude-sonnet-5"
 
         /**
-         * A missing, empty or blank override falls back to the default rather than throwing. These
-         * are read while the process is starting, and a typo in a deployment environment variable
-         * must not take the server down. The same rule, and the same shape, as
-         * `GraphConfig.resolveMaxOutputTokens` and `QuotaConfig.resolveDailyExplains`.
+         * A missing, empty or blank override falls back to the default. It does not throw.
          *
-         * The value is trimmed because `fly secrets set` and a hand-edited `.env` both leave a
-         * trailing newline routinely, and a model id with a newline in it is a 404 from the API.
+         * The process reads this value while it starts. A typo in a deployment variable must not
+         * stop the server. `GraphConfig.resolveMaxOutputTokens` and
+         * `QuotaConfig.resolveDailyExplains` hold the same rule and the same shape.
+         *
+         * This function trims the value. `fly secrets set` and a hand-edited `.env` both leave a
+         * trailing newline. A model id with a newline gives a 404 from the API.
          */
         internal fun resolveModel(raw: String?): String =
             raw?.trim()?.takeIf { it.isNotEmpty() } ?: DEFAULT_MODEL
@@ -613,19 +616,18 @@ In `ExplanationRepository.kt`, after `incrementRequestCount`:
 
 ```kotlin
     /**
-     * Removes every explanation that a change of model family stranded, and reports how many.
+     * Removes every explanation that a change of model family stranded. Reports how many it removed.
      *
-     * `modelFamily` is hashed into the content key, so a document written under a different family
-     * is unreachable: no key any caller can compute will ever find it. The predicate is therefore
-     * exact rather than a heuristic, and the operation loses nothing that could be served.
+     * The content key holds `modelFamily`. A document written under a different family is therefore
+     * unreachable: no key that a caller can compute finds it. The predicate is exact and not a
+     * heuristic. The operation loses nothing that the system can serve.
      *
-     * It is safe to run twice. The second run matches nothing.
+     * You can run this method twice. The second run matches nothing.
      *
-     * **It is not safe to run while two application versions are live on different families.** Each
-     * would delete the other's documents. `fly.toml` runs one machine, and the caller in
-     * `Components.bootstrap` sits behind an explicit flag for this reason. The cost of getting it
-     * wrong is regeneration and not corruption, because every deleted document is reproducible from
-     * its inputs.
+     * **Do not run it while two application versions are live on different families.** Each version
+     * deletes the other's documents. `fly.toml` runs one machine. The caller in
+     * `Components.bootstrap` also sits behind an explicit flag. A mistake here costs a regeneration
+     * and not a corruption, because the system can reproduce every deleted document from its inputs.
      */
     suspend fun deleteWhereModelFamilyIsNot(modelFamily: String): Long =
         collection.deleteMany(Filters.ne("modelFamily", modelFamily)).deletedCount
@@ -780,17 +782,21 @@ In `SessionService.kt`, directly after `createWillGenerate`:
 
 ```kotlin
     /**
-     * Generates this topic's seed if the store has none, and creates no session.
+     * Generates this topic's seed when the store holds none. Creates no session.
      *
-     * A published topic must have a seed. Nothing else in this class can establish that: [create] is
-     * the only other path to a seed and it inserts a [LearningSession] as well, so a maintenance
-     * loop built on it leaves one abandoned session for every topic.
+     * A published topic must have a seed. No other method here can establish that. [create] is the
+     * only other path to a seed, and it also inserts a [LearningSession]. A maintenance loop built
+     * on [create] therefore leaves one abandoned session for each topic.
      *
-     * Returns true when this call generated, and false when it found one. [onSpend] is called with
-     * this caller's own cost the instant it is known, before anything below can fail — the same
-     * contract, and for the same reason, as [create]'s parameter of the same name.
+     * The method returns true when this call generated the seed. It returns false when this call
+     * found one.
      *
-     * Raises for an unknown or unpublished topic exactly as [create] and [createWillGenerate] do.
+     * The method calls [onSpend] with this caller's own cost at the instant the cost is known. It
+     * does this before any later step can fail. [create]'s parameter of the same name holds the
+     * same contract for the same reason.
+     *
+     * The method raises for an unknown topic and for an unpublished topic. [create] and
+     * [createWillGenerate] both do the same.
      */
     suspend fun prewarmSeed(topicSlug: String, onSpend: suspend (Long) -> Unit): Boolean {
         val topic = requirePublishedTopic(topicSlug)
@@ -908,10 +914,10 @@ In `Components.kt`, add a `companion object` to the class:
         /**
          * Only the exact word `true` turns the migration on.
          *
-         * This is the opposite polarity to `PrincipalCookieConfig.resolveSecure`, and the reason is
-         * that the safe value is the opposite one. There, an unrecognised value keeps a protection.
-         * Here, an unrecognised value must keep a step that deletes documents and calls a metered
-         * API from running by accident.
+         * This polarity is the opposite of `PrincipalCookieConfig.resolveSecure`. The safe value is
+         * also the opposite one. There, an unrecognised value keeps a protection. Here, an
+         * unrecognised value keeps the migration off. The migration deletes documents and it calls
+         * a metered API, so it must never start by accident.
          */
         internal fun resolveMigrateOnBoot(raw: String?): Boolean =
             raw?.trim()?.equals("true", ignoreCase = true) == true
@@ -946,17 +952,19 @@ open class Components(
     /**
      * The one-time migration for slice B0 of the monetization specification.
      *
-     * It runs only when [migrateOnBoot] is set, and an operator sets it for exactly one deployment
-     * and then removes it. It is not a boot step: it deletes documents, it calls a metered API, and
-     * it forces the lazy model client — which would otherwise mean that a deployment with no
-     * `ANTHROPIC_API_KEY` could not serve the catalogue.
+     * It runs only when [migrateOnBoot] is true. An operator sets that flag for one deployment and
+     * then removes it.
      *
-     * The order is load-bearing. The delete goes first, so a seed generated by the second half is
-     * not deleted by the first.
+     * This is not an ordinary boot step. It deletes documents. It calls a metered API. It also
+     * builds the lazy model client. An unconditional version would therefore make catalogue
+     * browsing need `ANTHROPIC_API_KEY`.
      *
-     * Both halves are idempotent, so a second run is safe. The seeds cost real money, so the loop
-     * asks the quota gate before each one and stops when the global spend breaker trips. The
-     * allowance it names is large enough for a whole catalogue and small enough to bound a runaway.
+     * The order is load-bearing. The delete runs first. The first half then cannot delete a seed
+     * that the second half generates.
+     *
+     * Both halves are idempotent, so a second run is safe. The seeds cost real money. The loop
+     * therefore asks the quota gate before each seed. It stops when the global spend breaker trips.
+     * The allowance it names holds a whole catalogue. It also bounds a runaway.
      */
     suspend fun migrate() {
         if (!migrateOnBoot) return
