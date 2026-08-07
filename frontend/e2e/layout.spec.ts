@@ -65,6 +65,35 @@ const MANY_TOPICS: TopicSummary[] = [
 ];
 
 /**
+ * The twelve categories the published catalogue actually returns, in its own alphabetical order.
+ *
+ * The design's sample data has four, and a filter row built for four overflowed the page at every
+ * width once real data arrived. A fixture that mirrors production is what stops that returning.
+ * Read from the live API on 2026-08-07; grow it when the catalogue grows.
+ */
+const LIVE_CATEGORIES = [
+  'Astronomy',
+  'Biology',
+  'Chemistry',
+  'Computer Science',
+  'Earth Science',
+  'Economics',
+  'History',
+  'Linguistics',
+  'Mathematics',
+  'Philosophy',
+  'Physics',
+  'Psychology',
+] as const;
+
+const EVERY_CATEGORY: TopicSummary[] = LIVE_CATEGORIES.map((category, i) => ({
+  slug: `topic-${i}`,
+  title: `Topic ${i}`,
+  category,
+  summary: 'A summary.',
+}));
+
+/**
  * A multi-sentence explanation, for the "the picker opens below the phrase" claim alone.
  *
  * `SEED` is one sentence. Its whole card renders under 260px tall, which is less than the
@@ -160,6 +189,71 @@ test('the category pill row scrolls sideways at 390px rather than wrapping', asy
     .locator('.catalog__cat')
     .evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().top)));
   expect(new Set(tops).size, 'every pill sits on one row').toBe(1);
+});
+
+test('nothing overflows the page sideways at any width, with every real category', async ({
+  page,
+}) => {
+  // The guard that was missing. The filter row was built for the design's four sample categories
+  // and shipped against the catalogue's twelve: the pills ran off the right of the screen at
+  // 1360px, and the search field — the only item that could shrink — collapsed to nothing.
+  // Neither fault was visible to a suite that only measured 390px.
+  await stubCatalogueAndSession(page);
+  await page.route('**/api/catalog/topics*', (route) => route.fulfill({ json: EVERY_CATEGORY }));
+
+  for (const size of Object.values(WIDTHS)) {
+    await page.setViewportSize(size);
+    await page.goto('/');
+    await page.locator('.topic__button').first().waitFor();
+
+    const doc = await page.evaluate(() => ({
+      scroll: document.documentElement.scrollWidth,
+      client: document.documentElement.clientWidth,
+    }));
+    expect(doc.scroll, `the page does not scroll sideways at ${size.width}px`).toBeLessThanOrEqual(
+      doc.client,
+    );
+  }
+});
+
+test('the search field stays readable at every width, with every real category', async ({
+  page,
+}) => {
+  await stubCatalogueAndSession(page);
+  await page.route('**/api/catalog/topics*', (route) => route.fulfill({ json: EVERY_CATEGORY }));
+
+  for (const size of Object.values(WIDTHS)) {
+    await page.setViewportSize(size);
+    await page.goto('/');
+    await page.locator('.topic__button').first().waitFor();
+
+    const box = await page.locator('#topic-filter').boundingBox();
+    // 260px holds roughly thirty characters at 15px, so a learner sees what they typed. The
+    // field measured about 40px before the fix, which showed no character at all.
+    expect(box!.width, `the search field's width at ${size.width}px`).toBeGreaterThan(260);
+  }
+});
+
+test('the category pills wrap at 1360px, so every category stays reachable', async ({ page }) => {
+  await stubCatalogueAndSession(page);
+  await page.route('**/api/catalog/topics*', (route) => route.fulfill({ json: EVERY_CATEGORY }));
+  await page.setViewportSize(WIDTHS.wide);
+  await page.goto('/');
+  await page.locator('.topic__button').first().waitFor();
+
+  const cats = page.locator('.catalog__cats');
+  const box = await cats.evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
+  expect(
+    box.scroll,
+    'the pill row fits its box, so nothing hides off the right',
+  ).toBeLessThanOrEqual(box.client);
+
+  // Wrapped, not squeezed: thirteen pills over more than one row, and every pill still full width.
+  const tops = await page
+    .locator('.catalog__cat')
+    .evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().top)));
+  expect(tops.length, 'All plus twelve categories').toBe(13);
+  expect(new Set(tops).size, 'the pills use more than one row').toBeGreaterThan(1);
 });
 
 test('the wordmark is Fredoka at 24px and weight 600', async ({ page }) => {

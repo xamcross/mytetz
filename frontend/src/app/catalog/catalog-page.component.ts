@@ -175,14 +175,20 @@ import { SessionView, TopicSummary } from '../core/models';
         clip-path: inset(50%);
         white-space: nowrap;
       }
+      /* The search takes its own line, and the categories take the next one.
+         The design draws the two side by side, because its sample data has four categories. The
+         real catalogue publishes twelve, so one line cannot hold both: the pills overflow the
+         page, and the search — the only item that can shrink — collapses to nothing. */
       .catalog__row {
         display: flex;
+        flex-direction: column;
         gap: 12px;
-        align-items: center;
+        align-items: stretch;
       }
       .catalog__search {
-        flex: 1;
-        min-width: 0;
+        width: 100%;
+        /* A search field wider than this reads as a text area. */
+        max-width: 520px;
         padding: 14px 18px;
         border: var(--mt-border-w) solid var(--mt-border);
         border-radius: var(--mt-r-row);
@@ -198,8 +204,11 @@ import { SessionView, TopicSummary } from '../core/models';
       .catalog__search:focus-visible {
         border-color: var(--mt-teal);
       }
+      /* Wrap, so every category stays reachable. A row that scrolls sideways on a wide screen
+         hides a category behind a gesture nobody looks for. */
       .catalog__cats {
         display: flex;
+        flex-wrap: wrap;
         gap: 8px;
       }
       .topics {
@@ -331,12 +340,13 @@ import { SessionView, TopicSummary } from '../core/models';
         .catalog__title {
           font-size: 26px;
         }
-        .catalog__row {
-          flex-direction: column;
-          align-items: stretch;
+        .catalog__search {
+          max-width: none;
         }
-        /* A wrapped pill list pushes the first tile below the fold. It scrolls sideways instead. */
+        /* Twelve wrapped pills push the first tile off a 390px screen. The row scrolls sideways
+           here instead, which costs a gesture but keeps a topic in view. */
         .catalog__cats {
+          flex-wrap: nowrap;
           overflow-x: auto;
           padding-bottom: 4px;
         }
