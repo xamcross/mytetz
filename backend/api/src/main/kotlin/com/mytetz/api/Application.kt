@@ -1,5 +1,6 @@
 package com.mytetz.api
 
+import com.mytetz.llm.AnthropicLlmClient
 import io.ktor.http.HttpStatusCode
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
@@ -46,6 +47,19 @@ const val DEFAULT_PORT: Int = 8080
 internal fun resolvePort(raw: String?): Int =
     raw?.trim()?.toIntOrNull()?.takeIf { it in 1..65535 } ?: DEFAULT_PORT
 
+/**
+ * The model an operator would see if the lazy `Components.llm` were built, without building it.
+ *
+ * `AnthropicLlmClient.resolveModel` holds the one fallback rule this restates: a missing, empty
+ * or blank value falls back to [AnthropicLlmClient.DEFAULT_MODEL]. That function is internal to
+ * the `llm` module, so `Application.kt` cannot call it directly. Restating the one rule here costs
+ * one line and keeps `Components.llm`'s guarantee intact: a deployment with no
+ * `ANTHROPIC_API_KEY` must still serve the catalogue, and reading the lazy client here to log it
+ * would build a real Anthropic client on every boot.
+ */
+internal fun resolveModelForLogging(raw: String?): String =
+    raw?.trim()?.takeIf { it.isNotEmpty() } ?: AnthropicLlmClient.DEFAULT_MODEL
+
 fun main() {
     embeddedServer(Netty, port = resolvePort(System.getenv(PORT_ENV)), host = "0.0.0.0") { module() }
         .start(wait = true)
@@ -70,6 +84,16 @@ fun Application.module(components: Components = Components()) {
     // not a tuning one: a name that no request carries puts every visitor in one bucket. Nothing
     // reported it before, and there is no metric here that would show it. See `ClientAddress`.
     log.info("rate limiting keys on {}", components.clientAddresses.source)
+
+    // The resolved model, said once, at startup, so an operator can confirm which model this
+    // deployment runs. This does not read `Components.llm`: that lazy is built on first use on
+    // purpose, so that a deployment with no `ANTHROPIC_API_KEY` still serves the catalogue. See
+    // `resolveModelForLogging`.
+    log.info(
+        "model resolves to modelId={} modelFamily={}",
+        resolveModelForLogging(System.getenv(AnthropicLlmClient.MODEL_ID_ENV)),
+        resolveModelForLogging(System.getenv(AnthropicLlmClient.MODEL_FAMILY_ENV)),
+    )
 
     val ready = bootstrap(components)
 

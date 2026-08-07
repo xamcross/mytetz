@@ -19,7 +19,7 @@ import java.time.Duration
  * cannot be called from the SDK's Java `forEach` or `ifPresent` lambdas, so every value is pulled
  * out of its Optional first and emitted from the loop body.
  *
- * Adaptive thinking is deliberately left ON (the Claude Opus 5 default), which on this model means
+ * Adaptive thinking is deliberately left ON (the Claude Sonnet 5 default), which on this model means
  * simply not setting `thinking` at all. Disabling it makes the model occasionally write a tool call
  * into visible prose — the call silently never runs — and leak <thinking> tags into output. Cost is
  * controlled with effort instead.
@@ -61,8 +61,8 @@ class AnthropicLlmClient(
                 listOf(
                     TextBlockParam.builder()
                         .text(request.system)
-                        // Claude Opus 5's minimum cacheable prefix is 512 tokens; shorter
-                        // system prompts simply do not cache. Nothing is padded to reach it.
+                        // Claude Sonnet 5's minimum cacheable prefix is 1024 tokens. Only a
+                        // prompt at or above that length caches. Nothing is padded to reach it.
                         .cacheControl(CacheControlEphemeral.builder().build())
                         .build()
                 )

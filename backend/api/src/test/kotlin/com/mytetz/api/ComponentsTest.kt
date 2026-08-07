@@ -1,5 +1,8 @@
 package com.mytetz.api
 
+import ch.qos.logback.classic.Level
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
 import com.mongodb.client.model.Filters
 import com.mongodb.kotlin.client.coroutine.MongoDatabase
 import com.mytetz.llm.FakeLlmClient
@@ -20,6 +23,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import org.bson.Document
+import org.slf4j.LoggerFactory
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
@@ -381,4 +385,69 @@ class ComponentsTest {
             "every published topic in the catalogue now has a seed under the current family",
         )
     }
+
+    @Test
+    fun `one topic's failed generation does not stop the migration for the rest, and the summary still reports`() =
+        runTest {
+            val fakeLlm = FakeLlmClient()
+            // A 601-character body clears every other validator rule and trips only the
+            // 600-character cap — the ordinary way one real generation fails, not a contrived one.
+            fakeLlm.bodyByPromptSubstring["Topic: General Relativity"] = "a".repeat(601)
+
+            val components = Components(
+                mongo = Mongo(
+                    MongoConfig(uri = TestFixtures.connectionString, databaseName = "test_api_migrate_partial"),
+                ),
+                cookies = TestFixtures.cookieConfig,
+                llmFactory = { fakeLlm },
+                migrateOnBoot = true,
+            )
+            val explanations = components.mongo.database.getCollection<Document>("explanations")
+            explanations.drop()
+
+            val appender = ListAppender<ILoggingEvent>().apply { start() }
+            val logger = LoggerFactory.getLogger("com.mytetz.api.Components") as ch.qos.logback.classic.Logger
+            logger.addAppender(appender)
+            try {
+                // Must not throw. One topic's failure escaping this call would prove the loop
+                // still stops on it, and the summary log line below would never run either.
+                components.bootstrap()
+            } finally {
+                logger.detachAppender(appender)
+            }
+
+            val published = components.catalog.listPublished(category = null, query = null)
+
+            assertEquals(
+                0L,
+                explanations.countDocuments(Filters.eq("topicSlug", "general-relativity")),
+                "the failing topic kept no seed",
+            )
+            assertEquals(
+                (published.size - 1).toLong(),
+                explanations.countDocuments(Filters.eq("modelFamily", "fake-model")),
+                "every topic except the failing one still got a seed",
+            )
+            assertTrue(
+                explanations.countDocuments(Filters.eq("topicSlug", "special-relativity")) >= 1,
+                "the topic after the failing one in sort order still got its seed",
+            )
+
+            val warning = assertNotNull(
+                appender.list.firstOrNull {
+                    it.level == Level.WARN && it.formattedMessage.contains("general-relativity")
+                },
+                "the failing topic's slug was not logged at WARN: ${appender.list.map { it.formattedMessage }}",
+            )
+            assertNotNull(warning.throwableProxy, "the failure log line did not carry the exception")
+
+            val summary = assertNotNull(
+                appender.list.lastOrNull { it.formattedMessage.contains("pre-warmed") },
+                "no MIGRATION summary line was logged",
+            )
+            assertTrue(
+                summary.formattedMessage.contains("1 failed"),
+                "the summary did not name the failure count: ${summary.formattedMessage}",
+            )
+        }
 }

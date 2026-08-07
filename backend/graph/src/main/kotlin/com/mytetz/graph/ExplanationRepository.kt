@@ -63,9 +63,10 @@ open class ExplanationRepository(database: MongoDatabase) {
      * You can run this method twice. The second run matches nothing.
      *
      * **Do not run it while two application versions are live on different families.** Each version
-     * deletes the other's documents. `fly.toml` runs one machine. The caller in
-     * `Components.bootstrap` also sits behind an explicit flag. A mistake here costs a regeneration
-     * and not a corruption. The system can reproduce every deleted document from its inputs.
+     * deletes the other's documents. The deploy runbook's `--ha=false` flag, and not `fly.toml`,
+     * keeps this app on one machine. The caller in `Components.bootstrap` also sits behind an
+     * explicit flag. A mistake here costs a regeneration and not a corruption. The system can
+     * reproduce every deleted document from its inputs.
      */
     suspend fun deleteWhereModelFamilyIsNot(modelFamily: String): Long =
         collection.deleteMany(Filters.ne("modelFamily", modelFamily)).deletedCount

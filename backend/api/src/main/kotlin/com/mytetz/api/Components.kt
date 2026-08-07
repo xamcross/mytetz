@@ -19,6 +19,7 @@ import com.mytetz.quota.QuotaService
 import com.mytetz.session.SessionRepository
 import com.mytetz.session.SessionService
 import org.slf4j.LoggerFactory
+import kotlin.coroutines.cancellation.CancellationException
 
 private val log = LoggerFactory.getLogger("com.mytetz.api.Components")
 
@@ -136,34 +137,54 @@ open class Components(
      *
      * Both halves are idempotent. A second run is therefore safe. The seeds cost real money. The
      * loop asks the quota gate before each seed. It stops when the global spend breaker trips.
-     * The allowance it names holds a whole catalogue. It also bounds a runaway.
+     * The allowance it names holds a whole catalogue. The allowance is not the real bound: ten
+     * thousand generations cost $105 at $0.0105 each. That figure is above the $50 daily breaker.
+     * The breaker is therefore the only effective bound.
+     *
+     * One topic's failure does not stop the loop. The loop catches the failure, logs the topic's
+     * slug at WARN, and moves to the next topic. It re-throws a cancellation, because a swallowed
+     * cancellation breaks structured concurrency — see `SessionRoutes.kt` for the same shape. The
+     * summary line at the end of this method names the failure count.
      */
     suspend fun migrate() {
         if (!migrateOnBoot) return
 
         val deleted = explanations.deleteWhereModelFamilyIsNot(llm.modelFamily)
-        log.info("MIGRATION removed {} explanation(s) stranded by a model family change", deleted)
+        log.info(
+            "MIGRATION removed {} explanation(s) stranded by a model family change; kept family '{}'",
+            deleted,
+            llm.modelFamily,
+        )
 
         val maintenance = PrincipalId.user("maintenance")
         val budget = Allowance(generations = 10_000, windowMillis = 86_400_000)
 
         var generated = 0
+        var failed = 0
         var spentMicros = 0L
         for (topic in catalog.listPublished(category = null, query = null)) {
             if (quota.checkGeneration(maintenance, budget) != QuotaDecision.Allowed) {
                 log.warn("MIGRATION stopped early: the spend breaker refused before '{}'", topic.slug)
                 break
             }
-            val didGenerate = sessions.prewarmSeed(topic.slug) { cost ->
-                spentMicros += cost
-                quota.recordGeneration(maintenance, cost, budget)
+            try {
+                val didGenerate = sessions.prewarmSeed(topic.slug) { cost ->
+                    spentMicros += cost
+                    quota.recordGeneration(maintenance, cost, budget)
+                }
+                if (didGenerate) generated++
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                failed++
+                log.warn("MIGRATION failed to pre-warm the seed for '{}'", topic.slug, e)
             }
-            if (didGenerate) generated++
         }
 
         log.info(
-            "MIGRATION pre-warmed {} seed(s) at a cost of {} micro-dollars; remove {} now",
+            "MIGRATION pre-warmed {} seed(s), {} failed, at a cost of {} micro-dollars; remove {} now",
             generated,
+            failed,
             spentMicros,
             MIGRATE_ON_BOOT_ENV,
         )
