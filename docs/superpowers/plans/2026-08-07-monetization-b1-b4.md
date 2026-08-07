@@ -935,6 +935,23 @@ Subject: `feat(api): add checkout, the webhook route, and reconciliation`
 - `/account` shows the email, the status, the period end, the meter, a manage link, sign-out, sign-out-everywhere and delete.
 - On return from checkout the app refreshes `GET /api/account` rather than trusting any query parameter.
 
+**Carried from the task 10 review — six values that nothing reads.** Each one ships today and no
+template renders it. This task is where four of them find a home. Close each one, or state in the
+report that it stays dead and why.
+
+| Value | State |
+|---|---|
+| `AccountStore.error` | set on any non-401 failure of `GET /api/account`, rendered nowhere |
+| `AccountStore.loading` | written by `load()`, read by nothing |
+| `AccountStore.signedIn` | a `computed` whose only reader is its own spec |
+| `AccountView.email` | delivered by the backend, rendered nowhere |
+| `AccountView.currentPeriodEndsAtEpochMillis` | read by no component |
+| `AllowanceMeterComponent`'s `@else` branch | a rendered branch reached by no spec until the task 10 fix round |
+
+`AccountStore.error` is the one that matters. The meter keeps its last known numbers when a refresh
+fails, so a learner now reads a stale allowance and no message says so. The account page is the
+place to say it.
+
 Required spec names:
 
 ```
@@ -942,6 +959,8 @@ Required spec names:
 `the account page shows the status and the period end`
 `returning from checkout refreshes the account view`
 `the account page offers sign out everywhere`
+`the account page shows the email`
+`the account page reports a failed account read`
 ```
 
 - [ ] Steps: specs, fail, implement, `npm test -- --watch=false`, commit.
