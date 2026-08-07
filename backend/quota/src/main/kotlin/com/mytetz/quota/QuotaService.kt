@@ -68,7 +68,7 @@ sealed interface QuotaDecision {
  *
  * On [recordGeneration] the allowance is the THIRD parameter. `costMicros` stays the second.
  * `SessionRoutes` calls the method positionally. An allowance in the second position binds a cost
- * to an allowance. Both values are numbers, so the compiler reports nothing.
+ * to an allowance. Both values are numbers. The compiler therefore reports nothing.
  */
 class QuotaService(
     private val repository: QuotaRepository,
