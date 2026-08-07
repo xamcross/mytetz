@@ -67,6 +67,7 @@ class BillingRepositoryTest {
         repository.upsert(subscription("u1", status = SubscriptionStatus.ACTIVE))
 
         assertEquals(SubscriptionStatus.ACTIVE, repository.find("u1")?.status)
+        assertEquals(1L, database.getCollection<Document>("subscriptions").countDocuments(), "replace must not add a row")
     }
 
     @Test
@@ -90,6 +91,7 @@ class BillingRepositoryTest {
         val second = repository.insertEventIfAbsent("evt-2", FUTURE)
 
         assertFalse(second)
+        assertEquals(1L, database.getCollection<Document>("billingEvents").countDocuments(), "a refused insert must not add a row")
     }
 
     @Test

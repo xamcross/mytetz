@@ -21,6 +21,19 @@ data class BillingConfig(
         resolvePositiveInt(System.getenv(SUBSCRIBER_DAILY_EXPLAINS_ENV), DEFAULT_SUBSCRIBER_DAILY_EXPLAINS),
 ) {
 
+    init {
+        // The resolvers above already reject a non-positive override, but a caller who builds this
+        // class directly bypasses them. A zero here would construct cleanly, and Entitlement.resolve
+        // would throw later, on the path that decides who pays. This guard turns that failure into
+        // a loud one, at construction, instead of a quiet one, on the money path.
+        require(trialGenerations > 0) { "trialGenerations must be positive, was $trialGenerations" }
+        require(trialDays > 0) { "trialDays must be positive, was $trialDays" }
+        require(graceDays > 0) { "graceDays must be positive, was $graceDays" }
+        require(subscriberDailyExplains > 0) {
+            "subscriberDailyExplains must be positive, was $subscriberDailyExplains"
+        }
+    }
+
     companion object {
 
         const val TRIAL_GENERATIONS_ENV: String = "MYTETZ_TRIAL_GENERATIONS"

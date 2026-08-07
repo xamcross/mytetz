@@ -74,9 +74,16 @@ class BillingRepository(database: MongoDatabase) {
             false
         }
 
-    /** Lists up to [limit] subscriptions whose status is not [SubscriptionStatus.EXPIRED]. */
-    suspend fun listNonTerminal(limit: Int): List<Subscription> =
-        subscriptions.find(Filters.ne("status", SubscriptionStatus.EXPIRED.name))
-            .limit(limit)
-            .toList()
+    /**
+     * Lists up to [limit] subscriptions whose status is not [SubscriptionStatus.EXPIRED].
+     *
+     * The filter requires the `status` field to exist. A bare `$ne` also matches a document with
+     * no `status` field at all, and such a document fails to decode into [Subscription] and
+     * throws. No writer produces a row like that today, but the guard costs nothing and closes the
+     * gap for good.
+     */
+    suspend fun listNonTerminal(limit: Int): List<Subscription> {
+        val notExpired = Filters.and(Filters.exists("status"), Filters.ne("status", SubscriptionStatus.EXPIRED.name))
+        return subscriptions.find(notExpired).limit(limit).toList()
+    }
 }

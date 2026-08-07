@@ -91,6 +91,17 @@ class EntitlementTest {
         assertEquals(EntitlementDecision.SubscriptionRequired, Entitlement.resolve(row, CREATED - 1, config))
     }
 
+    @Test
+    fun `a trial whose end is before its start requires a subscription`() {
+        // trialEndsAt sits a day before createdAt, so the window is negative. `now` sits one
+        // millisecond before trialEndsAt, so the row clears the "still trialing" check and reaches
+        // the window guard itself. Allowance itself refuses a non-positive window; this guard
+        // catches the row first, and reports SubscriptionRequired rather than let it throw.
+        val row = subscription(SubscriptionStatus.TRIALING, trialEndsAt = CREATED, createdAt = CREATED + DAY_MILLIS)
+
+        assertEquals(EntitlementDecision.SubscriptionRequired, Entitlement.resolve(row, CREATED - 1, config))
+    }
+
     // ------------------------------------------------------------------ active
 
     @Test
@@ -129,6 +140,14 @@ class EntitlementTest {
     }
 
     @Test
+    fun `a cancelled subscription one millisecond after its period ends requires a subscription`() {
+        val periodEnd = CREATED + 30 * DAY_MILLIS
+        val row = subscription(SubscriptionStatus.CANCELLED, currentPeriodEndsAt = periodEnd)
+
+        assertEquals(EntitlementDecision.SubscriptionRequired, Entitlement.resolve(row, periodEnd + 1, config))
+    }
+
+    @Test
     fun `a cancelled subscription with no period end requires a subscription`() {
         val row = subscription(SubscriptionStatus.CANCELLED, currentPeriodEndsAt = null)
 
@@ -156,6 +175,14 @@ class EntitlementTest {
         val row = subscription(SubscriptionStatus.PAST_DUE, graceEndsAt = graceEnd)
 
         assertEquals(EntitlementDecision.SubscriptionRequired, Entitlement.resolve(row, graceEnd, config))
+    }
+
+    @Test
+    fun `a past-due subscription one millisecond after the grace requires a subscription`() {
+        val graceEnd = CREATED + 3 * DAY_MILLIS
+        val row = subscription(SubscriptionStatus.PAST_DUE, graceEndsAt = graceEnd)
+
+        assertEquals(EntitlementDecision.SubscriptionRequired, Entitlement.resolve(row, graceEnd + 1, config))
     }
 
     @Test
@@ -219,5 +246,40 @@ class EntitlementTest {
         assertEquals(SubscriptionStatus.ACTIVE, active.status)
         assertEquals(SubscriptionStatus.CANCELLED, cancelled.status)
         assertEquals(SubscriptionStatus.PAST_DUE, pastDue.status)
+    }
+
+    // ------------------------------------------------------------------ config
+
+    @Test
+    fun `a missing override falls back to the default`() {
+        assertEquals(40, BillingConfig.resolvePositiveInt(null, 40))
+    }
+
+    @Test
+    fun `an unparseable override falls back to the default`() {
+        assertEquals(40, BillingConfig.resolvePositiveInt("seven", 40))
+    }
+
+    @Test
+    fun `a zero override falls back to the default`() {
+        assertEquals(40, BillingConfig.resolvePositiveInt("0", 40))
+    }
+
+    @Test
+    fun `a negative override falls back to the default`() {
+        assertEquals(40, BillingConfig.resolvePositiveInt("-1", 40))
+    }
+
+    @Test
+    fun `a positive override is used`() {
+        assertEquals(5, BillingConfig.resolvePositiveInt("5", 40))
+    }
+
+    @Test
+    fun `the environment variable names are the ones an operator sets`() {
+        assertEquals("MYTETZ_TRIAL_GENERATIONS", BillingConfig.TRIAL_GENERATIONS_ENV)
+        assertEquals("MYTETZ_TRIAL_DAYS", BillingConfig.TRIAL_DAYS_ENV)
+        assertEquals("MYTETZ_GRACE_DAYS", BillingConfig.GRACE_DAYS_ENV)
+        assertEquals("MYTETZ_SUBSCRIBER_DAILY_EXPLAINS", BillingConfig.SUBSCRIBER_DAILY_EXPLAINS_ENV)
     }
 }
