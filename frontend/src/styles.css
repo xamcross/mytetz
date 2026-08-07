@@ -1,5 +1,6 @@
 /* The Candy design system.
-   This is the only file in the project that states a colour. A component uses a token.
+   This file and src/app/ui/palette.spec.ts are the only two that state a colour. A component
+   uses a token.
    Source: docs/mytetz-design-reference.html.
    Spec: docs/superpowers/specs/2026-08-06-candy-design-application-design.md. */
 
@@ -106,7 +107,6 @@
   /* form */
   --mt-r-card: 26px;
   --mt-r-panel: 22px;
-  --mt-r-tile: 20px;
   --mt-r-row: 16px;
   --mt-border-w: 2px;
   --mt-lift: 0 4px 0 var(--mt-border);
@@ -193,6 +193,13 @@ button:disabled {
 .mt-card--flat {
   box-shadow: none;
 }
+/* The big card of the design: a wider radius and a deeper lift. The reader's focus card and the
+   skeleton that stands in for it are the same card in two states, so the pair is written here
+   once and not in each component. */
+.mt-card--raised {
+  border-radius: var(--mt-r-card);
+  box-shadow: var(--mt-lift-card);
+}
 .mt-card--dashed {
   border-style: dashed;
   box-shadow: none;
@@ -240,12 +247,8 @@ button:disabled {
 .mt-pill--teal:active:not(:disabled) {
   box-shadow: 0 2px 0 var(--mt-teal-deep);
 }
-.mt-pill--amber {
-  background: var(--mt-amber-bg);
-  border-color: var(--mt-amber);
-  color: var(--mt-amber-ink);
-  box-shadow: 0 4px 0 var(--mt-amber-deep);
-}
+/* There is no .mt-pill--amber. A pill is a control, and §3.3 says amber means "look at this" and
+   never "click this". The amber tone belongs to .mt-card--amber and .mt-chip--amber. */
 .mt-pill--ghost {
   box-shadow: none;
   color: var(--mt-teal);
