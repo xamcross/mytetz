@@ -3,15 +3,15 @@ package com.mytetz.quota
 /**
  * How many generations a principal may make, and the length of the window they share.
  *
- * This type is the reason [QuotaService] still knows nothing about a tier, a trial or a
- * subscription. A caller resolves an allowance and passes it in; this module counts and refuses.
- * The `billing` module owns the question "which allowance", and it is a separate module for exactly
- * that reason.
+ * This type keeps [QuotaService] free of a tier, a trial and a subscription. A caller resolves an
+ * allowance and gives it to this module. This module then counts and refuses. The `billing` module
+ * owns the question "which allowance".
  *
- * Both bounds are checked here and not at the call site. A count of zero refuses every generation
- * for ever, and a window of zero makes every stored window already expired — which makes
- * [QuotaRepository.rollWindowIfExpired] reset the counter on every call and removes the allowance
- * with nothing in the log to say so. The same failure, and the same reasoning, as [QuotaConfig].
+ * This class checks both bounds. The call site does not.
+ *
+ * A count of zero refuses every generation for ever. A window of zero makes every stored window
+ * already expired. [QuotaRepository.rollWindowIfExpired] then resets the counter on every call, and
+ * the allowance disappears. The log says nothing. [QuotaConfig] holds the same reasoning.
  */
 data class Allowance(val generations: Int, val windowMillis: Long) {
 

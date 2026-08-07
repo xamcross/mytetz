@@ -62,13 +62,13 @@ sealed interface QuotaDecision {
  *
  * ## The allowance is a parameter and not a field
  *
- * A tier decides an allowance and this module must not learn what a tier is. So the caller resolves
- * an [Allowance] and passes it, and [QuotaConfig.defaultAllowance] keeps every caller that has no
- * tier working unchanged.
+ * A tier decides an allowance. This module must not learn what a tier is. The caller therefore
+ * resolves an [Allowance] and gives it to this class. [QuotaConfig.defaultAllowance] keeps every
+ * caller that has no tier unchanged.
  *
- * On [recordGeneration] the allowance is the THIRD parameter and `costMicros` stays the second.
- * `SessionRoutes` calls it positionally. An allowance in the second position would bind a cost to an
- * allowance silently, and both are numbers, so nothing would fail to compile.
+ * On [recordGeneration] the allowance is the THIRD parameter. `costMicros` stays the second.
+ * `SessionRoutes` calls the method positionally. An allowance in the second position binds a cost
+ * to an allowance. Both values are numbers, so the compiler reports nothing.
  */
 class QuotaService(
     private val repository: QuotaRepository,

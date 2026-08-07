@@ -26,9 +26,9 @@ data class QuotaConfig(
     /**
      * What a caller gets when it names no allowance.
      *
-     * Until the `billing` module ships, this is every principal's allowance, and it holds the two
-     * fields this class already validated. It is a computed property and not a stored one, so it
-     * cannot disagree with them.
+     * The `billing` module does not exist yet. Every principal therefore gets this allowance. It
+     * holds the two fields that this class validates above. It is a computed property and not a
+     * stored one. It therefore cannot disagree with them.
      */
     val defaultAllowance: Allowance get() = Allowance(dailyExplains, windowMillis)
 
