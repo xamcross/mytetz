@@ -43,3 +43,12 @@ export interface ExplainRequest {
   verb: Verb;
   variant?: number;
 }
+
+/** The body of `GET /api/account` — mirrors the backend's `AccountView`. */
+export interface AccountView {
+  email: string;
+  status: string;
+  allowance: number;
+  remaining: number;
+  resetsAtEpochMillis: number | null;
+}

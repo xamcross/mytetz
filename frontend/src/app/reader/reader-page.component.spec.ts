@@ -384,4 +384,34 @@ describe('ReaderPageComponent', () => {
     expect(harness.routeNativeElement?.querySelector('a[href="/"]')).toBeTruthy();
     expect(text()).not.toContain('The pillars of modern physics.');
   });
+
+  it('the reader shows the panel on SIGN_IN_REQUIRED', async () => {
+    script = async function* (): AsyncGenerator<ExplainEvent> {
+      throw new ExplainStreamError('SIGN_IN_REQUIRED', 'sign in to keep going', null, false);
+    };
+    const component = await open();
+
+    await component.store.explain({ text: 'pillars', start: 4, end: 11 }, 'EXPLAIN');
+    harness.detectChanges();
+
+    expect(harness.routeNativeElement?.querySelector('app-sign-in-panel')).toBeTruthy();
+    // The panel replaces the focus card outright — it is not a banner layered over it.
+    expect(harness.routeNativeElement?.querySelector('.focus')).toBeNull();
+  });
+
+  it('the reader keeps the trail while the panel is open', async () => {
+    script = async function* (): AsyncGenerator<ExplainEvent> {
+      throw new ExplainStreamError('SIGN_IN_REQUIRED', 'sign in to keep going', null, false);
+    };
+    const component = await open();
+
+    await component.store.explain({ text: 'pillars', start: 4, end: 11 }, 'EXPLAIN');
+    harness.detectChanges();
+
+    expect(harness.routeNativeElement?.querySelector('app-sign-in-panel')).toBeTruthy();
+    // Losing the learner's trail at the moment they are asked to sign in is the one outcome this
+    // task must not ship — both the rail and the breadcrumb stay rendered alongside the panel.
+    expect(harness.routeNativeElement?.querySelectorAll('.trail__item').length).toBe(2);
+    expect(harness.routeNativeElement?.querySelector('.crumbs')).toBeTruthy();
+  });
 });

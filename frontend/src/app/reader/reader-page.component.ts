@@ -2,6 +2,7 @@ import { Component, computed, effect, inject } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { map } from 'rxjs';
+import { SignInPanelComponent } from '../auth/sign-in-panel.component';
 import { SpanPayload, Verb } from '../core/models';
 import { BreadcrumbComponent } from './breadcrumb.component';
 import { FocusCardComponent } from './focus-card.component';
@@ -44,7 +45,13 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
  */
 @Component({
   selector: 'app-reader-page',
-  imports: [BreadcrumbComponent, FocusCardComponent, TrailRailComponent, RouterLink],
+  imports: [
+    BreadcrumbComponent,
+    FocusCardComponent,
+    TrailRailComponent,
+    RouterLink,
+    SignInPanelComponent,
+  ],
   providers: [SessionStore],
   template: `
     <main class="reader">
@@ -145,15 +152,19 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
               (navigate)="store.goTo($event)"
             />
 
-            <app-focus-card
-              [body]="store.currentBody()"
-              [streamingText]="store.streamingText()"
-              [isStreaming]="store.isStreaming()"
-              [step]="step()"
-              [verbLabel]="verbLabel()"
-              [topicLabel]="topicLabel()"
-              (explainRequested)="explain($event)"
-            />
+            @if (signInRequired()) {
+              <app-sign-in-panel />
+            } @else {
+              <app-focus-card
+                [body]="store.currentBody()"
+                [streamingText]="store.streamingText()"
+                [isStreaming]="store.isStreaming()"
+                [step]="step()"
+                [verbLabel]="verbLabel()"
+                [topicLabel]="topicLabel()"
+                (explainRequested)="explain($event)"
+              />
+            }
           </div>
         </div>
       }
@@ -312,8 +323,21 @@ export class ReaderPageComponent {
   });
   readonly bannerError = computed(() => {
     const failure = this.store.error();
-    return failure !== null && this.store.session() !== null ? failure : null;
+    if (failure === null || this.store.session() === null) return null;
+    // SIGN_IN_REQUIRED gets its own branch below — see `signInRequired` — and not this banner:
+    // the sign-in panel already says what happened, and a banner on top of it would say it twice.
+    if (failure.code === 'SIGN_IN_REQUIRED') return null;
+    return failure;
   });
+
+  /**
+   * True when the last explain attempt was refused because nobody is signed in.
+   *
+   * Drives the one substitution this task makes: the sign-in panel appears where the focus card
+   * would, and the breadcrumb and the trail rail stay exactly as they were. Losing a learner's
+   * trail at the moment they are asked to sign in would be the most expensive thing this could do.
+   */
+  readonly signInRequired = computed(() => this.store.error()?.code === 'SIGN_IN_REQUIRED');
 
   /**
    * The topic's name for the root crumb and the root rail row.
