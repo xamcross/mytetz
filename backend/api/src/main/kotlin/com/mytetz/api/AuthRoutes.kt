@@ -86,13 +86,18 @@ data class AccountView(
  * the new user. [completeSignIn] does this in one place, so the order cannot drift between the
  * magic-link route and the Google route.
  *
- * ## Ownership on the explain endpoint stays anonymous, and this is deliberate
+ * ## Every session route reads the same identity this file writes
  *
- * The sign-in gate this file's routes support — see `SessionRoutes.kt` — asks only "does a real
- * user own this cookie". It does not change which principal owns a session or a quota counter; that
- * stays the caller's anonymous principal, unchanged, exactly as the specification's gate table says
- * for this slice. [completeSignIn] therefore moves *existing* sessions onto the user at the moment
- * of sign-in, and leaves every session created afterward to whichever principal creates it.
+ * `SessionRoutes.kt`'s `effectivePrincipal` prefers the signed-in user's principal over the caller's
+ * anonymous cookie whenever a session cookie resolves to one. This has to be true, and not merely
+ * usually true, because [completeSignIn] calls [SessionService.reassignPrincipal] unconditionally on
+ * every sign-in: the moment it runs, every session the caller already holds is re-keyed onto
+ * `user:<id>`, whether or not the caller ever reads or explains into it again. A route that kept
+ * resolving the caller's anonymous principal after that point would be asking for a principal that
+ * no longer owns the session it just moved — which is exactly the defect a fix round caught here: a
+ * learner who reads a topic anonymously, highlights, meets the wall and signs in got `404 NOT_FOUND`
+ * on the very session they were reading, because the write agreed with this file and the read did
+ * not.
  *
  * [sessions], [magicLink] and [google] are factories and not the built services, for the reason
  * `SessionRoutes.kt` gives at length for its own `sessions` parameter: `Components.magicLink` and

@@ -365,7 +365,7 @@ fun Route.sessionRoutes(
         // make a rate-limited request pay for building an Anthropic client, and 500 rather than 429
         // on a deployment with no key.
         val sessions = sessions()
-        val principal = Principals.resolve(call, cookies)
+        val principal = call.effectivePrincipal(account, cookies)
         val request = call.receive<CreateSessionRequest>()
 
         // `createWillGenerate` raises for an unknown or unpublished topic exactly as `create` does,
@@ -390,7 +390,7 @@ fun Route.sessionRoutes(
 
     get("/api/sessions/{id}") {
         val sessions = sessions()
-        val principal = Principals.resolve(call, cookies)
+        val principal = call.effectivePrincipal(account, cookies)
         val id = call.parameters["id"].orEmpty()
 
         sessions.requireOwnedBy(id, principal)
@@ -437,9 +437,15 @@ fun Route.sessionRoutes(
         // forces the lazy Anthropic client — and before anything reads the request body's span. An
         // anonymous caller must learn nothing about the session or the span: a wrong-order gate
         // would let a `400 SPAN_MISMATCH` tell an unauthenticated prober whether a guessed span was
-        // right. This check does not change which principal owns a session or a quota counter —
-        // that stays the caller's anonymous principal below, unchanged, exactly as this slice
-        // specifies. See `AuthRoutes.kt`'s class KDoc for why sign-in and ownership stay separate.
+        // right.
+        //
+        // Ownership and quota below key on this signed-in user's principal, and not on the caller's
+        // anonymous cookie — a fix-round correction. The anonymous principal is `Principals.resolve`,
+        // which reads only `mytetz_pid` and can never yield a `user:` principal; a session that
+        // `completeSignIn` has already reassigned onto `user:<id>` would then never match, and a
+        // learner who signs in from a reading page would meet "no such session" on the very page
+        // they were just reading. Reusing [signedInUser] here, rather than re-resolving, is also
+        // exactly what the gate above already paid for.
         val signedInUser = Principals.readSessionId(call, cookies)?.let { account.resolveSession(it) }
         if (signedInUser == null) {
             call.respond(HttpStatusCode.Unauthorized, ApiError("SIGN_IN_REQUIRED", "sign in to request an explanation"))
@@ -450,7 +456,7 @@ fun Route.sessionRoutes(
 
         val sessions = sessions()
 
-        val principal = Principals.resolve(call, cookies)
+        val principal = PrincipalId.user(signedInUser.id)
         val sessionId = call.parameters["id"].orEmpty()
         val request = call.receive<ExplainRequest>()
 
@@ -754,6 +760,37 @@ private suspend fun QuotaService.recordSpend(principal: PrincipalId, spentMicros
             e,
         )
     }
+}
+
+/**
+ * The principal that owns whatever this caller touches on `POST /api/sessions` and
+ * `GET /api/sessions/{id}`: the signed-in user, when the session cookie resolves to one, and the
+ * anonymous cookie principal otherwise.
+ *
+ * `POST /api/sessions/{id}/explain` does not call this. Sign-in is mandatory there, so the gate
+ * has already resolved the user; building `PrincipalId.user(signedInUser.id)` straight from that
+ * value is the same answer this function would give, without asking Mongo for the session a
+ * second time.
+ *
+ * ## Why this matters, and what was wrong before it existed
+ *
+ * `Principals.resolve` reads only the `mytetz_pid` cookie and never returns a `user:` principal —
+ * it does not know a session cookie exists. `AuthRoutes.completeSignIn` calls
+ * `SessionService.reassignPrincipal` unconditionally on every sign-in, moving every session that
+ * currently carries the caller's anonymous principal onto `user:<id>`. A route that keeps resolving
+ * `Principals.resolve` after that point is asking Mongo for a principal that no longer owns
+ * anything: a learner who reads a topic anonymously, highlights, meets the wall, and signs in would
+ * find their own reading session answers `404 NOT_FOUND` a moment later, because the write
+ * (`reassignPrincipal`) and the read (`Principals.resolve`) disagreed about which principal the
+ * caller now is. This function is the one place that answer is decided, so the two cannot drift
+ * apart again.
+ */
+private suspend fun ApplicationCall.effectivePrincipal(
+    account: AccountService,
+    cookies: PrincipalCookieConfig,
+): PrincipalId {
+    val user = Principals.readSessionId(this, cookies)?.let { account.resolveSession(it) }
+    return if (user != null) PrincipalId.user(user.id) else Principals.resolve(this, cookies)
 }
 
 /**

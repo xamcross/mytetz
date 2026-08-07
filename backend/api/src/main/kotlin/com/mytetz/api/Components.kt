@@ -71,12 +71,14 @@ open class Components(
     // same reasoning [llmFactory] carries — a deployment with no mail key and no Google client must
     // still serve the catalogue. See [defaultMailSender] and [defaultGoogleOAuth].
     mailSenderFactory: () -> MailSender = { defaultMailSender() },
-    googleOAuthFactory: () -> GoogleOAuth = { defaultGoogleOAuth() },
     // A factory, and not a plain `String`, for the same reason as the two above: the production
     // default throws when the credential is absent, and it must not do that until `magicLink` is
     // actually forced. A test overrides this to exercise a real sign-in without setting the real
-    // environment variable process-wide.
+    // environment variable process-wide. Declared before [googleOAuthFactory] so that factory's own
+    // default can pass this one through — one base url feeds both the magic link and the Google
+    // redirect, and an override here must reach both rather than only [magicLink].
     publicBaseUrl: () -> String = { resolvePublicBaseUrl(System.getenv(PUBLIC_BASE_URL_ENV)) },
+    googleOAuthFactory: () -> GoogleOAuth = { defaultGoogleOAuth(publicBaseUrl) },
     val migrateOnBoot: Boolean = resolveMigrateOnBoot(System.getenv(MIGRATE_ON_BOOT_ENV)),
 ) {
 
@@ -294,16 +296,23 @@ open class Components(
 
         /**
          * Builds the production [GoogleOAuth] from [GOOGLE_CLIENT_ID_ENV], [GOOGLE_CLIENT_SECRET_ENV]
-         * and [PUBLIC_BASE_URL_ENV]. Runs only inside [googleOAuth]'s `by lazy`, for the same reason
+         * and [baseUrl]. Runs only inside [googleOAuth]'s `by lazy`, for the same reason
          * [defaultMailSender] gives.
+         *
+         * [baseUrl] is the constructor's own `publicBaseUrl` factory, passed through rather than
+         * read from the environment a second time here — a fix-round correction. Reading
+         * [PUBLIC_BASE_URL_ENV] directly meant a test, or a future caller, that overrode
+         * `publicBaseUrl` to point [magicLink] somewhere other than the real environment still got
+         * the real environment's value on the Google redirect, so the two could name two different
+         * deployments.
          */
-        private fun defaultGoogleOAuth(): GoogleOAuth {
-            val baseUrl = resolvePublicBaseUrl(System.getenv(PUBLIC_BASE_URL_ENV))
+        private fun defaultGoogleOAuth(baseUrl: () -> String): GoogleOAuth {
+            val url = baseUrl()
             return GoogleOAuth(
                 config = GoogleConfig(
                     clientId = requireEnv(GOOGLE_CLIENT_ID_ENV),
                     clientSecret = requireEnv(GOOGLE_CLIENT_SECRET_ENV),
-                    redirectUri = "$baseUrl/api/auth/google/callback",
+                    redirectUri = "$url/api/auth/google/callback",
                 ),
                 httpClient = HttpClient(CIO),
             )

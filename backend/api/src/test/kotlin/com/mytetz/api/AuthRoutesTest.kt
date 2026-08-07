@@ -323,6 +323,32 @@ class AuthRoutesTest {
 
         val user = account.findOrCreateByEmail(email)
         assertEquals("user:${user.id}", stack.sessions.ownerOf(created.sessionId))
+
+        // The read side, and not only the stored field. A fix round caught this exact gap: the
+        // session document was correctly reassigned, but `GET /api/sessions/{id}` still resolved
+        // the caller's anonymous principal and answered 404 — the learner's own reading session
+        // vanished the moment they signed in.
+        val response = client.get("/api/sessions/${created.sessionId}")
+        assertEquals(HttpStatusCode.OK, response.status, response.bodyAsText())
+    }
+
+    @Test
+    fun `a session opened anonymously is explainable after signing in`() = authApp {
+        // The unsafe order: the session is created before the sign-in that reassigns it.
+        // `a signed-in explain reaches the pipeline` signs in first and then creates the session, so
+        // it cannot catch a gate that resolves the wrong principal once `reassignPrincipal` has
+        // already moved a pre-existing session onto the user.
+        val created = createSession()
+
+        signIn()
+
+        val response = client.post("/api/sessions/${created.sessionId}/explain") {
+            contentType(ContentType.Application.Json)
+            setBody(created.explainBody())
+        }
+
+        assertEquals(HttpStatusCode.OK, response.status, response.bodyAsText())
+        assertTrue(response.bodyAsText().contains("event: done"))
     }
 
     // ------------------------------------------------------------------ the gate
@@ -436,6 +462,38 @@ class AuthRoutesTest {
         assertEquals(email, view.email)
         assertEquals(QuotaConfig.DEFAULT_DAILY_EXPLAINS, view.allowance)
         assertEquals(QuotaConfig.DEFAULT_DAILY_EXPLAINS, view.remaining)
+    }
+
+    @Test
+    fun `the account view counts a signed-in learner's spend`() = authApp {
+        // The session is created before the sign-in, and deliberately: `POST /api/sessions` now
+        // records spend under the effective principal too, and this database is fresh for this test
+        // alone, so an anonymous seed generation for "quantum-physics" would otherwise land on the
+        // user's own counter and be indistinguishable from the two explains this test means to
+        // count. Creating the session first bills the seed to the anonymous principal, exactly as it
+        // would for a real visitor reading a topic before they ever sign in.
+        val created = createSession()
+        signIn()
+        // Two distinct spans, so both actually reach the model: a repeated span is a cache hit, and
+        // a cache hit spends no allowance — the explain endpoint's own quota gate holds that
+        // property, and this test would pin nothing if it collided with it.
+        val first = client.post("/api/sessions/${created.sessionId}/explain") {
+            contentType(ContentType.Application.Json)
+            setBody(created.explainBody("behavior of matter"))
+        }
+        assertEquals(HttpStatusCode.OK, first.status, first.bodyAsText())
+        val second = client.post("/api/sessions/${created.sessionId}/explain") {
+            contentType(ContentType.Application.Json)
+            setBody(created.explainBody("fundamental physical theory"))
+        }
+        assertEquals(HttpStatusCode.OK, second.status, second.bodyAsText())
+
+        val response = client.get("/api/account")
+
+        assertEquals(HttpStatusCode.OK, response.status)
+        val view = wireJson.decodeFromString<AccountView>(response.bodyAsText())
+        assertEquals(QuotaConfig.DEFAULT_DAILY_EXPLAINS - 2, view.remaining)
+        assertNotNull(view.resetsAtEpochMillis, "a spent counter must report when it resets")
     }
 
     // ------------------------------------------------------------------ rate limiting

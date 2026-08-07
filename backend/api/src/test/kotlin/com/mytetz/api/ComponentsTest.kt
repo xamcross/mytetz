@@ -120,6 +120,14 @@ class ComponentsTest {
         assertContains(indexNames(database, "sessions"), "principal_recent")
         assertContains(indexNames(database, "sessions"), "by_topic")
         assertContains(indexNames(database, "principals"), "window_ttl")
+        // AccountRepository, added by this task. `accountRepository.ensureIndexes()` was wired into
+        // `bootstrap()` with no assertion here — the exact gap this test's own KDoc names. The two
+        // TTL indexes matter most: without them `magicLinkTokens` and `authSessions` grow for ever.
+        assertContains(indexNames(database, "users"), "email_unique")
+        assertContains(indexNames(database, "users"), "google_sub_unique")
+        assertContains(indexNames(database, "magicLinkTokens"), "token_ttl")
+        assertContains(indexNames(database, "authSessions"), "session_ttl")
+        assertContains(indexNames(database, "authSessions"), "by_user")
     }
 
     @Test

@@ -827,8 +827,10 @@ class SessionRoutesTest {
 
         // A client with no cookie jar gets a new principal for each request. `dailyExplains` keys on
         // the principal, so it does not bound this client. The limiter keys on `ClientAddress` for
-        // that reason. The limiter must therefore run before the ownership check. A stranger that
-        // sends a session id it does not own must also spend an allowance.
+        // that reason. The limiter must therefore run before both the sign-in gate and the ownership
+        // check. A stranger with no session cookie at all meets the rate limit at the door, before
+        // either of those checks — and not the sign-in gate's 401, which is what an unauthenticated
+        // caller past the limiter would otherwise see first.
         val stranger = cookieless.post("/api/sessions/${created.sessionId}/explain") {
             contentType(ContentType.Application.Json)
             setBody(explainBody(span))
