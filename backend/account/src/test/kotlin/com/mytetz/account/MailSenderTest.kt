@@ -10,7 +10,10 @@ import io.ktor.client.plugins.defaultRequest
 import io.ktor.client.request.url
 import kotlinx.coroutines.runBlocking
 import org.slf4j.LoggerFactory
+import java.io.PrintWriter
+import java.io.StringWriter
 import java.net.InetSocketAddress
+import java.net.ServerSocket
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -69,6 +72,17 @@ class MailSenderTest {
         assertEquals("log", MailConfig.resolveMode("log"))
         assertEquals("log", MailConfig.resolveMode("LOG"))
         assertEquals("log", MailConfig.resolveMode("  Log  "))
+    }
+
+    // ------------------------------------------------------------------ MailConfig construction
+
+    @Test
+    fun `MailConfig holds the mode, key and sender it is given`() {
+        val config = MailConfig(mode = "resend", apiKey = "re_test_key", from = "noreply@mytetz.example")
+
+        assertEquals("resend", config.mode)
+        assertEquals("re_test_key", config.apiKey)
+        assertEquals("noreply@mytetz.example", config.from)
     }
 
     // ------------------------------------------------------------------ ResendMailSender
@@ -133,6 +147,35 @@ class MailSenderTest {
             server.stop(0)
         }
         assertTrue("500" in failure.message.orEmpty(), "the status code should be named in the message, was: ${failure.message}")
+    }
+
+    @Test
+    fun `a transport failure raises without leaking the key`() = runBlocking {
+        // A port with nothing listening: opened, read, and closed immediately, so the connection
+        // this test drives is refused rather than merely slow.
+        val deadPort = ServerSocket(0).use { it.localPort }
+        val apiKey = "re_live_do_not_leak_this_value_transport_fail_2f3e4d5c"
+        val client = HttpClient(CIO) {
+            defaultRequest { url("http://127.0.0.1:$deadPort") }
+        }
+
+        val sender = ResendMailSender(
+            apiKey = apiKey,
+            from = "noreply@mytetz.example",
+            httpClient = client,
+        )
+
+        val raised = assertFailsWith<MailSendFailedException> {
+            sender.sendMagicLink("learner@example.com", "https://mytetz.example/magic?t=abc123")
+        }
+
+        // The whole chain, not only the top message: default logging prints the cause's message
+        // and the full stack trace too, and either one is a place the engine's own exception type
+        // could otherwise carry a request header back out.
+        val rendered = StringWriter().also { w ->
+            PrintWriter(w).use { raised.printStackTrace(it) }
+        }.toString()
+        assertFalse(apiKey in rendered, "the API key leaked into the exception chain: $rendered")
     }
 
     // ------------------------------------------------------------------ LoggingMailSender
