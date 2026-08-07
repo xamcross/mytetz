@@ -121,9 +121,12 @@ class AnthropicLlmClientTest {
         val server = sseServer { out -> out.write(body.toByteArray()) }
 
         try {
+            // modelId is pinned here and not left on the default: the assertion below names an
+            // exact model, and it must hold regardless of which model the code default is.
             val failure = assertFailsWith<LlmStreamTruncatedException> {
                 withTimeout(30_000) {
-                    AnthropicLlmClient(clientFor(server)).stream(LlmRequest("system", "prompt")).toList()
+                    AnthropicLlmClient(clientFor(server), modelId = "claude-opus-5")
+                        .stream(LlmRequest("system", "prompt")).toList()
                 }
             }
 
@@ -262,5 +265,36 @@ class AnthropicLlmClientTest {
             release.countDown()
             server.stop(0)
         }
+    }
+
+    // ------------------------------------------------------------------ the model default
+
+    @Test
+    fun `an unset model falls back to the default`() {
+        assertEquals("claude-sonnet-5", AnthropicLlmClient.resolveModel(null))
+    }
+
+    @Test
+    fun `a blank model falls back to the default`() {
+        assertEquals("claude-sonnet-5", AnthropicLlmClient.resolveModel(""))
+        assertEquals("claude-sonnet-5", AnthropicLlmClient.resolveModel("   "))
+    }
+
+    @Test
+    fun `an override is trimmed and kept`() {
+        assertEquals("claude-opus-5", AnthropicLlmClient.resolveModel("  claude-opus-5\n"))
+    }
+
+    @Test
+    fun `the default model is one Pricing knows`() {
+        // Pricing falls back to the dearest known rate for an unknown model. A typo in the
+        // default would therefore over-report every cost silently rather than fail. This is the
+        // check that makes the fallback safe to keep.
+        val oneMillionOut = LlmUsage(inputTokens = 0, outputTokens = 1_000_000)
+        assertEquals(
+            15_000_000L,
+            Pricing.costMicros(AnthropicLlmClient.DEFAULT_MODEL, oneMillionOut),
+            "the default model must bill at Sonnet 5's published output rate of \$15 for each 1M tokens",
+        )
     }
 }

@@ -39,4 +39,22 @@ class PricingTest {
             Pricing.costMicros("some-future-model", usage),
         )
     }
+
+    @Test
+    fun `sonnet 5 bills at the published rate`() {
+        // $3 for each 1M input tokens and $15 for each 1M output tokens, in micro-dollars for one
+        // token. If this test fails, the published rate moved. Recompute section 3 of the
+        // monetization specification before you accept the change.
+        val usage = LlmUsage(inputTokens = 1_000_000, outputTokens = 1_000_000)
+
+        assertEquals(3_000_000L + 15_000_000L, Pricing.costMicros("claude-sonnet-5", usage))
+    }
+
+    @Test
+    fun `one explanation on sonnet 5 costs about a cent`() {
+        // The shape section 3.1 of the specification measures: ~1000 in, ~500 out.
+        val usage = LlmUsage(inputTokens = 1_000, outputTokens = 500)
+
+        assertEquals(10_500L, Pricing.costMicros("claude-sonnet-5", usage), "10 500 micro-dollars is \$0.0105")
+    }
 }

@@ -49,8 +49,8 @@ import java.time.Duration
  */
 class AnthropicLlmClient(
     private val client: AnthropicClient = defaultClient(),
-    override val modelId: String = System.getenv("MYTETZ_MODEL_ID") ?: "claude-opus-5",
-    override val modelFamily: String = System.getenv("MYTETZ_MODEL_FAMILY") ?: "claude-opus-5",
+    override val modelId: String = resolveModel(System.getenv(MODEL_ID_ENV)),
+    override val modelFamily: String = resolveModel(System.getenv(MODEL_FAMILY_ENV)),
 ) : LlmClient {
 
     override fun stream(request: LlmRequest): Flow<LlmChunk> = flow {
@@ -138,6 +138,41 @@ class AnthropicLlmClient(
 
         /** Ceiling on a single streamed request, and so on how long a stalled read holds a thread. */
         const val DEFAULT_TIMEOUT_SECONDS = 120L
+
+        const val MODEL_ID_ENV: String = "MYTETZ_MODEL_ID"
+        const val MODEL_FAMILY_ENV: String = "MYTETZ_MODEL_FAMILY"
+
+        /**
+         * Sonnet 5, and not Opus 5. The reason is arithmetic and not preference.
+         *
+         * One explanation is about 1 000 input tokens and 500 output tokens. Opus 5 costs $5 and
+         * $25 for each 1M tokens. One explanation on Opus 5 therefore costs $0.0175. Sonnet 5 costs
+         * $3 and $15. One explanation on Sonnet 5 therefore costs $0.0105.
+         *
+         * The subscription is €10 each month. The Freemius fee leaves €9.53. That is about $10.29.
+         * An allowance of 25 each day therefore costs $7.88 on Sonnet 5 and $13.13 on Opus 5. Only
+         * the first number leaves a margin.
+         *
+         * See section 3 of `docs/superpowers/specs/2026-08-07-monetization-design.md`.
+         *
+         * **`modelFamily` hashes this value into every content key.** A change here orphans the
+         * whole explanation store. The design intends that behaviour. Read section 13 of the same
+         * document before you change this value.
+         */
+        const val DEFAULT_MODEL: String = "claude-sonnet-5"
+
+        /**
+         * A missing, empty or blank override falls back to the default. It does not throw.
+         *
+         * The process reads this value while it starts. A typo in a deployment variable must not
+         * stop the server. `GraphConfig.resolveMaxOutputTokens` and
+         * `QuotaConfig.resolveDailyExplains` hold the same rule and the same shape.
+         *
+         * This function trims the value. `fly secrets set` leaves a trailing newline. A hand-edited
+         * `.env` does the same. A model id with a newline gives a 404 from the API.
+         */
+        internal fun resolveModel(raw: String?): String =
+            raw?.trim()?.takeIf { it.isNotEmpty() } ?: DEFAULT_MODEL
 
         /**
          * The safe value is the default, so it applies unless a caller deliberately supplies their
