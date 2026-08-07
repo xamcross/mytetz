@@ -18,6 +18,7 @@
 - **No secret may reach a log, an error message, or the browser.** Not a token, not a signature, not an API key, not a session id.
 - Every TTL field is written through `EpochMillisAsBsonDateTime` from the `quota` module, or through an identical serializer in the new module. A `Long` makes a TTL index do nothing and the collection grows for ever.
 - **Do not add a unique index to `principals` or `costLedger`.** `QuotaRepository.ensureIndexes` explains why.
+- **A `@Test` method whose expression body infers a non-`Unit` return type is silently excluded by JUnit.** It reports nothing and runs zero times. `fun x() = runBlocking { ... assertFailsWith<T> { ... } }` infers `T`, not `Unit`, so the whole test disappears. Two tasks hit this, and the second time it took out both security tests in the task. Write `fun x(): Unit = runBlocking { ... }` whenever the body's last statement returns a value. **Verify by counting:** `grep -rho "^\s*@Test" --include="*.kt" backend/*/src/test | wc -l` must equal the tests JUnit reports. A mismatch means a test vanished.
 - Backend tests: `./gradlew build` from the repository root. The baseline is **352 tests**. Frontend: `npm test -- --watch=false` in `frontend/`, baseline **155**. End to end: `npx playwright test`, baseline **21**.
 - Testcontainers needs Docker. The first container start of a session sometimes fails on this machine. Retry one time before you report a failure.
 - Work on the branch `spec-b-monetization-b1-b4`, branched from `main`.
