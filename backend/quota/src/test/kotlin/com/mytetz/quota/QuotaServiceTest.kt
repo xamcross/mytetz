@@ -451,4 +451,73 @@ class QuotaServiceTest {
         assertFailsWith<IllegalArgumentException> { QuotaConfig(0, 86_400_000, 1_000) }
         assertFailsWith<IllegalArgumentException> { QuotaConfig(3, 86_400_000, 0) }
     }
+
+    // ------------------------------------------------------------------ allowance
+
+    @Test
+    fun `an allowance refuses a non-positive count`() {
+        assertFailsWith<IllegalArgumentException> { Allowance(generations = 0, windowMillis = DAY_MILLIS) }
+        assertFailsWith<IllegalArgumentException> { Allowance(generations = -1, windowMillis = DAY_MILLIS) }
+    }
+
+    @Test
+    fun `an allowance refuses a non-positive window`() {
+        assertFailsWith<IllegalArgumentException> { Allowance(generations = 5, windowMillis = 0) }
+        assertFailsWith<IllegalArgumentException> { Allowance(generations = 5, windowMillis = -1) }
+    }
+
+    @Test
+    fun `the default allowance carries the config's own numbers`() {
+        assertEquals(Allowance(generations = 3, windowMillis = DAY_MILLIS), config.defaultAllowance)
+    }
+
+    @Test
+    fun `a named allowance overrides the config's count`() = runTest {
+        val generous = Allowance(generations = 5, windowMillis = DAY_MILLIS)
+
+        // Five recorded generations. The config allows three, the named allowance allows five.
+        repeat(5) { service.recordGeneration(alice, costMicros = 1, allowance = generous) }
+
+        assertIs<QuotaDecision.PrincipalExceeded>(
+            service.checkGeneration(alice, generous),
+            "the fifth generation fills the named allowance of five",
+        )
+        assertIs<QuotaDecision.PrincipalExceeded>(
+            service.checkGeneration(alice),
+            "the default allowance of three was passed long before",
+        )
+    }
+
+    @Test
+    fun `a named allowance below the count still admits`() = runTest {
+        val generous = Allowance(generations = 5, windowMillis = DAY_MILLIS)
+
+        repeat(4) { service.recordGeneration(alice, costMicros = 1, allowance = generous) }
+
+        assertEquals(QuotaDecision.Allowed, service.checkGeneration(alice, generous))
+    }
+
+    @Test
+    fun `a named window decides the stored expiry`() = runTest {
+        val week = Allowance(generations = 40, windowMillis = 7 * DAY_MILLIS)
+
+        service.recordGeneration(alice, costMicros = 1, allowance = week)
+
+        val counter = assertNotNull(repository.findCounter(alice.value))
+        assertEquals(
+            T0 + 7 * DAY_MILLIS,
+            counter.windowExpiresAtEpochMillis,
+            "the trial pool in specification section 6.1 is this shape: 40 over seven days",
+        )
+    }
+
+    @Test
+    fun `the default allowance leaves today's behaviour exactly as it was`() = runTest {
+        repeat(3) { service.recordGeneration(alice, costMicros = 1) }
+
+        assertIs<QuotaDecision.PrincipalExceeded>(service.checkGeneration(alice))
+
+        val counter = assertNotNull(repository.findCounter(alice.value))
+        assertEquals(T0 + DAY_MILLIS, counter.windowExpiresAtEpochMillis)
+    }
 }

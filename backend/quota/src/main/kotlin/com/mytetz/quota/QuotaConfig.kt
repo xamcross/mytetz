@@ -23,6 +23,15 @@ data class QuotaConfig(
         }
     }
 
+    /**
+     * What a caller gets when it names no allowance.
+     *
+     * Until the `billing` module ships, this is every principal's allowance, and it holds the two
+     * fields this class already validated. It is a computed property and not a stored one, so it
+     * cannot disagree with them.
+     */
+    val defaultAllowance: Allowance get() = Allowance(dailyExplains, windowMillis)
+
     companion object {
 
         const val DAILY_EXPLAINS_ENV: String = "MYTETZ_DAILY_EXPLAINS"

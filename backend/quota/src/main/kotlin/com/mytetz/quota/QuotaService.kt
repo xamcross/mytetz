@@ -59,6 +59,16 @@ sealed interface QuotaDecision {
  * - **[recordGeneration] should fail loudly but must not fail the request.** By the time it runs the
  *   money is already spent, so withholding the explanation wastes it. Log it as a spend-accounting
  *   gap — it is the one condition under which the ledger is known to understate reality.
+ *
+ * ## The allowance is a parameter and not a field
+ *
+ * A tier decides an allowance and this module must not learn what a tier is. So the caller resolves
+ * an [Allowance] and passes it, and [QuotaConfig.defaultAllowance] keeps every caller that has no
+ * tier working unchanged.
+ *
+ * On [recordGeneration] the allowance is the THIRD parameter and `costMicros` stays the second.
+ * `SessionRoutes` calls it positionally. An allowance in the second position would bind a cost to an
+ * allowance silently, and both are numbers, so nothing would fail to compile.
  */
 class QuotaService(
     private val repository: QuotaRepository,
@@ -82,7 +92,10 @@ class QuotaService(
      *
      * The verdict is a snapshot, not a reservation — see the class KDoc for the bound that leaves.
      */
-    suspend fun checkGeneration(principalId: PrincipalId): QuotaDecision {
+    suspend fun checkGeneration(
+        principalId: PrincipalId,
+        allowance: Allowance = config.defaultAllowance,
+    ): QuotaDecision {
         if (dailySpendMicros() >= config.globalDailyCostCeilingMicros) {
             return QuotaDecision.SpendLimitReached
         }
@@ -92,7 +105,7 @@ class QuotaService(
 
         if (counter == null || now >= counter.windowExpiresAtEpochMillis) return QuotaDecision.Allowed
 
-        return if (counter.explainCount >= config.dailyExplains) {
+        return if (counter.explainCount >= allowance.generations) {
             QuotaDecision.PrincipalExceeded(
                 // Floored at 1: the true answer rounds to 0 inside the last second of the window,
                 // and a Retry-After of 0 invites an immediate retry that would still be refused.
@@ -123,15 +136,19 @@ class QuotaService(
      * [QuotaRepository.rollWindowIfExpired] explains why that is what keeps a straggling reset from
      * erasing a live count.
      */
-    suspend fun recordGeneration(principalId: PrincipalId, costMicros: Long) {
+    suspend fun recordGeneration(
+        principalId: PrincipalId,
+        costMicros: Long,
+        allowance: Allowance = config.defaultAllowance,
+    ) {
         // A negative cost would walk the ledger backwards and un-trip a breaker that had already
         // tripped. It is also the unstated premise of the class KDoc's "monotone within a UTC day".
         require(costMicros >= 0) { "costMicros must not be negative, was $costMicros" }
 
         val now = clock()
         repository.incrementLedger(today(), costMicros)
-        repository.rollWindowIfExpired(principalId.value, now, config.windowMillis)
-        repository.incrementCounter(principalId.value, now, config.windowMillis, costMicros)
+        repository.rollWindowIfExpired(principalId.value, now, allowance.windowMillis)
+        repository.incrementCounter(principalId.value, now, allowance.windowMillis, costMicros)
     }
 
     suspend fun dailySpendMicros(): Long = repository.ledgerFor(today())?.costMicros ?: 0
