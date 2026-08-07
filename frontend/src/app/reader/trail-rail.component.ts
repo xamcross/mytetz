@@ -45,7 +45,7 @@ const VERB_LABELS: Readonly<Record<string, string>> = {
           <li class="trail__row" [style.margin-left.px]="node.depth * 16">
             <button
               type="button"
-              class="trail__item"
+              class="mt-card mt-card--flat trail__item"
               [class.trail__item--current]="node.nodeId === currentNodeId()"
               [attr.data-node-id]="node.nodeId"
               [attr.aria-current]="node.nodeId === currentNodeId() ? 'true' : null"
@@ -88,6 +88,8 @@ const VERB_LABELS: Readonly<Record<string, string>> = {
       .trail__list--collapsed {
         display: none;
       }
+      /* The surface, the border and the absent lift all come from .mt-card--flat. This rule adds
+         the row's own layout, and the tighter radius the design gives a row. */
       .trail__item {
         width: 100%;
         text-align: left;
@@ -95,11 +97,15 @@ const VERB_LABELS: Readonly<Record<string, string>> = {
         align-items: center;
         gap: 9px;
         padding: 11px 13px;
-        border: var(--mt-border-w) solid var(--mt-border);
         border-radius: var(--mt-r-row);
-        background: var(--mt-surface);
         color: var(--mt-ink);
       }
+      /* The four declarations below are also what .mt-pill--teal draws, and the duplication is
+         deliberate. That class is a modifier of .mt-pill, and .mt-pill--teal:active changes only
+         the shadow — .mt-pill itself supplies the 2px move that goes with it. On a row that is not
+         a pill, the modifier would press half way. The row would also have to give up its own
+         background and border shorthands to let the modifier through the cascade, which trades a
+         visible duplication for a hidden dependency on specificity. */
       .trail__item--current {
         background: var(--mt-teal);
         border-color: var(--mt-teal);
