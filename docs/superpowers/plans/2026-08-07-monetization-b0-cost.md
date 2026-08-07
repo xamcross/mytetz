@@ -14,7 +14,7 @@
 - **No behaviour a learner can see changes in B0.** No existing **assertion** may change, and no existing test may be deleted, renamed or disabled. An assertion that has to change to pass is a signal that the change is not behaviour-neutral — stop and report it.
 - **Widening a test fixture is allowed and expected.** Tasks 3 and 5 each add a parameter to an existing fixture builder, with the current literal as its default, so every existing call site keeps its exact meaning. That is not an edit to a test; it is an addition to a helper. Adding a near-duplicate builder instead is the worse outcome.
 - Write all prose, KDoc and commit message bodies in ASD-STE100 Simplified Technical English. Keep the conventional-commit subject line format. **This rule binds the KDoc in this plan too.** A code block here is a specification of behaviour and not a licence to copy prose that breaks the rule. When a KDoc block in a task looks non-compliant, rewrite it and say so in your report.
-- **The concrete test for "one statement in one sentence":** a sentence must not hold two subjects that each carry their own verb. `"The migration deletes documents, so it must never start by accident"` has two — `the migration` and `it`. Split it: `"The migration deletes documents. It must never start by accident."` A compound predicate on one subject is allowed: `"This function trims the value and returns it"` has one subject. The reviewer applies this test. Apply it yourself before you commit. **It binds a `//` comment, an assertion message and prose in `.env.example` as much as it binds a KDoc block.**
+- **The concrete test for "one statement in one sentence":** a sentence must not hold two subjects that each carry their own verb. `"The migration deletes documents, so it must never start by accident"` has two — `the migration` and `it`. Split it: `"The migration deletes documents. It must never start by accident."` A compound predicate on one subject is allowed: `"This function trims the value and returns it"` has one subject. **A semicolon joining two independent clauses fails this test as surely as ", and" does.** The reviewer applies this test. Apply it yourself before you commit. **It binds a `//` comment, an assertion message and prose in `.env.example` as much as it binds a KDoc block.** A log line and a test name are exempt: the policy names them.
 - **Do not add a unique index to `principals` or `costLedger`.** `QuotaRepository.ensureIndexes` explains why: the upsert race resolution depends on it.
 - Every new TTL field is written through `EpochMillisAsBsonDateTime`. A `Long` makes a TTL index do nothing. This slice adds no TTL field, so the rule only matters if you add one.
 - The backend test command is `./gradlew build` from the repository root. It runs 325 tests today.
@@ -589,7 +589,7 @@ Then add these tests at the end of the class:
         assertEquals(
             0,
             repository.deleteWhereModelFamilyIsNot("claude-sonnet-5"),
-            "a second run finds nothing; an operator can run it twice with no consequence",
+            "a second run finds nothing. An operator can therefore run it twice.",
         )
     }
 
@@ -697,7 +697,7 @@ Add these at the end of `SessionServiceTest.kt`. The file's `reset()` drops the 
 
         val generated = service.prewarmSeed("quantum-physics") { spent += it }
 
-        assertTrue(generated, "the store held no seed; this call generated one")
+        assertTrue(generated, "the store held no seed. This call generated one.")
         assertEquals(1, spent.size, "the cost is reported once, the instant it is known")
         assertTrue(spent.single() > 0, "FakeLlmClient reports real token counts")
     }
