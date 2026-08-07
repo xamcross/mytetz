@@ -100,6 +100,17 @@ class AccountRepositoryTest {
     }
 
     @Test
+    fun `two users without a google sub can both exist`() = runTest {
+        // Without `sparse` on the googleSub index, every user with no linked Google account
+        // shares one null value. A second such insert would then raise a duplicate-key error.
+        repository.insertUser(user("u1", "alice@example.com"))
+        repository.insertUser(user("u2", "bob@example.com"))
+
+        assertNotNull(repository.findUserByEmail("alice@example.com"))
+        assertNotNull(repository.findUserByEmail("bob@example.com"))
+    }
+
+    @Test
     fun `setGoogleSub links a google account to an existing user`() = runTest {
         repository.insertUser(user("u1", "alice@example.com"))
 
