@@ -57,6 +57,26 @@ class BillingRepository(database: MongoDatabase) {
     }
 
     /**
+     * Inserts [subscription], and reports whether this call was the one that created the row.
+     *
+     * Returns `true` on a fresh insert and `false` on a duplicate `_id`, using the same
+     * duplicate-key idiom as [insertEventIfAbsent]. [BillingService.startTrialIfAbsent] needs this
+     * shape and not [upsert]: two callers can both read no row for one user and both build a fresh
+     * [Subscription], and only one insert can win here. The loser must learn that it lost, so it
+     * can hand back the winner's own row instead of silently replacing it — which is what
+     * [upsert]'s `replaceOne` would do, and which can downgrade a subscription a webhook has
+     * already activated back to [SubscriptionStatus.TRIALING].
+     */
+    suspend fun insertIfAbsent(subscription: Subscription): Boolean =
+        try {
+            subscriptions.insertOne(subscription)
+            true
+        } catch (e: MongoWriteException) {
+            if (e.error.code != DUPLICATE_KEY) throw e
+            false
+        }
+
+    /**
      * Records that [eventId] arrived at [nowEpochMillis], and reports whether this call was the
      * one that recorded it.
      *

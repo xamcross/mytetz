@@ -89,7 +89,7 @@ data class AccountView(
  *
  * ## Every session route reads the same identity this file writes
  *
- * `SessionRoutes.kt`'s `effectivePrincipal` prefers the signed-in user's principal over the caller's
+ * `SessionRoutes.kt`'s `effectiveIdentity` prefers the signed-in user's principal over the caller's
  * anonymous cookie whenever a session cookie resolves to one. This has to be true, and not merely
  * usually true, because [completeSignIn] calls [SessionService.reassignPrincipal] unconditionally on
  * every sign-in: the moment it runs, every session the caller already holds is re-keyed onto
@@ -269,10 +269,14 @@ private suspend fun ApplicationCall.completeSignIn(
 /**
  * The account view for [user].
  *
- * [BillingService.startTrialIfAbsent] is called here as a read, not a write: it returns the stored
- * row untouched when one already exists, which is always true by the time a signed-in caller can
- * reach this route, and it is the one place [BillingService] hands back the raw row this view needs
- * for [AccountView.trialEndsAtEpochMillis] and [AccountView.currentPeriodEndsAtEpochMillis].
+ * [BillingService.subscriptionFor] is called here, and not [BillingService.startTrialIfAbsent]: a
+ * route that only reads must never start a trial. `GET /api/account` is reachable for any account
+ * created before a deployment that added the trial, and such an account holds a live session
+ * cookie and no subscription row — [startTrialIfAbsent] would insert a fresh trial dated from the
+ * moment the learner merely opened this page. [subscriptionFor] can return null for that learner,
+ * so every read of it below is a safe call. This also removes a double read of the same row:
+ * [entitlementFor] reads it again on its own, and the old code read it once through
+ * [startTrialIfAbsent] and once through [entitlementFor].
  *
  * [AccountView.allowance] and [AccountView.remaining] come from the caller's resolved entitlement
  * and their own counter, not from the quota module's own daily default. A caller with
@@ -286,7 +290,7 @@ private suspend fun accountViewFor(
     billing: BillingService,
     now: Long,
 ): AccountView {
-    val subscription = billing.startTrialIfAbsent(user.id)
+    val subscription = billing.subscriptionFor(user.id)
     val entitlement = billing.entitlementFor(user.id)
 
     val allowance = when (entitlement) {
@@ -302,8 +306,8 @@ private suspend fun accountViewFor(
         return AccountView(
             email = user.email,
             status = status,
-            trialEndsAtEpochMillis = subscription.trialEndsAtEpochMillis,
-            currentPeriodEndsAtEpochMillis = subscription.currentPeriodEndsAtEpochMillis,
+            trialEndsAtEpochMillis = subscription?.trialEndsAtEpochMillis,
+            currentPeriodEndsAtEpochMillis = subscription?.currentPeriodEndsAtEpochMillis,
             allowance = 0,
             remaining = 0,
         )
@@ -314,8 +318,8 @@ private suspend fun accountViewFor(
         AccountView(
             email = user.email,
             status = status,
-            trialEndsAtEpochMillis = subscription.trialEndsAtEpochMillis,
-            currentPeriodEndsAtEpochMillis = subscription.currentPeriodEndsAtEpochMillis,
+            trialEndsAtEpochMillis = subscription?.trialEndsAtEpochMillis,
+            currentPeriodEndsAtEpochMillis = subscription?.currentPeriodEndsAtEpochMillis,
             allowance = allowance,
             remaining = allowance,
         )
@@ -323,8 +327,8 @@ private suspend fun accountViewFor(
         AccountView(
             email = user.email,
             status = status,
-            trialEndsAtEpochMillis = subscription.trialEndsAtEpochMillis,
-            currentPeriodEndsAtEpochMillis = subscription.currentPeriodEndsAtEpochMillis,
+            trialEndsAtEpochMillis = subscription?.trialEndsAtEpochMillis,
+            currentPeriodEndsAtEpochMillis = subscription?.currentPeriodEndsAtEpochMillis,
             allowance = allowance,
             remaining = (allowance - counter.explainCount).coerceAtLeast(0),
             resetsAtEpochMillis = counter.windowExpiresAtEpochMillis,

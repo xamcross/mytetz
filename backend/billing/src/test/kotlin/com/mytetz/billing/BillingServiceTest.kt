@@ -70,6 +70,72 @@ class BillingServiceTest {
         assertEquals(paid, result)
     }
 
+    @Test
+    fun `a concurrent second trial does not overwrite the first`() = runTest {
+        val winner = Subscription(
+            userId = "u1",
+            status = SubscriptionStatus.TRIALING,
+            trialEndsAtEpochMillis = now + 7 * DAY_MILLIS,
+            createdAtEpochMillis = now,
+            updatedAtEpochMillis = now,
+        )
+        // The winner's own insert, landed directly through the repository — a stand-in for a
+        // second, genuinely concurrent sign-in that reached Mongo first. Driven through the
+        // repository, and not through two coroutines, because a real race against one Mongo
+        // connection is not a reliable thing to assert against.
+        repository.insertIfAbsent(winner)
+        now += 3_600_000
+
+        // This call's own read sees the winner's row and returns early — the same code path
+        // `startTrialIfAbsent leaves an existing row untouched` pins. The property this test adds
+        // is that the row came from a writer other than a prior call to this same service, and the
+        // returned object still matches the store exactly, down to `createdAt`.
+        val result = service.startTrialIfAbsent("u1")
+
+        assertEquals(winner, result, "the loser's own row must not replace the winner's")
+        assertEquals(winner, repository.find("u1"), "the stored row must still be the winner's")
+        assertEquals(winner.createdAtEpochMillis, repository.find("u1")?.createdAtEpochMillis)
+    }
+
+    // ------------------------------------------------------------------ insertIfAbsent
+
+    @Test
+    fun `insertIfAbsent inserts a fresh row and reports it as fresh`() = runTest {
+        val trial = Subscription(
+            userId = "u1",
+            status = SubscriptionStatus.TRIALING,
+            trialEndsAtEpochMillis = now + 7 * DAY_MILLIS,
+            createdAtEpochMillis = now,
+            updatedAtEpochMillis = now,
+        )
+
+        val inserted = repository.insertIfAbsent(trial)
+
+        assertEquals(true, inserted)
+        assertEquals(trial, repository.find("u1"))
+    }
+
+    @Test
+    fun `insertIfAbsent reports a duplicate row as not fresh, and does not touch the stored one`() = runTest {
+        val first = Subscription(
+            userId = "u1",
+            status = SubscriptionStatus.TRIALING,
+            trialEndsAtEpochMillis = now + 7 * DAY_MILLIS,
+            createdAtEpochMillis = now,
+            updatedAtEpochMillis = now,
+        )
+        repository.insertIfAbsent(first)
+        val second = first.copy(
+            createdAtEpochMillis = now + 1_000,
+            trialEndsAtEpochMillis = now + 1_000 + 7 * DAY_MILLIS,
+        )
+
+        val inserted = repository.insertIfAbsent(second)
+
+        assertEquals(false, inserted)
+        assertEquals(first, repository.find("u1"), "the loser's own row must not replace the winner's")
+    }
+
     // ------------------------------------------------------------------ entitlementFor
 
     @Test
@@ -112,5 +178,22 @@ class BillingServiceTest {
         assertEquals(SubscriptionStatus.ACTIVE, decision.status)
         assertEquals(25, decision.allowance.generations)
         assertEquals(DAY_MILLIS, decision.allowance.windowMillis)
+    }
+
+    // ------------------------------------------------------------------ subscriptionFor
+
+    @Test
+    fun `subscriptionFor answers null for a user with no row, and inserts nothing`() = runTest {
+        val result = service.subscriptionFor("no-such-user")
+
+        assertEquals(null, result)
+        assertEquals(null, repository.find("no-such-user"), "a read must never start a trial")
+    }
+
+    @Test
+    fun `subscriptionFor answers the stored row untouched`() = runTest {
+        val stored = service.startTrialIfAbsent("u1")
+
+        assertEquals(stored, service.subscriptionFor("u1"))
     }
 }

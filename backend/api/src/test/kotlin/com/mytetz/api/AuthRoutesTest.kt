@@ -6,6 +6,7 @@ import com.mytetz.account.GoogleConfig
 import com.mytetz.account.GoogleOAuth
 import com.mytetz.account.MagicLinkService
 import com.mytetz.account.MailSender
+import com.mongodb.client.model.Filters
 import com.mytetz.billing.BillingConfig
 import com.mytetz.billing.BillingRepository
 import com.mytetz.billing.BillingService
@@ -29,6 +30,7 @@ import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.routing.routing
 import io.ktor.server.testing.testApplication
 import kotlinx.serialization.json.Json
+import org.bson.Document
 import java.net.InetSocketAddress
 import java.util.Base64
 import java.util.UUID
@@ -36,6 +38,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 private val wireJson = Json { ignoreUnknownKeys = true }
@@ -117,12 +120,11 @@ class AuthRoutesTest {
 
     private fun authApp(
         googleOAuthFactory: () -> GoogleOAuth = { defaultGoogleOAuth() },
-        // Matches `QuotaConfig.DEFAULT_DAILY_EXPLAINS` so the two tests below that pin the account
-        // view's allowance against that constant keep meaning what they said before this task: a
-        // trial pool this size, rather than the quota module's own daily default, is what the view
-        // now reports. `the account view reports the entitlement allowance and not the quota
-        // default` overrides this to prove the two are no longer the same number.
-        trialGenerations: Int = QuotaConfig.DEFAULT_DAILY_EXPLAINS,
+        // `BillingConfig`'s own default, and not `QuotaConfig.DEFAULT_DAILY_EXPLAINS`: the account
+        // view's allowance comes from the trial, not from the quota module's daily default, and
+        // the two constants no longer name the same number. The tests below that pin a value read
+        // it from `BillingConfig` for that reason.
+        trialGenerations: Int = BillingConfig.DEFAULT_TRIAL_GENERATIONS,
         block: suspend Scope.() -> Unit,
     ) = testApplication {
         val stack = TestFixtures.sessionApp()
@@ -506,8 +508,8 @@ class AuthRoutesTest {
         assertEquals(HttpStatusCode.OK, response.status)
         val view = wireJson.decodeFromString<AccountView>(response.bodyAsText())
         assertEquals(email, view.email)
-        assertEquals(QuotaConfig.DEFAULT_DAILY_EXPLAINS, view.allowance)
-        assertEquals(QuotaConfig.DEFAULT_DAILY_EXPLAINS, view.remaining)
+        assertEquals(BillingConfig.DEFAULT_TRIAL_GENERATIONS, view.allowance)
+        assertEquals(BillingConfig.DEFAULT_TRIAL_GENERATIONS, view.remaining)
     }
 
     @Test
@@ -520,8 +522,26 @@ class AuthRoutesTest {
             assertEquals(HttpStatusCode.OK, response.status)
             val view = wireJson.decodeFromString<AccountView>(response.bodyAsText())
             assertEquals(40, view.allowance)
+            assertEquals(40, view.remaining)
             assertNotEquals(QuotaConfig.DEFAULT_DAILY_EXPLAINS, view.allowance)
         }
+
+    @Test
+    fun `the account route does not start a trial`() = authApp {
+        val email = signIn()
+        val userId = account.findOrCreateByEmail(email).id
+        // Every real sign-in starts a trial in `completeSignIn`. Reaching past
+        // `BillingRepository`, which has no delete method of its own, puts this learner back into
+        // the state a real account created before this deployment is in: a live session cookie and
+        // no subscription row.
+        stack.database.getCollection<Document>("subscriptions").deleteOne(Filters.eq("_id", userId))
+        assertNull(billingRepository.find(userId), "fixture error: the subscription row must be gone first")
+
+        val response = client.get("/api/account")
+
+        assertEquals(HttpStatusCode.OK, response.status, response.bodyAsText())
+        assertNull(billingRepository.find(userId), "GET /api/account started a trial for a learner who had none")
+    }
 
     @Test
     fun `the account view counts a signed-in learner's spend`() = authApp {
@@ -551,7 +571,7 @@ class AuthRoutesTest {
 
         assertEquals(HttpStatusCode.OK, response.status)
         val view = wireJson.decodeFromString<AccountView>(response.bodyAsText())
-        assertEquals(QuotaConfig.DEFAULT_DAILY_EXPLAINS - 2, view.remaining)
+        assertEquals(BillingConfig.DEFAULT_TRIAL_GENERATIONS - 2, view.remaining)
         assertNotNull(view.resetsAtEpochMillis, "a spent counter must report when it resets")
     }
 

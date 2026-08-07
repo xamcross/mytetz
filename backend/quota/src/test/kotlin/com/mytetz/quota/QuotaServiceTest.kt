@@ -535,10 +535,16 @@ class QuotaServiceTest {
 
     @Test
     fun `resetCounter on an absent principal is a no-op`() = runTest {
-        // Nothing to delete, and nothing to raise about it either.
+        // A second principal that does hold a counter. Without it, a `resetCounter` that cleared
+        // every document rather than the one it was given would still pass the assertion below.
+        service.recordGeneration(bob, costMicros = 1)
+        val bobBefore = assertNotNull(repository.findCounter(bob.value))
+
+        // Nothing to delete for alice, and nothing to raise about it either.
         repository.resetCounter(alice.value)
 
         assertNull(repository.findCounter(alice.value))
+        assertEquals(bobBefore, repository.findCounter(bob.value), "resetCounter touched a principal it was not given")
     }
 
     @Test
@@ -574,9 +580,17 @@ class QuotaServiceTest {
 
     @Test
     fun `alignWindow on an absent counter is a no-op`() = runTest {
-        // Nothing to align — and nothing for the caller's next check to see either.
+        // A second principal whose counter already matches the allowance. Without it, an
+        // `alignWindow` that realigned every counter in the collection rather than the one it was
+        // given would still pass the assertion below.
+        val subscriber = Allowance(generations = 25, windowMillis = DAY_MILLIS)
+        service.recordGeneration(bob, costMicros = 1, allowance = subscriber)
+        val bobBefore = assertNotNull(repository.findCounter(bob.value))
+
+        // Nothing to align for alice — and nothing for alice's next check to see either.
         service.alignWindow(alice, Allowance(generations = 25, windowMillis = DAY_MILLIS))
 
         assertNull(repository.findCounter(alice.value))
+        assertEquals(bobBefore, repository.findCounter(bob.value), "alignWindow touched a principal it was not given")
     }
 }

@@ -113,7 +113,7 @@ class SessionRoutesTest {
          *
          * Ownership and quota on `POST /api/sessions/{id}/explain` key on the signed-in user's own
          * principal, not on the caller's anonymous cookie — a fix-round correction; see
-         * `SessionRoutes.kt`'s `effectivePrincipal`. Signing in here, before any test has created a
+         * `SessionRoutes.kt`'s `effectiveIdentity`. Signing in here, before any test has created a
          * session, therefore changes which principal every explain and create call in this file
          * accrues against, from the caller's anonymous cookie to `user:<id>`.
          *
@@ -167,16 +167,16 @@ class SessionRoutesTest {
         val mailSender = CapturingMailSender()
         val magicLink = MagicLinkService(accountRepository, mailSender, baseUrl = "http://localhost")
         val billingRepository = BillingRepository(stack.database)
-        // trialDays is fixed at one day here, matching the quota module's own default window. A
-        // signed-in learner's own session creation still spends against that default window and
-        // not against the entitlement — creating a session is not gated on one — so the two would
-        // otherwise disagree about how long this learner's window is, and `QuotaService.alignWindow`
-        // would clear the counter the moment the first explain ran. That is correct behaviour for a
-        // real change of entitlement; it is not what this suite's tests below are measuring, so the
-        // two windows are kept equal here on purpose.
+        // No pin on `trialDays` here: `POST /api/sessions` now resolves the caller's own
+        // entitlement too, through `SessionRoutes.kt`'s `createEntitlement`, so a signed-in
+        // learner's session creation and their explanations spend against the same allowance and
+        // the same window. `QuotaService.alignWindow` has nothing to realign for a learner whose
+        // entitlement has not changed between the two calls. It fires only for a learner whose
+        // subscription status genuinely changes mid-test — one test below does this on purpose, and
+        // sets its own counter up to match.
         val billing = BillingService(
             billingRepository,
-            config = BillingConfig(trialGenerations = trialGenerations, trialDays = 1),
+            config = BillingConfig(trialGenerations = trialGenerations),
         )
         application {
             install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) }
@@ -562,6 +562,8 @@ class SessionRoutesTest {
 
         val response = explain(created.sessionId, view.spanOn("fundamental physical theory"))
 
+        assertEquals(HttpStatusCode.Forbidden, response.status)
+        assertEquals("TRIAL_EXHAUSTED", response.apiError().code)
         // A trial pool does not roll over, so there is no honest wait to name. A Retry-After here
         // would promise a reset that a spent trial never reaches.
         assertNull(response.apiError().retryAfter, "the body named a wait a trial pool cannot honour")
@@ -598,17 +600,22 @@ class SessionRoutesTest {
                 updatedAtEpochMillis = now,
             )
         )
-        // The subscriber window is a fixed day, the same length `app`'s own default quota window
-        // uses, so it matches what the seed above already recorded and nothing is realigned away.
         val subscriberAllowance = Allowance(
             generations = BillingConfig.DEFAULT_SUBSCRIBER_DAILY_EXPLAINS,
             windowMillis = 86_400_000L,
         )
-        // The seed already spent one of the subscriber's daily explanations; fill the rest directly
-        // rather than through two dozen more real model calls.
-        repeat(BillingConfig.DEFAULT_SUBSCRIBER_DAILY_EXPLAINS - 1) {
+        // The seed above was recorded under the trial's own window, now stale: this is a genuine
+        // change of entitlement, from TRIALING to ACTIVE, and the real explain route's own
+        // `alignWindow` call would clear exactly this counter for exactly that reason. Calling it
+        // directly reproduces that here, so the fixture below fills the subscriber's own fresh
+        // window and not the trial's abandoned one.
+        stack.quota.alignWindow(PrincipalId.user(userId), subscriberAllowance)
+        // Fill the subscriber's daily pool directly, rather than through two dozen more real model
+        // calls.
+        repeat(BillingConfig.DEFAULT_SUBSCRIBER_DAILY_EXPLAINS) {
             stack.quota.recordGeneration(PrincipalId.user(userId), costMicros = 1, allowance = subscriberAllowance)
         }
+        val afterFill = stack.generations
 
         val response = explain(created.sessionId, sessionView(created.sessionId).spanOn("behavior of matter"))
 
@@ -622,6 +629,44 @@ class SessionRoutesTest {
             response.headers[HttpHeaders.RetryAfter],
             "the header and the body must agree; proxies read the header",
         )
+        assertEquals(afterFill, stack.generations, "a refused request generated anyway")
+    }
+
+    @Test
+    fun `a seed generation and an explain share one counter window`() = app {
+        val created = createSession()
+        val userId = requireNotNull(stack.sessions.ownerOf(created.sessionId)).removePrefix("user:")
+        val afterSeed = assertNotNull(
+            stack.quotaRepository.findCounter(PrincipalId.user(userId).value),
+            "fixture error: the seed must have recorded a counter",
+        )
+        assertEquals(1, afterSeed.explainCount, "fixture error: the seed is this principal's first generation")
+        val trialWindowMillis = BillingConfig.DEFAULT_TRIAL_DAYS * 86_400_000L
+        assertEquals(
+            trialWindowMillis,
+            afterSeed.windowExpiresAtEpochMillis - afterSeed.windowStartEpochMillis,
+            "fixture error: the seed must be recorded under the trial's own window",
+        )
+
+        explain(created.sessionId, sessionView(created.sessionId).spanOn("behavior of matter")).bodyAsText()
+
+        // Under the old code the create route span the quota's own one-day default, the explain
+        // route resolved the trial's seven-day window, `alignWindow` saw the two disagree, and
+        // deleted the counter — wiping the seed's own count along with the stale window. Both
+        // halves are asserted here, and the count first: a fix that keeps the window right while
+        // still losing the count would pass a test that checked only the window.
+        val afterExplain = assertNotNull(stack.quotaRepository.findCounter(PrincipalId.user(userId).value))
+        assertEquals(
+            2,
+            afterExplain.explainCount,
+            "the seed's own count did not survive the explain call",
+        )
+        assertEquals(
+            afterSeed.windowStartEpochMillis,
+            afterExplain.windowStartEpochMillis,
+            "the window must still be the trial's own window",
+        )
+        assertEquals(afterSeed.windowExpiresAtEpochMillis, afterExplain.windowExpiresAtEpochMillis)
     }
 
     @Test

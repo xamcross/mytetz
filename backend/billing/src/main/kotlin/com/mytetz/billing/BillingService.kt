@@ -26,6 +26,17 @@ class BillingService(
      * [Subscription.trialEndsAtEpochMillis] sits [BillingConfig.trialDays] days ahead of
      * [Subscription.createdAtEpochMillis], so the window between the two is always positive and
      * [Entitlement.resolve] never refuses a fresh trial for that reason.
+     *
+     * ## The read, the insert, and the loser
+     *
+     * The read above and the insert below are two round trips, not one. Two concurrent sign-ins
+     * for the same user can both read no row, and both build a fresh [Subscription] from two
+     * different clock readings. [BillingRepository.insertIfAbsent] lets only one of the two inserts
+     * win; this method then re-reads and returns the **stored** row for the loser, never the row
+     * the loser itself built. Returning the loser's own row would disagree with the database the
+     * instant this method returns, and — once a webhook can activate a subscription concurrently
+     * with a sign-in — [BillingRepository.upsert]'s `replaceOne` in place of [insertIfAbsent] would
+     * let a losing sign-in downgrade an already-paying customer back to [SubscriptionStatus.TRIALING].
      */
     suspend fun startTrialIfAbsent(userId: String): Subscription {
         repository.find(userId)?.let { return it }
@@ -38,11 +49,24 @@ class BillingService(
             createdAtEpochMillis = now,
             updatedAtEpochMillis = now,
         )
-        repository.upsert(trial)
-        return trial
+        if (repository.insertIfAbsent(trial)) return trial
+
+        return requireNotNull(repository.find(userId)) {
+            "the insert for $userId lost a race, and the winner's own row is now missing too"
+        }
     }
 
     /** What [userId] may generate right now, from their stored subscription row alone. */
     suspend fun entitlementFor(userId: String): EntitlementDecision =
         Entitlement.resolve(repository.find(userId), clock(), config)
+
+    /**
+     * [userId]'s stored subscription row, or null when none exists yet.
+     *
+     * A read, and only a read — unlike [startTrialIfAbsent], this method never inserts a row.
+     * `GET /api/account` needs exactly this: a route that only reads must never start a trial for
+     * a learner who does not have one, or opening the account page becomes the same thing as
+     * signing in.
+     */
+    suspend fun subscriptionFor(userId: String): Subscription? = repository.find(userId)
 }
