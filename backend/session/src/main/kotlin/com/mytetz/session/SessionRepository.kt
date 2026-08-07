@@ -83,4 +83,17 @@ class SessionRepository(database: MongoDatabase) {
         )
         if (result.matchedCount == 0L) throw SessionNotFoundException(sessionId)
     }
+
+    /**
+     * Re-keys every session document that carries [from] as its `principalId` to [to]. Reports how
+     * many it changed.
+     *
+     * Sign-in is the caller: an anonymous learner's sessions carry an `anon:` principal, and a
+     * sign-in must move them onto the new `user:` principal, or the learner's history is orphaned
+     * under an id nothing else ever presents again.
+     */
+    suspend fun reassignPrincipal(from: String, to: String): Long {
+        val result = collection.updateMany(Filters.eq("principalId", from), Updates.set("principalId", to))
+        return result.modifiedCount
+    }
 }

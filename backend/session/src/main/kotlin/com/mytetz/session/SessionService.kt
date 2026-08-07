@@ -553,6 +553,16 @@ class SessionService(
      */
     suspend fun ownerOf(sessionId: String): String? = sessions.findById(sessionId)?.principalId
 
+    /**
+     * Moves every session that carries [fromPrincipalId] onto [toPrincipalId]. Returns the count
+     * moved.
+     *
+     * A sign-in calls this so that an anonymous learner's history survives under the new principal
+     * a signed-in session carries.
+     */
+    suspend fun reassignPrincipal(fromPrincipalId: String, toPrincipalId: String): Long =
+        sessions.reassignPrincipal(fromPrincipalId, toPrincipalId)
+
     // ------------------------------------------------------------------ load
 
     /**

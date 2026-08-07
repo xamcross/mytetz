@@ -3,6 +3,7 @@ plugins { application }
 application { mainClass.set("com.mytetz.api.ApplicationKt") }
 
 dependencies {
+    implementation(project(":backend:account"))
     implementation(project(":backend:session"))
     implementation(project(":backend:assess"))
     implementation(project(":backend:quota"))

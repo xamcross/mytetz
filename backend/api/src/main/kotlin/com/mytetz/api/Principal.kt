@@ -117,6 +117,23 @@ private val COOKIE_ENCODING = CookieEncoding.RAW
 /** The separator between the signed value and its signature. Absent from base64url by definition. */
 private const val SIGNATURE_SEPARATOR = '.'
 
+/**
+ * The name of the cookie that carries a signed-in learner's session id.
+ *
+ * This constant is public. A later route needs it to clear the cookie at sign-out.
+ */
+const val SESSION_COOKIE_NAME: String = "mytetz_sid"
+
+/**
+ * The domain tag on a signed session value.
+ *
+ * The anonymous cookie and the session cookie share one signing key. Without this tag, a signed
+ * `anon:<uuid>` from the other cookie would verify here too, and become a session id. The reverse
+ * holds too: a signed session value would verify as an anonymous principal. The tag stops both
+ * directions. [Principals.readSessionId] checks for it. [Principals.setSessionCookie] adds it.
+ */
+private const val SESSION_PREFIX = "sid:"
+
 object Principals {
 
     /**
@@ -145,6 +162,63 @@ object Principals {
             )
         )
         return minted
+    }
+
+    /**
+     * Reads the session id out of [SESSION_COOKIE_NAME], or returns null.
+     *
+     * The method returns null for an absent cookie, an unsigned cookie, a cookie signed under a
+     * foreign key, and a cookie that verifies but does not carry [SESSION_PREFIX]. That last case
+     * is what stops a signed anonymous principal from being replayed here as a session id.
+     */
+    fun readSessionId(call: ApplicationCall, config: PrincipalCookieConfig): String? {
+        val cookie = call.request.cookies[SESSION_COOKIE_NAME, COOKIE_ENCODING] ?: return null
+
+        val separator = cookie.lastIndexOf(SIGNATURE_SEPARATOR)
+        if (separator <= 0) return null
+        val value = cookie.substring(0, separator)
+        val signature = cookie.substring(separator + 1)
+        if (!constantTimeEquals(hmac(value, config.signingKey), signature)) return null
+
+        if (!value.startsWith(SESSION_PREFIX)) return null
+        return value.removePrefix(SESSION_PREFIX)
+    }
+
+    /**
+     * Sets [sessionId] as a signed, `HttpOnly`, `SameSite=Lax` cookie named [SESSION_COOKIE_NAME].
+     *
+     * The signed value carries [SESSION_PREFIX], so [readSessionId] can tell it apart from a signed
+     * anonymous principal signed under the same key.
+     */
+    fun setSessionCookie(call: ApplicationCall, config: PrincipalCookieConfig, sessionId: String) {
+        call.response.cookies.append(
+            Cookie(
+                name = SESSION_COOKIE_NAME,
+                value = sign(SESSION_PREFIX + sessionId, config.signingKey),
+                httpOnly = true,
+                secure = config.secure,
+                path = "/",
+                maxAge = PrincipalCookieConfig.MAX_AGE_SECONDS,
+                extensions = mapOf("SameSite" to "Lax"),
+                encoding = COOKIE_ENCODING,
+            )
+        )
+    }
+
+    /** Clears [SESSION_COOKIE_NAME] by setting an empty value with a zero max age. */
+    fun clearSessionCookie(call: ApplicationCall, config: PrincipalCookieConfig) {
+        call.response.cookies.append(
+            Cookie(
+                name = SESSION_COOKIE_NAME,
+                value = "",
+                httpOnly = true,
+                secure = config.secure,
+                path = "/",
+                maxAge = 0,
+                extensions = mapOf("SameSite" to "Lax"),
+                encoding = COOKIE_ENCODING,
+            )
+        )
     }
 
     private fun sign(value: String, key: String): String = "$value$SIGNATURE_SEPARATOR${hmac(value, key)}"
