@@ -816,7 +816,26 @@ data class FreemiusEvent(
 
 `BillingService` gains `suspend fun apply(event: FreemiusEvent): Boolean`.
 
-**Verification, exactly.** Freemius signs with an HMAC-SHA256 of the **raw request body**, keyed by the product's secret, in the `x-signature` header. Compute over the bytes before any deserialization. Compare with `MessageDigest.isEqual`, the constant-time compare `Principal.kt` already uses. Reuse that helper rather than writing a second one.
+**Verification, exactly.** Freemius signs with an HMAC-SHA256 of the **raw request body**, keyed by the product's secret, in the `x-signature` header. The digest is **lowercase hexadecimal** — confirmed against the vendor documentation, not assumed. Compute over the bytes before any deserialization. Compare with `MessageDigest.isEqual`.
+
+`Principal.kt`'s `constantTimeEquals` cannot be reused. It is `private` inside `Principals` in `backend:api`, and `backend:api` depends on `backend:billing`. Importing it would invert the dependency. Write the compare here with `MessageDigest.isEqual` and say in the KDoc that it is a deliberate second copy and why.
+
+**What the vendor documents, and what it does not.**
+
+| Fact | State |
+|---|---|
+| header `x-signature` | documented |
+| lowercase hex digest | documented |
+| event type strings | documented, listed below |
+| **the payload's field names** | **not documented** |
+| **the retry policy** | **not documented** |
+
+The documented types are `subscription.created`, `subscription.renewal.retry`, `subscription.renewal.failed`, `subscription.cancelled`, `payment.refund` and `payment.dispute.lost`. **No expiry event exists.**
+
+Two consequences, and they are load-bearing.
+
+1. Because the field names are undocumented, every `@SerialName` in `FreemiusEvent`'s wire type lives in one place, and `docs/deploy.md` must tell the operator to capture one real webhook and confirm each name before the product goes live. A field that silently decodes to `null` is a subscription change that never lands.
+2. Because no expiry event exists and the retry policy is unknown, an `ACTIVE` row can outlive the payment that created it. `Entitlement.resolve` must therefore stop trusting `ACTIVE` for ever — see the change below.
 
 **Three properties:**
 
@@ -833,10 +852,17 @@ data class FreemiusEvent(
 
 The exact Freemius event-type strings come from their dashboard. Put them in one `private val` map so an operator can correct a name in one place. **When the type is unknown, log `BILLING_UNKNOWN_EVENT` and change nothing.** Do not guess a default.
 
-**Carried from the task 8 review.** `Entitlement.resolve` reads no date on `ACTIVE`, by design. An
-`ACTIVE` row therefore keeps the full subscriber allowance for ever, and this webhook is the only
-thing that moves it out of `ACTIVE`. A missed cancellation event is free access with no expiry.
-Task 12's reconciliation is the safety net, so it must cover exactly this row.
+**`ACTIVE` gains an expiry. This changes task 8's resolver, and here is why.**
+
+The task 8 review recorded that `Entitlement.resolve` reads no date on `ACTIVE`, so an `ACTIVE` row keeps the full allowance for ever and this webhook is the only thing that can move it. The vendor documentation now shows that **no expiry event exists** and that the retry policy is undocumented. So "the webhook will move it" is not a guarantee this design may rest on.
+
+Change `ACTIVE` to allow while `now < currentPeriodEndsAtEpochMillis + graceDays`.
+
+The grace is what makes this safe in the expensive direction. A renewal webhook that is late by hours must not lock out a customer who has paid, because a locked-out customer cancels. Three days absorbs any plausible delay. An abandoned `ACTIVE` row then stops within three days of its period end rather than never.
+
+A **null** `currentPeriodEndsAtEpochMillis` on `ACTIVE` keeps the allowance, and this is the one place a null grants access rather than refusing it. A first-payment event may not carry a period end, and refusing the customer who has just paid is the worse error. Log it under `BILLING_NO_PERIOD_END` so an operator sees a mapping that needs correcting.
+
+Task 12's reconciliation remains the safety net for a row whose grace has run out.
 
 Required test names:
 
