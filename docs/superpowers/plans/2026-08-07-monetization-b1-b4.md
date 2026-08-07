@@ -746,14 +746,19 @@ Subject: `feat(billing): gate generation on the trial and split the exhausted an
 - Create: `frontend/src/app/account/allowance-meter.component.ts` and its spec
 - Create: `frontend/src/app/account/wall-panel.component.ts` and its spec
 - Modify: `frontend/src/app/core/account.store.ts`
-- Modify: `frontend/src/app/core/auth.interceptor.ts`
+- ~~Modify: `frontend/src/app/core/auth.interceptor.ts`~~ **Dropped, for the reason task 7 gives.**
+  The file does not exist and cannot. The explain call goes through `sse.client.ts`, which uses raw
+  `fetch` rather than `HttpClient`, so an `HttpInterceptorFn` never sees the response that carries
+  these three codes. `ReaderPageComponent` already reads `SessionStore.error()?.code` directly for
+  `SIGN_IN_REQUIRED`. The two new codes join it there.
 - Modify: `frontend/src/app/reader/reader-page.component.ts`
 - Modify: `frontend/src/app/ui/app-shell.component.ts`
 
 **Behaviour:**
 
 - The meter shows `remaining` of `allowance` and the reset time. In a trial it says how many of the pool are left and when the trial ends.
-- The interceptor maps three codes to three panels: `SIGN_IN_REQUIRED` to the sign-in panel, `TRIAL_EXHAUSTED` to the subscribe panel, `SUBSCRIPTION_REQUIRED` to the subscribe panel. `QUOTA_EXCEEDED` keeps the existing wait message.
+- The reader maps three codes to two panels: `SIGN_IN_REQUIRED` to the sign-in panel, `TRIAL_EXHAUSTED` and `SUBSCRIPTION_REQUIRED` to the subscribe panel. `QUOTA_EXCEEDED` keeps the existing wait banner.
+- **`bannerError()` must exclude the two new codes**, as it already excludes `SIGN_IN_REQUIRED`. A code that opens a panel and also raises a banner tells the learner two different things at once.
 - **The subscribe panel and the wait message must not be the same component.** One says paying helps, the other says waiting helps. Getting that wrong tells a trial user to wait for a reset that never comes.
 - The trail and the breadcrumb stay on screen behind every panel.
 
