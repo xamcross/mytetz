@@ -11,7 +11,8 @@
 ## Global Constraints
 
 - Read the specification first: `docs/superpowers/specs/2026-08-07-monetization-design.md`. Sections 3, 4.4, 8.3 and 13 cover this slice.
-- **No behaviour a learner can see changes in B0.** Every existing test must pass unchanged. A test that needs editing to pass is a signal that the change is not behaviour-neutral — stop and report it.
+- **No behaviour a learner can see changes in B0.** No existing **assertion** may change, and no existing test may be deleted, renamed or disabled. An assertion that has to change to pass is a signal that the change is not behaviour-neutral — stop and report it.
+- **Widening a test fixture is allowed and expected.** Tasks 3 and 5 each add a parameter to an existing fixture builder, with the current literal as its default, so every existing call site keeps its exact meaning. That is not an edit to a test; it is an addition to a helper. Adding a near-duplicate builder instead is the worse outcome.
 - Write all prose, KDoc and commit message bodies in ASD-STE100 Simplified Technical English. Keep the conventional-commit subject line format.
 - **Do not add a unique index to `principals` or `costLedger`.** `QuotaRepository.ensureIndexes` explains why: the upsert race resolution depends on it.
 - Every new TTL field is written through `EpochMillisAsBsonDateTime`. A `Long` makes a TTL index do nothing. This slice adds no TTL field, so the rule only matters if you add one.
@@ -1035,17 +1036,22 @@ Then add these two tests:
 ```kotlin
     @Test
     fun `bootstrap builds no model client when the migration is off`() = runTest {
+        var clientBuilds = 0
+
         val components = Components(
             mongo = Mongo(MongoConfig(uri = TestFixtures.connectionString, databaseName = "test_api_no_migrate")),
             cookies = TestFixtures.cookieConfig,
-            // Raises if anything builds it. The migration forces the lazy client, so a client that
-            // was never built proves the migration did not run — and proves that the catalogue still
-            // boots with no ANTHROPIC_API_KEY, which is the property this class's KDoc protects.
-            llmFactory = { error("the model client must not be built when the migration is off") },
+            // The migration is the only thing in bootstrap that forces the lazy model client. A
+            // client that was never built therefore proves the migration did not run — and proves
+            // that the catalogue still boots with no ANTHROPIC_API_KEY, which is the property this
+            // class's KDoc protects.
+            llmFactory = { clientBuilds++; FakeLlmClient() },
             migrateOnBoot = false,
         )
 
         components.bootstrap()
+
+        assertEquals(0, clientBuilds, "bootstrap must not build a model client when the flag is off")
     }
 
     @Test
