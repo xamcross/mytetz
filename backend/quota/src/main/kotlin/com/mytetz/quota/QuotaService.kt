@@ -66,9 +66,14 @@ sealed interface QuotaDecision {
  * resolves an [Allowance] and gives it to this class. [QuotaConfig.defaultAllowance] keeps every
  * caller that has no tier unchanged.
  *
- * On [recordGeneration] the allowance is the THIRD parameter. `costMicros` stays the second.
- * `SessionRoutes` calls the method positionally. An allowance in the second position binds a cost
- * to an allowance. Both values are numbers. The compiler therefore reports nothing.
+ * On [recordGeneration] the allowance is the THIRD parameter, and `costMicros` stays the second.
+ * The two types now differ. `Allowance` is a data class, not a number. A positional swap
+ * between them therefore fails to compile. `SessionRoutes` names all three arguments at its call
+ * site. The one remaining positional call is in `Components`'s migration step, and its own three
+ * argument types are distinct too.
+ *
+ * Name the arguments at every call site anyway. A later parameter of the same type would bring
+ * the silent swap back, and named arguments are what would still catch it then.
  */
 class QuotaService(
     private val repository: QuotaRepository,

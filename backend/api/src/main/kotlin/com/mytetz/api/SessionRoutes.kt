@@ -357,10 +357,15 @@ fun Route.sessionRoutes(
      *
      * So this route resolves [BillingService.entitlementFor] for a signed-in caller, through
      * [createEntitlement], and passes the result to [QuotaService.refusalFor] and to
-     * [QuotaService.recordSpend]. **This route must never add a refusal for the entitlement
-     * itself.** The catalogue and the seeds stay open. Only the reader is gated. A signed-in
-     * learner with no subscription therefore keeps the same seed access an anonymous visitor has —
-     * see [createEntitlement].
+     * [QuotaService.recordSpend]. **This route must never add a refusal for a missing
+     * subscription.** A signed-in learner with no subscription keeps the same seed access an
+     * anonymous visitor has — see [createEntitlement].
+     *
+     * The quota gate still applies underneath that: a seed generation spends real money. An
+     * account that has used up its allowance is refused here. The refusal matches the explain
+     * route's own: `403 TRIAL_EXHAUSTED` for an exhausted trial, `429 QUOTA_EXCEEDED` for an
+     * exhausted subscriber. Task B0 pre-warms every published seed. This fires only for a topic
+     * the pre-warm missed. A cached seed is still served either way.
      */
     post("/api/sessions") {
         if (!call.bodyIsSmallEnough()) return@post
@@ -397,6 +402,14 @@ fun Route.sessionRoutes(
         // `createWillGenerate` raises for an unknown or unpublished topic exactly as `create` does,
         // so the gate cannot answer a question `create` would have refused.
         if (sessions.createWillGenerate(request.topicSlug)) {
+            // The same alignment the explain route runs, and for the same reason: a learner's
+            // entitlement can change under a counter that does not know it changed — a trial
+            // ending, a subscription starting. `allowance` is non-null only when an entitlement
+            // actually resolved, so an anonymous caller, or one with `SubscriptionRequired`, never
+            // resets a counter against an entitlement they do not have. See the explain route's
+            // own `alignWindow` call for the full argument.
+            if (allowance != null) quota.alignWindow(principal, allowance)
+
             val refusal = quota.refusalFor(principal, allowance, status) { !sessions.createWillGenerate(request.topicSlug) }
             if (refusal != null) {
                 call.respondRefusal(refusal)
@@ -891,9 +904,10 @@ private suspend fun ApplicationCall.effectiveIdentity(
  * default allowance, the same one this route used before it knew about entitlements.
  *
  * A signed-in caller with [EntitlementDecision.SubscriptionRequired] gets the same pair. This
- * route must never add its own refusal for the entitlement: the catalogue and the seeds stay
- * open, and only the reader is gated. A signed-in learner with no subscription therefore keeps
- * the same seed access an anonymous visitor has.
+ * route must never add its own refusal for a missing subscription — only the entitlement check
+ * itself stays silent. The quota gate still applies, exactly as it does for an anonymous
+ * visitor. A signed-in learner with no subscription therefore keeps the same seed access an
+ * anonymous visitor has.
  *
  * A signed-in caller with [EntitlementDecision.Allowed] gets that decision's own allowance and
  * status — the same pair [BillingService.entitlementFor] would give the explain route for this

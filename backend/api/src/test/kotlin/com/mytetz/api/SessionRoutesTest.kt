@@ -588,6 +588,43 @@ class SessionRoutesTest {
     }
 
     @Test
+    fun `an exhausted trial cannot generate a new seed`() = app(trialGenerations = 1) {
+        // The pool's one generation, spent by the seed itself.
+        createSession("quantum-physics")
+        val before = stack.generations
+
+        // A topic whose seed is not cached, so the route would have to generate. A seed
+        // generation spends real money, and an exhausted account must not spend more of it
+        // through this door.
+        val response = client.post("/api/sessions") {
+            contentType(ContentType.Application.Json)
+            setBody("""{"topicSlug":"thermodynamics"}""")
+        }
+
+        assertEquals(HttpStatusCode.Forbidden, response.status)
+        assertEquals("TRIAL_EXHAUSTED", response.apiError().code)
+        assertEquals(before, stack.generations, "an exhausted trial generated a seed anyway")
+    }
+
+    @Test
+    fun `an exhausted trial still opens a topic whose seed is cached`() = app(trialGenerations = 1) {
+        // The pool's one generation, spent by the seed itself.
+        createSession("quantum-physics")
+        val before = stack.generations
+
+        // The same topic, already seeded: this costs nothing, so the quota gate never runs at
+        // all — the "catalogue and the seeds stay open" half of the KDoc, and not the half an
+        // exhausted account can still spend money through.
+        val response = client.post("/api/sessions") {
+            contentType(ContentType.Application.Json)
+            setBody("""{"topicSlug":"quantum-physics"}""")
+        }
+
+        assertEquals(HttpStatusCode.OK, response.status, "a cached seed was refused: ${response.bodyAsText()}")
+        assertEquals(before, stack.generations, "opening a cached topic generated again")
+    }
+
+    @Test
     fun `an exhausted subscriber answers 429 with a retry-after`() = app {
         val created = createSession()
         val userId = requireNotNull(stack.sessions.ownerOf(created.sessionId)).removePrefix("user:")
@@ -604,12 +641,13 @@ class SessionRoutesTest {
             generations = BillingConfig.DEFAULT_SUBSCRIBER_DAILY_EXPLAINS,
             windowMillis = 86_400_000L,
         )
-        // The seed above was recorded under the trial's own window, now stale: this is a genuine
-        // change of entitlement, from TRIALING to ACTIVE, and the real explain route's own
-        // `alignWindow` call would clear exactly this counter for exactly that reason. Calling it
-        // directly reproduces that here, so the fixture below fills the subscriber's own fresh
-        // window and not the trial's abandoned one.
-        stack.quota.alignWindow(PrincipalId.user(userId), subscriberAllowance)
+        // The seed above was recorded under the trial's own window, now stale. This is a genuine
+        // change of entitlement, from TRIALING to ACTIVE. This line clears the counter directly,
+        // through the repository, and not through `quota.alignWindow`. The route makes that exact
+        // `alignWindow` call itself, inside `explain`. A fixture that called `alignWindow` too
+        // would hide a broken one: a no-op `alignWindow` would leave this line and the route's
+        // own call both silent, and the test would still pass.
+        stack.quotaRepository.resetCounter(PrincipalId.user(userId).value)
         // Fill the subscriber's daily pool directly, rather than through two dozen more real model
         // calls.
         repeat(BillingConfig.DEFAULT_SUBSCRIBER_DAILY_EXPLAINS) {
@@ -650,7 +688,7 @@ class SessionRoutesTest {
 
         explain(created.sessionId, sessionView(created.sessionId).spanOn("behavior of matter")).bodyAsText()
 
-        // Under the old code the create route span the quota's own one-day default, the explain
+        // Under the old code the create route used the quota's own one-day default, the explain
         // route resolved the trial's seven-day window, `alignWindow` saw the two disagree, and
         // deleted the counter — wiping the seed's own count along with the stale window. Both
         // halves are asserted here, and the count first: a fix that keeps the window right while
@@ -667,6 +705,61 @@ class SessionRoutesTest {
             "the window must still be the trial's own window",
         )
         assertEquals(afterSeed.windowExpiresAtEpochMillis, afterExplain.windowExpiresAtEpochMillis)
+    }
+
+    @Test
+    fun `a subscriber is not locked out by the trial's window on session creation`() = app {
+        // Establishes the owner mapping. The generation this makes is not the state under test —
+        // it is cleared and rebuilt below.
+        val created = createSession("quantum-physics")
+        val userId = requireNotNull(stack.sessions.ownerOf(created.sessionId)).removePrefix("user:")
+        val principal = PrincipalId.user(userId)
+
+        // The state a trialing learner who has spent 30 of a 40-generation pool is in, recorded
+        // under the trial's own seven-day window.
+        stack.quotaRepository.resetCounter(principal.value)
+        val trialAllowance = Allowance(
+            generations = BillingConfig.DEFAULT_TRIAL_GENERATIONS,
+            windowMillis = 7 * 86_400_000L,
+        )
+        repeat(30) { stack.quota.recordGeneration(principal, costMicros = 1, allowance = trialAllowance) }
+        assertEquals(
+            30,
+            assertNotNull(stack.quotaRepository.findCounter(principal.value)).explainCount,
+            "fixture error: the trial counter must record 30 generations",
+        )
+
+        // The learner subscribes.
+        val now = System.currentTimeMillis()
+        billingRepository.upsert(
+            Subscription(
+                userId = userId,
+                status = SubscriptionStatus.ACTIVE,
+                createdAtEpochMillis = now,
+                updatedAtEpochMillis = now,
+            )
+        )
+
+        // A topic whose seed is not cached, so the route resolves the subscriber's own
+        // 25-a-day allowance and reaches the quota gate. Under the unfixed route the gate read
+        // the count of 30 against the trial's still-live seven-day window and refused a caller
+        // who has just paid, for up to seven days.
+        val response = client.post("/api/sessions") {
+            contentType(ContentType.Application.Json)
+            setBody("""{"topicSlug":"thermodynamics"}""")
+        }
+
+        assertEquals(
+            HttpStatusCode.OK,
+            response.status,
+            "a subscriber was locked out by the trial's stale window: ${response.bodyAsText()}",
+        )
+        val counter = assertNotNull(stack.quotaRepository.findCounter(principal.value))
+        assertEquals(
+            86_400_000L,
+            counter.windowExpiresAtEpochMillis - counter.windowStartEpochMillis,
+            "the counter's window was not realigned to the subscriber's one-day allowance",
+        )
     }
 
     @Test

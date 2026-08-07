@@ -71,7 +71,7 @@ class BillingServiceTest {
     }
 
     @Test
-    fun `a concurrent second trial does not overwrite the first`() = runTest {
+    fun `a second trial for a user who already has one returns the stored row`() = runTest {
         val winner = Subscription(
             userId = "u1",
             status = SubscriptionStatus.TRIALING,
@@ -86,15 +86,47 @@ class BillingServiceTest {
         repository.insertIfAbsent(winner)
         now += 3_600_000
 
-        // This call's own read sees the winner's row and returns early — the same code path
-        // `startTrialIfAbsent leaves an existing row untouched` pins. The property this test adds
-        // is that the row came from a writer other than a prior call to this same service, and the
-        // returned object still matches the store exactly, down to `createdAt`.
+        // This call's own read sees the winner's row and returns early — the common case, and
+        // the only path this test reaches. `a lost race returns the winner's stored row and not
+        // the loser's own` below drives the insert-then-re-read branch that this test cannot.
         val result = service.startTrialIfAbsent("u1")
 
         assertEquals(winner, result, "the loser's own row must not replace the winner's")
         assertEquals(winner, repository.find("u1"), "the stored row must still be the winner's")
         assertEquals(winner.createdAtEpochMillis, repository.find("u1")?.createdAtEpochMillis)
+    }
+
+    @Test
+    fun `a lost race returns the winner's stored row and not the loser's own`() = runTest {
+        // The interleaving `a second trial for a user who already has one returns the stored row`
+        // cannot reach: this user's first `find` answers null, so `startTrialIfAbsent` builds its
+        // own row and tries to insert it — and loses. `winner` stands for the row a second,
+        // genuinely concurrent sign-in already stored before that insert ran.
+        val winner = Subscription(
+            userId = "u1",
+            status = SubscriptionStatus.TRIALING,
+            trialEndsAtEpochMillis = now + 7 * DAY_MILLIS,
+            createdAtEpochMillis = now - 1_000,
+            updatedAtEpochMillis = now - 1_000,
+        )
+        var findCalls = 0
+        val losingRace = object : BillingRepository(database) {
+            override suspend fun find(userId: String): Subscription? {
+                findCalls += 1
+                // The first read: nothing stored yet. The second read: the winner's own row,
+                // landed between this call's first read and its own insert.
+                return if (findCalls == 1) null else winner
+            }
+            override suspend fun insertIfAbsent(subscription: Subscription): Boolean = false
+        }
+
+        val result = BillingService(losingRace, config) { now }.startTrialIfAbsent("u1")
+
+        // `winner.createdAtEpochMillis` is `now - 1_000`; a `Subscription` built locally by
+        // `startTrialIfAbsent` would carry `now` instead. Comparing this field is what tells the
+        // stored row apart from the one the losing call built and discarded.
+        assertEquals(winner, result, "the loser's own row must not be returned")
+        assertEquals(winner.createdAtEpochMillis, result.createdAtEpochMillis)
     }
 
     // ------------------------------------------------------------------ insertIfAbsent

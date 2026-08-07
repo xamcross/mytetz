@@ -580,11 +580,12 @@ class QuotaServiceTest {
 
     @Test
     fun `alignWindow on an absent counter is a no-op`() = runTest {
-        // A second principal whose counter already matches the allowance. Without it, an
-        // `alignWindow` that realigned every counter in the collection rather than the one it was
-        // given would still pass the assertion below.
-        val subscriber = Allowance(generations = 25, windowMillis = DAY_MILLIS)
-        service.recordGeneration(bob, costMicros = 1, allowance = subscriber)
+        // A second principal whose counter's window differs from the allowance alice's call
+        // passes. Without this mismatch, an `alignWindow` that realigned every counter in the
+        // collection rather than the one it was given would still pass the assertion below,
+        // because bob's counter would already match and an incorrect align would leave it alone.
+        val trial = Allowance(generations = 40, windowMillis = 7 * DAY_MILLIS)
+        service.recordGeneration(bob, costMicros = 1, allowance = trial)
         val bobBefore = assertNotNull(repository.findCounter(bob.value))
 
         // Nothing to align for alice — and nothing for alice's next check to see either.

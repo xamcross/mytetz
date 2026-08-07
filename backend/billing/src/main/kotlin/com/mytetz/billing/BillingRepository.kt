@@ -22,7 +22,7 @@ private const val EVENT_TTL_DAYS = 90L
  * `subscriptions` needs no index beyond the default one MongoDB keeps on `_id`. The document id
  * is the user id, so [find] is already a point read on the primary key.
  */
-class BillingRepository(database: MongoDatabase) {
+open class BillingRepository(database: MongoDatabase) {
 
     private val subscriptions = database.getCollection<Subscription>("subscriptions")
     private val billingEvents = database.getCollection<BillingEvent>("billingEvents")
@@ -44,7 +44,11 @@ class BillingRepository(database: MongoDatabase) {
         subscriptions.createIndex(Indexes.ascending("status"), IndexOptions().name("by_status"))
     }
 
-    suspend fun find(userId: String): Subscription? =
+    /**
+     * `open` only so a test can drive the lost-race branch in
+     * [BillingService.startTrialIfAbsent]. There is no production subclass.
+     */
+    open suspend fun find(userId: String): Subscription? =
         subscriptions.find(Filters.eq("_id", userId)).firstOrNull()
 
     /** Writes [subscription] whole. Inserts a fresh row, or replaces the stored one for its user. */
@@ -66,8 +70,11 @@ class BillingRepository(database: MongoDatabase) {
      * can hand back the winner's own row instead of silently replacing it — which is what
      * [upsert]'s `replaceOne` would do, and which can downgrade a subscription a webhook has
      * already activated back to [SubscriptionStatus.TRIALING].
+     *
+     * `open` only so a test can drive the lost-race branch in
+     * [BillingService.startTrialIfAbsent]. There is no production subclass.
      */
-    suspend fun insertIfAbsent(subscription: Subscription): Boolean =
+    open suspend fun insertIfAbsent(subscription: Subscription): Boolean =
         try {
             subscriptions.insertOne(subscription)
             true
