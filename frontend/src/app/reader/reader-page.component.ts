@@ -35,7 +35,7 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
  * `/learn/:sessionId` — the reader.
  *
  * Layout C from the design spec: the session trail down the left, the breadcrumb over the focus card
- * on the right, the verb buttons under the card. Everything stateful lives in [SessionStore]; the
+ * on the right. The focus card hosts the verb picker. Everything stateful lives in [SessionStore]; the
  * three components below are presentational and this component is the wiring between them.
  *
  * `SessionStore` is provided here rather than in the root injector, so its lifetime is this route's:
@@ -51,11 +51,12 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
       @if (store.loading()) {
         <p class="visually-hidden" role="status">Loading your session…</p>
         <div class="reader__grid">
-          <div class="reader__rail" aria-hidden="true">
-            <span class="mt-eyebrow">Your trail</span>
+          <div class="reader__rail rail-skeleton" aria-hidden="true">
+            <span class="mt-eyebrow rail-skeleton__head">Your trail</span>
+            <span class="mt-pill mt-pill--ghost rail-skeleton__toggle">Show trail</span>
           </div>
           <div class="reader__main">
-            <article class="focus-skeleton mt-card">
+            <article class="focus-skeleton mt-card mt-card--raised">
               <span class="mt-eyebrow mt-eyebrow--coral">Writing your first explanation</span>
               <span class="mt-skeleton line"></span>
               <span class="mt-skeleton line"></span>
@@ -114,9 +115,14 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
                 </p>
                 <div class="banner__actions">
                   @if (failure.retryable) {
+                    <!-- Teal, not coral. The reader is still on screen behind this banner, so the
+                         verb picker and its coral "Explain it" stay reachable, and §3.3 allows one
+                         coral control per view. The picker is a dialog that traps Tab, so while it
+                         is open it is the whole view and its primary must be unmistakable. This
+                         retry is then the secondary action, which is what teal names. -->
                     <button
                       type="button"
-                      class="mt-pill mt-pill--coral banner__retry-button"
+                      class="mt-pill mt-pill--teal banner__retry-button"
                       (click)="store.retry()"
                     >
                       Try again
@@ -213,9 +219,18 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
       .banner__back {
         text-decoration: none;
       }
+      /* The rail placeholder mirrors the loaded rail, state for state: an eyebrow at 768px and
+         above, a ghost pill below it. Below 768px the rail stacks over the card, so a placeholder
+         of a different height moves the card down when the session lands. The height comes from
+         .mt-pill, which is where the real toggle's height comes from too. A min-height here would
+         drift the moment the pill changes. */
+      .rail-skeleton {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        align-items: flex-start;
+      }
       .focus-skeleton {
-        border-radius: var(--mt-r-card);
-        box-shadow: var(--mt-lift-card);
         padding: 32px 36px;
         display: flex;
         flex-direction: column;
@@ -249,6 +264,9 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
           grid-template-columns: 260px minmax(0, 720px);
           align-items: start;
         }
+        .rail-skeleton__toggle {
+          display: none;
+        }
       }
       @media (max-width: 767px) {
         .reader {
@@ -256,6 +274,9 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
         }
         .focus-skeleton {
           padding: 20px;
+        }
+        .rail-skeleton__head {
+          display: none;
         }
       }
     `,
