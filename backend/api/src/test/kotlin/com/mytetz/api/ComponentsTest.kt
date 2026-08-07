@@ -1,5 +1,6 @@
 package com.mytetz.api
 
+import com.mongodb.client.model.Filters
 import com.mongodb.kotlin.client.coroutine.MongoDatabase
 import com.mytetz.llm.FakeLlmClient
 import com.mytetz.persistence.Mongo
@@ -22,6 +23,7 @@ import org.bson.Document
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -39,12 +41,13 @@ import kotlin.test.assertTrue
  */
 class ComponentsTest {
 
-    private fun components(name: String) = Components(
+    private fun components(name: String, migrateOnBoot: Boolean = false) = Components(
         mongo = Mongo(MongoConfig(uri = TestFixtures.connectionString, databaseName = "test_api_$name")),
         cookies = TestFixtures.cookieConfig,
         // Never AnthropicLlmClient: its default constructor calls `AnthropicOkHttpClient.fromEnv()`,
         // which demands a real key at construction time and would put a paid call one slip away.
         llmFactory = { FakeLlmClient() },
+        migrateOnBoot = migrateOnBoot,
     )
 
     /**
@@ -61,6 +64,22 @@ class ComponentsTest {
 
     private suspend fun indexNames(database: MongoDatabase, collection: String): List<String> =
         database.getCollection<Document>(collection).listIndexes().toList().map { it.getString("name") }
+
+    @Test
+    fun `the migration is off unless the flag says otherwise`() {
+        assertFalse(Components.resolveMigrateOnBoot(null))
+        assertFalse(Components.resolveMigrateOnBoot(""))
+        assertFalse(Components.resolveMigrateOnBoot("false"))
+        assertFalse(Components.resolveMigrateOnBoot("yes"), "only the exact word true turns it on")
+        assertFalse(Components.resolveMigrateOnBoot("1"))
+    }
+
+    @Test
+    fun `the migration is on for the exact word true`() {
+        assertTrue(Components.resolveMigrateOnBoot("true"))
+        assertTrue(Components.resolveMigrateOnBoot("TRUE"))
+        assertTrue(Components.resolveMigrateOnBoot("  true \n"), "a fly secret carries a trailing newline")
+    }
 
     @Test
     fun `bootstrap creates every index in the system`() = runTest {
@@ -314,5 +333,52 @@ class ComponentsTest {
         components.sessions
 
         assertEquals(1, built, "the model client was not built when a session service was needed")
+    }
+
+    @Test
+    fun `bootstrap builds no model client when the migration is off`() = runTest {
+        var clientBuilds = 0
+
+        val components = Components(
+            mongo = Mongo(MongoConfig(uri = TestFixtures.connectionString, databaseName = "test_api_no_migrate")),
+            cookies = TestFixtures.cookieConfig,
+            // The migration is the only thing in bootstrap that forces the lazy model client. A
+            // build count of zero proves the migration did not run. It also proves that the
+            // catalogue boots with no ANTHROPIC_API_KEY. This class's KDoc protects that property.
+            llmFactory = { clientBuilds++; FakeLlmClient() },
+            migrateOnBoot = false,
+        )
+
+        components.bootstrap()
+
+        assertEquals(0, clientBuilds, "bootstrap must not build a model client when the flag is off")
+    }
+
+    @Test
+    fun `the migration removes a stranded explanation and pre-warms every seed`() = runTest {
+        val components = components("migrate", migrateOnBoot = true)
+        val explanations = components.mongo.database.getCollection<Document>("explanations")
+        explanations.drop()
+
+        // A document from a model family nobody runs any more. No key a caller can compute finds it.
+        explanations.insertOne(
+            Document()
+                .append("_id", "stranded")
+                .append("topicSlug", "quantum-physics")
+                .append("modelFamily", "claude-opus-5")
+                .append("body", "an unreachable body"),
+        )
+
+        components.bootstrap()
+
+        assertEquals(
+            0,
+            explanations.countDocuments(Filters.eq("modelFamily", "claude-opus-5")),
+            "the stranded document is gone",
+        )
+        assertTrue(
+            explanations.countDocuments(Filters.eq("modelFamily", "fake-model")) >= 20,
+            "every published topic in the catalogue now has a seed under the current family",
+        )
     }
 }

@@ -309,3 +309,60 @@ not in the app.
 | Health check fails only right after deploy | `grace_period` is 10s; JVM + Netty start well inside that, but a cold Atlas handshake on a loaded shared CPU can be slower. Raise `grace_period` before suspecting the app. |
 | `curl -I https://mytetz.fly.dev/api/health` returns **404** | Not expected. `AutoHeadResponse` is installed, so `HEAD /api/health` answers **200** and an uptime monitor may use HEAD or GET. A 404 means the request did not reach this application. |
 | Cloudflare origin errors while `mytetz.fly.dev` is healthy | Almost certainly the shared-IPv4/SNI issue above: no fly certificate for that hostname yet. |
+
+---
+
+## The B0 model migration
+
+Do this one time, after the deployment that carries the `claude-sonnet-5` default.
+
+The model family is part of every content key. A change to it therefore makes every stored
+explanation unreachable. The migration removes them and generates a fresh seed for each published
+topic.
+
+1. Confirm the Anthropic account holds credit. Step 2 of the migration makes about 29 model calls.
+
+2. Turn the migration on and deploy.
+
+   ```
+   fly secrets set MYTETZ_MIGRATE_ON_BOOT=true --app mytetz
+   fly deploy --local-only --ha=false --app mytetz
+   ```
+
+3. Wait for the health check to report `ready`.
+
+   ```
+   curl -s https://mytetz.com/api/health
+   ```
+
+   The answer must be `{"status":"ok","mongo":true,"ready":true}`.
+
+4. Read what the migration did.
+
+   **In bash.**
+
+   ```bash
+   fly logs --app mytetz --no-tail | grep MIGRATION
+   ```
+
+   **In PowerShell.**
+
+   ```powershell
+   fly logs --app mytetz --no-tail | Select-String MIGRATION
+   ```
+
+   You must see two lines: one count of removed explanations and one count of pre-warmed seeds.
+   The `--no-tail` flag is necessary, because the lines are already in the past.
+
+5. Turn the migration off.
+
+   ```
+   fly secrets unset MYTETZ_MIGRATE_ON_BOOT --app mytetz
+   ```
+
+   The machine restarts. The migration is idempotent. A boot that runs it again therefore costs
+   nothing. But leaving the flag set makes every cold start run two extra collection scans.
+
+**If the second log line reports fewer seeds than the catalogue holds,** the spend breaker stopped
+the loop. Check the day's ledger, raise `MYTETZ_GLOBAL_DAILY_COST_CEILING_USD_MICROS` if it is
+correct to do so, and run the migration again tomorrow. The existing seeds remain.

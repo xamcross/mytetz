@@ -11,6 +11,9 @@ import com.mytetz.llm.AnthropicLlmClient
 import com.mytetz.llm.LlmClient
 import com.mytetz.persistence.Mongo
 import com.mytetz.persistence.MongoConfig
+import com.mytetz.quota.Allowance
+import com.mytetz.quota.PrincipalId
+import com.mytetz.quota.QuotaDecision
 import com.mytetz.quota.QuotaRepository
 import com.mytetz.quota.QuotaService
 import com.mytetz.session.SessionRepository
@@ -49,6 +52,7 @@ open class Components(
     val cookies: PrincipalCookieConfig = PrincipalCookieConfig(),
     val clientAddresses: ClientAddressConfig = ClientAddressConfig(),
     llmFactory: () -> LlmClient = { AnthropicLlmClient() },
+    val migrateOnBoot: Boolean = resolveMigrateOnBoot(System.getenv(MIGRATE_ON_BOOT_ENV)),
 ) {
 
     private val topics = TopicRepository(mongo.database)
@@ -114,5 +118,70 @@ open class Components(
         sessionRepository.ensureIndexes()
         quotaRepository.ensureIndexes()
         catalog.seedFromResource()
+        migrate()
+    }
+
+    /**
+     * The one-time migration for slice B0 of the monetization specification.
+     *
+     * It runs only when [migrateOnBoot] is true. An operator sets that flag for one deployment and
+     * then removes it.
+     *
+     * This is not an ordinary boot step. It deletes documents. It calls a metered API. It also
+     * builds the lazy model client. An unconditional version would therefore make catalogue
+     * browsing need `ANTHROPIC_API_KEY`.
+     *
+     * The order is load-bearing. The delete runs first. The first half then cannot delete a seed
+     * that the second half generates.
+     *
+     * Both halves are idempotent. A second run is therefore safe. The seeds cost real money. The
+     * loop asks the quota gate before each seed. It stops when the global spend breaker trips.
+     * The allowance it names holds a whole catalogue. It also bounds a runaway.
+     */
+    suspend fun migrate() {
+        if (!migrateOnBoot) return
+
+        val deleted = explanations.deleteWhereModelFamilyIsNot(llm.modelFamily)
+        log.info("MIGRATION removed {} explanation(s) stranded by a model family change", deleted)
+
+        val maintenance = PrincipalId.user("maintenance")
+        val budget = Allowance(generations = 10_000, windowMillis = 86_400_000)
+
+        var generated = 0
+        var spentMicros = 0L
+        for (topic in catalog.listPublished(category = null, query = null)) {
+            if (quota.checkGeneration(maintenance, budget) != QuotaDecision.Allowed) {
+                log.warn("MIGRATION stopped early: the spend breaker refused before '{}'", topic.slug)
+                break
+            }
+            val didGenerate = sessions.prewarmSeed(topic.slug) { cost ->
+                spentMicros += cost
+                quota.recordGeneration(maintenance, cost, budget)
+            }
+            if (didGenerate) generated++
+        }
+
+        log.info(
+            "MIGRATION pre-warmed {} seed(s) at a cost of {} micro-dollars; remove {} now",
+            generated,
+            spentMicros,
+            MIGRATE_ON_BOOT_ENV,
+        )
+    }
+
+    companion object {
+
+        const val MIGRATE_ON_BOOT_ENV: String = "MYTETZ_MIGRATE_ON_BOOT"
+
+        /**
+         * Only the exact word `true` turns the migration on.
+         *
+         * This polarity is the opposite of `PrincipalCookieConfig.resolveSecure`. The safe value is
+         * also the opposite one. There, an unrecognised value keeps a protection. Here, an
+         * unrecognised value keeps the migration off. The migration deletes documents. It also
+         * calls a metered API. It must never start by accident.
+         */
+        internal fun resolveMigrateOnBoot(raw: String?): Boolean =
+            raw?.trim()?.equals("true", ignoreCase = true) == true
     }
 }
