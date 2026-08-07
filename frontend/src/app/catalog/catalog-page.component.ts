@@ -94,7 +94,7 @@ import { SessionView, TopicSummary } from '../core/models';
           </div>
         } @else {
           <ul class="topics" [attr.aria-busy]="tilesLocked()">
-            @for (t of filteredTopics(); track t.slug; let first = $first) {
+            @for (t of filteredTopics(); track t.slug) {
               <li class="topic">
                 <button
                   type="button"
@@ -104,9 +104,11 @@ import { SessionView, TopicSummary } from '../core/models';
                   [attr.title]="tileLockedReason()"
                   (click)="open(t)"
                 >
-                  <span class="mt-eyebrow topic__category" [class.mt-eyebrow--coral]="first">{{
-                    t.category
-                  }}</span>
+                  <!-- Every tile's category is --mt-muted. The design gives the first tile a coral
+                       eyebrow, and the code drops it: a coral retry pill is reachable in this same
+                       view, and §3.3 allows one coral element. The eyebrow is decoration and the
+                       pill is the action, so the pill keeps the accent. -->
+                  <span class="mt-eyebrow topic__category">{{ t.category }}</span>
                   <h2 class="topic__title">{{ t.title }}</h2>
                   <p class="topic__summary">{{ t.summary }}</p>
                   @if (pendingSlug() === t.slug) {
@@ -397,8 +399,8 @@ export class CatalogPageComponent implements OnInit {
   /**
    * The chosen category, or `null` for every category.
    *
-   * `null` rather than the string `'All'`, so a catalogue that one day publishes a category
-   * actually named "All" does not collide with the control that clears the filter.
+   * The value is `null` and not the string `'All'`. A catalogue can publish a category with the
+   * name "All". That category must not collide with the control that clears the filter.
    */
   readonly category = signal<string | null>(null);
 
@@ -410,10 +412,12 @@ export class CatalogPageComponent implements OnInit {
   });
 
   /**
-   * Client-side, deliberately. `?q=` exists on the backend (Task 1.3), but Slice 1's whole
-   * catalogue is ~29 hand-curated topics — already fetched in full by `loadTopics()` — so
-   * filtering it locally is instant and issues zero additional requests. The category filter is
-   * free for the same reason: `TopicSummary.category` arrives with every topic.
+   * The filter runs on the client, deliberately. `?q=` exists on the backend (Task 1.3). But
+   * Slice 1's whole catalogue is about 29 hand-curated topics, and `loadTopics()` already fetches
+   * every one. A local match is then instant, and it issues no more requests.
+   *
+   * The category filter is free for the same reason: `TopicSummary.category` arrives with every
+   * topic.
    *
    * The two filters combine with AND. Revisit if Slice 5 grows the catalogue to the few hundred
    * topics the design spec anticipates.
@@ -440,7 +444,7 @@ export class CatalogPageComponent implements OnInit {
     return category ?? 'All';
   }
 
-  /** Six placeholders, which is one full row of the widest grid. */
+  /** Six placeholders, which is two full rows of the widest grid. */
   readonly skeletons = [0, 1, 2, 3, 4, 5];
 
   clearFilters(): void {
