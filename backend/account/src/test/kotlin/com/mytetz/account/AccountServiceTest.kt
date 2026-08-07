@@ -106,6 +106,9 @@ class AccountServiceTest {
                 GoogleIdentity(sub = "google-sub-different", email = "alice@example.com", emailVerified = true),
             )
         }
+
+        val stored = repository.findUserByEmail("alice@example.com")
+        assertEquals("google-sub-original", stored?.googleSub, "a refused link must leave the stored subject alone")
     }
 
     @Test
