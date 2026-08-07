@@ -29,8 +29,32 @@ class BillingServiceTest {
     @BeforeTest
     fun reset() = runTest {
         database.getCollection<Document>("subscriptions").drop()
+        // Added for the `apply` tests below: they exercise BillingRepository.insertEventIfAbsent,
+        // and different tests reuse short event ids such as "evt-1". Without this drop, a row a
+        // previous test left behind would make an unrelated later test look like a replay.
+        database.getCollection<Document>("billingEvents").drop()
         now = T0
     }
+
+    /**
+     * A [FreemiusEvent] with sensible defaults, so a test can name only the fields that matter to
+     * it.
+     */
+    private fun freemiusEvent(
+        id: String,
+        type: String,
+        userReference: String? = "u1",
+        periodEndsAt: Long? = null,
+        occurredAt: Long = now,
+    ) = FreemiusEvent(
+        id = id,
+        type = type,
+        userReference = userReference,
+        freemiusUserId = "fs-user-1",
+        freemiusSubscriptionId = "fs-sub-1",
+        periodEndsAtEpochMillis = periodEndsAt,
+        occurredAtEpochMillis = occurredAt,
+    )
 
     // ------------------------------------------------------------------ startTrialIfAbsent
 
@@ -227,5 +251,293 @@ class BillingServiceTest {
         val stored = service.startTrialIfAbsent("u1")
 
         assertEquals(stored, service.subscriptionFor("u1"))
+    }
+
+    // ------------------------------------------------------------------ apply: mapping
+
+    @Test
+    fun `a first payment moves the state to active`(): Unit = runTest {
+        repository.upsert(
+            Subscription(
+                userId = "u1",
+                status = SubscriptionStatus.TRIALING,
+                trialEndsAtEpochMillis = now + 7 * DAY_MILLIS,
+                createdAtEpochMillis = now,
+                updatedAtEpochMillis = now,
+            )
+        )
+        val periodEnd = now + 30 * DAY_MILLIS
+        val event = freemiusEvent("evt-created", "subscription.created", periodEndsAt = periodEnd, occurredAt = now + 1)
+
+        val applied = service.apply(event)
+
+        assertEquals(true, applied)
+        val stored = repository.find("u1")
+        assertEquals(SubscriptionStatus.ACTIVE, stored?.status)
+        assertEquals(periodEnd, stored?.currentPeriodEndsAtEpochMillis)
+        assertEquals(now + 1, stored?.updatedAtEpochMillis)
+    }
+
+    @Test
+    fun `a renewal retry moves the state to active`(): Unit = runTest {
+        // subscription.renewal.retry shares ACTIVE with subscription.created in the type map.
+        // Nothing above exercises this second key on its own; without this test a typo in it
+        // would pass every other test in this file.
+        repository.upsert(
+            Subscription(
+                userId = "u1",
+                status = SubscriptionStatus.PAST_DUE,
+                graceEndsAtEpochMillis = now + 3 * DAY_MILLIS,
+                createdAtEpochMillis = now,
+                updatedAtEpochMillis = now,
+            )
+        )
+        val periodEnd = now + 30 * DAY_MILLIS
+        val event = freemiusEvent("evt-retry", "subscription.renewal.retry", periodEndsAt = periodEnd, occurredAt = now + 1)
+
+        val applied = service.apply(event)
+
+        assertEquals(true, applied)
+        val stored = repository.find("u1")
+        assertEquals(SubscriptionStatus.ACTIVE, stored?.status)
+        assertEquals(periodEnd, stored?.currentPeriodEndsAtEpochMillis)
+    }
+
+    @Test
+    fun `a failed payment moves the state to past due with a grace`(): Unit = runTest {
+        repository.upsert(
+            Subscription(
+                userId = "u1",
+                status = SubscriptionStatus.ACTIVE,
+                currentPeriodEndsAtEpochMillis = now + 30 * DAY_MILLIS,
+                createdAtEpochMillis = now,
+                updatedAtEpochMillis = now,
+            )
+        )
+        val failedAt = now + 1
+        val event = freemiusEvent("evt-failed", "subscription.renewal.failed", occurredAt = failedAt)
+
+        val applied = service.apply(event)
+
+        assertEquals(true, applied)
+        val stored = repository.find("u1")
+        assertEquals(SubscriptionStatus.PAST_DUE, stored?.status)
+        assertEquals(failedAt + config.graceDays * DAY_MILLIS, stored?.graceEndsAtEpochMillis)
+    }
+
+    @Test
+    fun `a cancellation keeps the period end`(): Unit = runTest {
+        val periodEnd = now + 30 * DAY_MILLIS
+        repository.upsert(
+            Subscription(
+                userId = "u1",
+                status = SubscriptionStatus.ACTIVE,
+                currentPeriodEndsAtEpochMillis = periodEnd,
+                createdAtEpochMillis = now,
+                updatedAtEpochMillis = now,
+            )
+        )
+        val event = freemiusEvent("evt-cancel", "subscription.cancelled", occurredAt = now + 1)
+
+        val applied = service.apply(event)
+
+        assertEquals(true, applied)
+        val stored = repository.find("u1")
+        assertEquals(SubscriptionStatus.CANCELLED, stored?.status)
+        assertEquals(periodEnd, stored?.currentPeriodEndsAtEpochMillis, "a cancellation must keep the period end")
+    }
+
+    @Test
+    fun `a refund expires the subscription`(): Unit = runTest {
+        repository.upsert(
+            Subscription(
+                userId = "u1",
+                status = SubscriptionStatus.ACTIVE,
+                currentPeriodEndsAtEpochMillis = now + 30 * DAY_MILLIS,
+                createdAtEpochMillis = now,
+                updatedAtEpochMillis = now,
+            )
+        )
+        val event = freemiusEvent("evt-refund", "payment.refund", occurredAt = now + 1)
+
+        val applied = service.apply(event)
+
+        assertEquals(true, applied)
+        assertEquals(SubscriptionStatus.EXPIRED, repository.find("u1")?.status)
+    }
+
+    @Test
+    fun `a lost dispute expires the subscription`(): Unit = runTest {
+        // payment.dispute.lost shares EXPIRED with payment.refund in the type map. Nothing above
+        // exercises this second key on its own.
+        repository.upsert(
+            Subscription(
+                userId = "u1",
+                status = SubscriptionStatus.ACTIVE,
+                currentPeriodEndsAtEpochMillis = now + 30 * DAY_MILLIS,
+                createdAtEpochMillis = now,
+                updatedAtEpochMillis = now,
+            )
+        )
+        val event = freemiusEvent("evt-dispute", "payment.dispute.lost", occurredAt = now + 1)
+
+        val applied = service.apply(event)
+
+        assertEquals(true, applied)
+        assertEquals(SubscriptionStatus.EXPIRED, repository.find("u1")?.status)
+    }
+
+    // ------------------------------------------------------------------ apply: unknown type
+
+    @Test
+    fun `an unknown event type changes nothing`(): Unit = runTest {
+        val before = Subscription(
+            userId = "u1",
+            status = SubscriptionStatus.ACTIVE,
+            currentPeriodEndsAtEpochMillis = now + 30 * DAY_MILLIS,
+            createdAtEpochMillis = now,
+            updatedAtEpochMillis = now,
+        )
+        repository.upsert(before)
+        val event = freemiusEvent("evt-unknown", "subscription.something_new", occurredAt = now + 1)
+
+        val applied = service.apply(event)
+
+        assertEquals(false, applied)
+        assertEquals(before, repository.find("u1"))
+    }
+
+    @Test
+    fun `an unknown event type does not consume the event id`(): Unit = runTest {
+        repository.upsert(
+            Subscription(
+                userId = "u1",
+                status = SubscriptionStatus.TRIALING,
+                trialEndsAtEpochMillis = now + 7 * DAY_MILLIS,
+                createdAtEpochMillis = now,
+                updatedAtEpochMillis = now,
+            )
+        )
+        val unknown = freemiusEvent("evt-shared-id", "subscription.something_new", occurredAt = now + 1)
+        assertEquals(false, service.apply(unknown))
+
+        // The same id, now under a type the map does know. If the call above had consumed the id,
+        // insertEventIfAbsent would refuse this one as a duplicate and the row would stay
+        // TRIALING.
+        val known = freemiusEvent(
+            "evt-shared-id",
+            "subscription.created",
+            periodEndsAt = now + 30 * DAY_MILLIS,
+            occurredAt = now + 2,
+        )
+
+        val applied = service.apply(known)
+
+        assertEquals(true, applied)
+        assertEquals(SubscriptionStatus.ACTIVE, repository.find("u1")?.status)
+    }
+
+    // ------------------------------------------------------------------ apply: idempotency and ordering
+
+    @Test
+    fun `a replayed event id changes nothing`(): Unit = runTest {
+        repository.upsert(
+            Subscription(
+                userId = "u1",
+                status = SubscriptionStatus.TRIALING,
+                trialEndsAtEpochMillis = now + 7 * DAY_MILLIS,
+                createdAtEpochMillis = now,
+                updatedAtEpochMillis = now,
+            )
+        )
+        val event =
+            freemiusEvent("evt-replay", "subscription.created", periodEndsAt = now + 30 * DAY_MILLIS, occurredAt = now + 1)
+        assertEquals(true, service.apply(event))
+        val afterFirst = repository.find("u1")
+
+        val repeated = service.apply(event)
+
+        assertEquals(false, repeated)
+        assertEquals(afterFirst, repository.find("u1"), "a replay must not change the stored row")
+    }
+
+    @Test
+    fun `an event older than the stored state is dropped`(): Unit = runTest {
+        val stored = Subscription(
+            userId = "u1",
+            status = SubscriptionStatus.ACTIVE,
+            currentPeriodEndsAtEpochMillis = now + 30 * DAY_MILLIS,
+            createdAtEpochMillis = now,
+            updatedAtEpochMillis = now + 100,
+        )
+        repository.upsert(stored)
+        val stale = freemiusEvent("evt-stale", "subscription.renewal.failed", occurredAt = now + 50)
+
+        val applied = service.apply(stale)
+
+        assertEquals(false, applied)
+        assertEquals(stored, repository.find("u1"), "a stale event must not overwrite a newer row")
+    }
+
+    @Test
+    fun `a newer event overwrites`(): Unit = runTest {
+        repository.upsert(
+            Subscription(
+                userId = "u1",
+                status = SubscriptionStatus.ACTIVE,
+                currentPeriodEndsAtEpochMillis = now + 30 * DAY_MILLIS,
+                createdAtEpochMillis = now,
+                updatedAtEpochMillis = now + 100,
+            )
+        )
+        val newPeriodEnd = now + 60 * DAY_MILLIS
+        val fresh = freemiusEvent("evt-fresh", "subscription.created", periodEndsAt = newPeriodEnd, occurredAt = now + 200)
+
+        val applied = service.apply(fresh)
+
+        assertEquals(true, applied)
+        assertEquals(newPeriodEnd, repository.find("u1")?.currentPeriodEndsAtEpochMillis)
+    }
+
+    // ------------------------------------------------------------------ apply: the user reference
+
+    @Test
+    fun `an event for a user with no row changes nothing`(): Unit = runTest {
+        val event = freemiusEvent(
+            "evt-no-user",
+            "subscription.created",
+            userReference = "no-such-user",
+            periodEndsAt = now + 30 * DAY_MILLIS,
+        )
+
+        val applied = service.apply(event)
+
+        assertEquals(false, applied)
+        assertEquals(null, repository.find("no-such-user"))
+    }
+
+    @Test
+    fun `an event with no userReference changes nothing`(): Unit = runTest {
+        repository.upsert(
+            Subscription(
+                userId = "u1",
+                status = SubscriptionStatus.ACTIVE,
+                currentPeriodEndsAtEpochMillis = now + 30 * DAY_MILLIS,
+                createdAtEpochMillis = now,
+                updatedAtEpochMillis = now,
+            )
+        )
+        val before = repository.find("u1")
+        val event = freemiusEvent(
+            "evt-no-ref",
+            "subscription.created",
+            userReference = null,
+            periodEndsAt = now + 60 * DAY_MILLIS,
+        )
+
+        val applied = service.apply(event)
+
+        assertEquals(false, applied)
+        assertEquals(before, repository.find("u1"))
     }
 }

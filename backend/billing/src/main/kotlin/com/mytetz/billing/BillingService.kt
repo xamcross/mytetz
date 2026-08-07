@@ -1,7 +1,28 @@
 package com.mytetz.billing
 
+import org.slf4j.LoggerFactory
+
 /** One day, in milliseconds. [BillingService.startTrialIfAbsent] uses it to set a trial's own end date. */
 private const val DAY_MILLIS = 86_400_000L
+
+private val log = LoggerFactory.getLogger(BillingService::class.java)
+
+/**
+ * Every Freemius event type this deployment understands, mapped to the [SubscriptionStatus] it
+ * moves a row to.
+ *
+ * The vendor's dashboard, and not its documentation, is the source for these exact strings. They
+ * live in this one map so an operator who finds a wrong one has a single place to correct it,
+ * rather than a search through [BillingService.apply].
+ */
+private val EVENT_TYPE_TO_STATUS: Map<String, SubscriptionStatus> = mapOf(
+    "subscription.created" to SubscriptionStatus.ACTIVE,
+    "subscription.renewal.retry" to SubscriptionStatus.ACTIVE,
+    "subscription.renewal.failed" to SubscriptionStatus.PAST_DUE,
+    "subscription.cancelled" to SubscriptionStatus.CANCELLED,
+    "payment.refund" to SubscriptionStatus.EXPIRED,
+    "payment.dispute.lost" to SubscriptionStatus.EXPIRED,
+)
 
 /**
  * Starts a trial on sign-in, and answers what a learner may generate right now.
@@ -69,4 +90,74 @@ class BillingService(
      * signing in.
      */
     suspend fun subscriptionFor(userId: String): Subscription? = repository.find(userId)
+
+    /**
+     * Turns [event] into a change to the stored subscription row, or refuses it, and reports
+     * which. Returns `true` only when a row changed.
+     *
+     * ## The order of the checks, and why it does not move
+     *
+     * The type is resolved first, against [EVENT_TYPE_TO_STATUS], and the event id is consumed
+     * only after that lookup succeeds. An unknown type logs `BILLING_UNKNOWN_EVENT` and returns
+     * without consuming the id: an operator who later adds the missing type to the map can then
+     * replay the very same event by hand. A consumed id can never be replayed.
+     *
+     * Every check after the id is consumed can return `false` more than once for the same event,
+     * because Freemius may resend it and the vendor documents no retry policy this class may rely
+     * on. [BillingRepository.insertEventIfAbsent] is what stops a resend from changing the row a
+     * second time.
+     *
+     * A write older than the row's own [Subscription.updatedAtEpochMillis] is dropped, so a
+     * renewal-failure webhook that arrives late cannot undo a renewal that already landed.
+     */
+    suspend fun apply(event: FreemiusEvent): Boolean {
+        val status = EVENT_TYPE_TO_STATUS[event.type]
+        if (status == null) {
+            log.warn("BILLING_UNKNOWN_EVENT type={} id={}", event.type, event.id)
+            return false
+        }
+
+        if (!repository.insertEventIfAbsent(event.id, clock())) return false
+
+        val userId = event.userReference
+        if (userId == null) {
+            log.warn("BILLING_UNKNOWN_USER event {} carries no userReference", event.id)
+            return false
+        }
+
+        val stored = repository.find(userId)
+        if (stored == null) {
+            log.warn("BILLING_UNKNOWN_USER event {} names user {}, which has no row", event.id, userId)
+            return false
+        }
+
+        if (event.occurredAtEpochMillis < stored.updatedAtEpochMillis) return false
+
+        val updated = when (status) {
+            SubscriptionStatus.ACTIVE -> stored.copy(
+                status = SubscriptionStatus.ACTIVE,
+                currentPeriodEndsAtEpochMillis = event.periodEndsAtEpochMillis,
+                updatedAtEpochMillis = event.occurredAtEpochMillis,
+            )
+            SubscriptionStatus.PAST_DUE -> stored.copy(
+                status = SubscriptionStatus.PAST_DUE,
+                graceEndsAtEpochMillis = event.occurredAtEpochMillis + config.graceDays * DAY_MILLIS,
+                updatedAtEpochMillis = event.occurredAtEpochMillis,
+            )
+            // CANCELLED keeps currentPeriodEndsAtEpochMillis: copy() carries a field forward
+            // unless a new value is named, and no new value is named for it here.
+            SubscriptionStatus.CANCELLED -> stored.copy(
+                status = SubscriptionStatus.CANCELLED,
+                updatedAtEpochMillis = event.occurredAtEpochMillis,
+            )
+            SubscriptionStatus.EXPIRED -> stored.copy(
+                status = SubscriptionStatus.EXPIRED,
+                updatedAtEpochMillis = event.occurredAtEpochMillis,
+            )
+            SubscriptionStatus.TRIALING -> return false // unreachable: EVENT_TYPE_TO_STATUS never maps here.
+        }
+
+        repository.upsert(updated)
+        return true
+    }
 }

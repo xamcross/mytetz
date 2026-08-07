@@ -116,6 +116,44 @@ class EntitlementTest {
         )
     }
 
+    // No arrange step changed on this test, or on `every allowed decision carries its status`
+    // below: both already build an ACTIVE row with no currentPeriodEndsAt, which the grace
+    // change below still allows unconditionally.
+
+    @Test
+    fun `an active subscription one millisecond before its grace ends is allowed`() {
+        val periodEnd = CREATED + 30 * DAY_MILLIS
+        val graceEnd = periodEnd + config.graceDays * DAY_MILLIS
+        val row = subscription(SubscriptionStatus.ACTIVE, currentPeriodEndsAt = periodEnd)
+
+        val decision = Entitlement.resolve(row, graceEnd - 1, config)
+
+        assertIs<EntitlementDecision.Allowed>(decision)
+        assertEquals(SubscriptionStatus.ACTIVE, decision.status)
+    }
+
+    @Test
+    fun `an active subscription exactly at its grace end requires a subscription`() {
+        val periodEnd = CREATED + 30 * DAY_MILLIS
+        val graceEnd = periodEnd + config.graceDays * DAY_MILLIS
+        val row = subscription(SubscriptionStatus.ACTIVE, currentPeriodEndsAt = periodEnd)
+
+        assertEquals(EntitlementDecision.SubscriptionRequired, Entitlement.resolve(row, graceEnd, config))
+    }
+
+    @Test
+    fun `an active subscription with no period end is allowed`() {
+        val row = subscription(SubscriptionStatus.ACTIVE, currentPeriodEndsAt = null)
+
+        // A year past CREATED, and not CREATED itself: a resolver that quietly derived some
+        // finite cutoff from a null period end, instead of treating null as "always allowed",
+        // could still pass a check made only at `now = CREATED`.
+        val decision = Entitlement.resolve(row, CREATED + 365 * DAY_MILLIS, config)
+
+        assertIs<EntitlementDecision.Allowed>(decision)
+        assertEquals(SubscriptionStatus.ACTIVE, decision.status)
+    }
+
     // ------------------------------------------------------------------ cancelled
 
     @Test

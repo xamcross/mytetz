@@ -1,9 +1,12 @@
 package com.mytetz.billing
 
 import com.mytetz.quota.Allowance
+import org.slf4j.LoggerFactory
 
 /** A day, in milliseconds. Every subscriber allowance shares this one window. */
 private const val DAY_MILLIS = 86_400_000L
+
+private val log = LoggerFactory.getLogger(Entitlement::class.java)
 
 /**
  * The knobs a deployment may turn on the trial and the subscriber allowance.
@@ -79,8 +82,9 @@ sealed interface EntitlementDecision {
  * [resolve] holds no clock and reads no database. [Subscription] and `nowEpochMillis` are its
  * only inputs, so the same two inputs always give the same decision.
  *
- * A null date on a status that needs one gives [EntitlementDecision.SubscriptionRequired]. This
- * function never treats a missing date as a reason to allow.
+ * A null date on a status that needs one gives [EntitlementDecision.SubscriptionRequired], with
+ * one deliberate exception: a null [Subscription.currentPeriodEndsAtEpochMillis] on
+ * [SubscriptionStatus.ACTIVE] grants access. See [resolveActive] for why.
  */
 object Entitlement {
 
@@ -89,7 +93,7 @@ object Entitlement {
 
         return when (subscription.status) {
             SubscriptionStatus.TRIALING -> resolveTrial(subscription, nowEpochMillis, config)
-            SubscriptionStatus.ACTIVE -> subscriberAllowed(config, SubscriptionStatus.ACTIVE)
+            SubscriptionStatus.ACTIVE -> resolveActive(subscription, nowEpochMillis, config)
             SubscriptionStatus.CANCELLED -> resolveUntil(
                 subscription.currentPeriodEndsAtEpochMillis,
                 nowEpochMillis,
@@ -126,6 +130,38 @@ object Entitlement {
         if (windowMillis <= 0) return EntitlementDecision.SubscriptionRequired
 
         return EntitlementDecision.Allowed(Allowance(config.trialGenerations, windowMillis), SubscriptionStatus.TRIALING)
+    }
+
+    /**
+     * [SubscriptionStatus.ACTIVE] still needs a check against the clock.
+     *
+     * No Freemius event marks a subscription expired on its own period end, and the vendor does
+     * not document a retry policy for the renewal that is meant to move the row forward before
+     * that end arrives. So this resolver does not trust an `ACTIVE` row for ever: it stops
+     * allowing once [Subscription.currentPeriodEndsAtEpochMillis] plus [BillingConfig.graceDays]
+     * has passed. The grace absorbs a renewal webhook that lands hours late; it must not lock out
+     * a learner who has paid, because a locked-out learner cancels.
+     *
+     * A **null** [Subscription.currentPeriodEndsAtEpochMillis] is the one case in this whole
+     * resolver where a missing date grants access rather than refusing it. A first-payment
+     * webhook may carry no period end, and refusing a learner who has just paid is the worse
+     * error. This branch logs `BILLING_NO_PERIOD_END` so an operator sees a mapping that needs
+     * correcting.
+     */
+    private fun resolveActive(
+        subscription: Subscription,
+        nowEpochMillis: Long,
+        config: BillingConfig,
+    ): EntitlementDecision {
+        val periodEnd = subscription.currentPeriodEndsAtEpochMillis
+        if (periodEnd == null) {
+            log.warn("BILLING_NO_PERIOD_END user={} has no currentPeriodEndsAtEpochMillis", subscription.userId)
+            return subscriberAllowed(config, SubscriptionStatus.ACTIVE)
+        }
+
+        val cutoff = periodEnd + config.graceDays * DAY_MILLIS
+        if (nowEpochMillis >= cutoff) return EntitlementDecision.SubscriptionRequired
+        return subscriberAllowed(config, SubscriptionStatus.ACTIVE)
     }
 
     /** The shared shape behind [SubscriptionStatus.CANCELLED] and [SubscriptionStatus.PAST_DUE]. */

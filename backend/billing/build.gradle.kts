@@ -7,6 +7,10 @@ dependencies {
     // are @Serializable documents. EpochMillisAsBsonDateTime imports BsonEncoder and BsonDecoder
     // from org.bson.codecs.kotlinx.
     implementation(libs.mongodb.bson.kotlinx)
+    // BillingService logs BILLING_UNKNOWN_EVENT and Entitlement logs BILLING_NO_PERIOD_END. This
+    // module has never logged before, so slf4j-api is declared here directly, the same as
+    // :backend:account does for MailSender.
+    implementation(libs.slf4j.api)
     testImplementation(libs.testcontainers.mongodb)
     testImplementation(libs.testcontainers.junit)
 }
