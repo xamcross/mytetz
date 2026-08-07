@@ -1,6 +1,6 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
-import { provideHttpClientTesting } from '@angular/common/http/testing';
+import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { AllowanceMeterComponent } from './allowance-meter.component';
 import { AccountStore } from '../core/account.store';
 import { AccountView } from '../core/models';
@@ -33,6 +33,7 @@ const active: AccountView = {
 describe('AllowanceMeterComponent', () => {
   let fixture: ComponentFixture<AllowanceMeterComponent>;
   let store: AccountStore;
+  let http: HttpTestingController;
 
   beforeEach(() => {
     TestBed.configureTestingModule({
@@ -41,7 +42,10 @@ describe('AllowanceMeterComponent', () => {
     });
     fixture = TestBed.createComponent(AllowanceMeterComponent);
     store = TestBed.inject(AccountStore);
+    http = TestBed.inject(HttpTestingController);
   });
+
+  afterEach(() => http.verify());
 
   const text = (): string => fixture.nativeElement.textContent as string;
 
@@ -78,5 +82,18 @@ describe('AllowanceMeterComponent', () => {
     expect(text()).not.toContain('null');
     expect(text()).not.toContain('NaN');
     expect(text()).not.toContain('1970');
+  });
+
+  it('the meter fills once the account loads', async () => {
+    // Drives the real `load()`, and not a hand-set signal. A spec that sets `view` directly is
+    // exactly what let the original defect through: every unit passed while the running app never
+    // called `load()` at all, because none of them exercised the path that does.
+    const loaded = store.load();
+    http.expectOne('/api/account').flush(active);
+    await loaded;
+    fixture.detectChanges();
+
+    expect(text()).toContain('9');
+    expect(text()).toContain('25');
   });
 });

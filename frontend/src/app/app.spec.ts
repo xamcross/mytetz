@@ -8,6 +8,7 @@ import {
 import { provideRouter } from '@angular/router';
 import { App } from './app';
 import { routes } from './app.routes';
+import { AccountStore } from './core/account.store';
 
 /**
  * The root's own guard.
@@ -18,6 +19,10 @@ import { routes } from './app.routes';
  */
 describe('App', () => {
   let http: HttpTestingController;
+  /** Stubbed in every test, not only the one about it: without this, `ngOnInit`'s new account load
+   * would send a real `GET /api/account` that no other test in this file flushes, and `afterEach`'s
+   * `http.verify()` would fail on it. */
+  let loadAccount: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
     await TestBed.configureTestingModule({
@@ -25,6 +30,7 @@ describe('App', () => {
       providers: [provideHttpClient(), provideHttpClientTesting(), provideRouter(routes)],
     }).compileComponents();
     http = TestBed.inject(HttpTestingController);
+    loadAccount = vi.spyOn(TestBed.inject(AccountStore), 'load').mockResolvedValue(undefined);
   });
 
   afterEach(() => http.verify());
@@ -67,5 +73,11 @@ describe('App', () => {
     expect(label(await render((r) => r.error(new ProgressEvent('error'))))).toBe(
       'Backend unreachable',
     );
+  });
+
+  it('the app loads the account when it starts', async () => {
+    await render((r) => r.flush({ status: 'ok', mongo: true }));
+
+    expect(loadAccount).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,6 +1,7 @@
 import { TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting, HttpTestingController } from '@angular/common/http/testing';
+import { AccountStore } from '../core/account.store';
 import { EXPLAIN_STREAM, ExplainStreamFn, SessionStore } from './session.store';
 import { ExplainRequest, SessionView, SpanPayload } from '../core/models';
 import { ExplainEvent, ExplainStreamError } from '../core/sse.client';
@@ -115,6 +116,10 @@ describe('SessionStore', () => {
   /** The event sequence the test under test wants delivered — see the report's Problem E. Set per
    * test; the default fails loudly rather than silently streaming nothing. */
   let script: ExplainStreamFn;
+  /** Stubbed in every test, not only the ones about it: without this, a completed or a refused
+   * explain would send a real `GET /api/account` that most tests here never flush, and
+   * `afterEach`'s `http.verify()` would fail on it. */
+  let loadAccount: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     streamCalls = [];
@@ -142,6 +147,7 @@ describe('SessionStore', () => {
     });
     store = TestBed.inject(SessionStore);
     http = TestBed.inject(HttpTestingController);
+    loadAccount = vi.spyOn(TestBed.inject(AccountStore), 'load').mockResolvedValue(undefined);
   });
 
   afterEach(() => http.verify());
@@ -473,6 +479,70 @@ describe('SessionStore', () => {
     await tick();
     http.expectOne('/api/sessions/s1').flush(viewAfterExplain);
     await explaining;
+  });
+
+  it('a finished explanation refreshes the account', async () => {
+    script = async function* () {
+      yield delta('The four pillars are…');
+      yield done('k4');
+    };
+
+    await loadSession();
+    const explaining = store.explain(span, 'EXPLAIN');
+    await tick();
+    http.expectOne('/api/sessions/s1').flush(viewAfterExplain);
+    await explaining;
+
+    expect(loadAccount).toHaveBeenCalledTimes(1);
+  });
+
+  it('a refused explanation also refreshes the account', async () => {
+    // TRIAL_EXHAUSTED changes the number the meter must show — the pool is now zero — so a
+    // refusal earns the same refresh as a completed generation, not only the happy path.
+    script = async function* (): AsyncGenerator<ExplainEvent> {
+      throw new ExplainStreamError(
+        'TRIAL_EXHAUSTED',
+        "you have used today's allowance",
+        null,
+        false,
+      );
+    };
+
+    await loadSession();
+    await store.explain(span, 'EXPLAIN');
+
+    expect(loadAccount).toHaveBeenCalledTimes(1);
+  });
+
+  it('an abandoned explanation does not refresh the account', async () => {
+    // Written so it goes red if the refresh sits in a plain `finally` with no abort guard: this
+    // generation never reaches `done`, and the assertion below is that `load` was never called.
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    script = async function* () {
+      yield delta('half an answer');
+      await held;
+      yield done('k4');
+    };
+
+    await loadSession();
+    const explaining = store.explain(span, 'EXPLAIN');
+    await tick();
+
+    // Abandon it the way navigating to another session does — the same path Task 1's `abandon()`
+    // takes when the learner leaves mid-generation.
+    const reloading = store.load('s1');
+    http.expectOne('/api/sessions/s1').flush(view);
+    await reloading;
+    flushTopic(view.topicSlug, 'Quantum Physics');
+
+    // Let the abandoned generator run to its own end. Its `for await` notices the abort and
+    // returns before either the success path or the failure path can call the account.
+    release();
+    await tick();
+    await explaining;
+
+    expect(loadAccount).not.toHaveBeenCalled();
   });
 
   it('retry re-issues the last explain after a GENERATION_FAILED refusal', async () => {

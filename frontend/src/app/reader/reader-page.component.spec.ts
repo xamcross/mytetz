@@ -3,6 +3,7 @@ import { provideRouter } from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting, HttpTestingController } from '@angular/common/http/testing';
+import { AccountStore } from '../core/account.store';
 import { ReaderPageComponent } from './reader-page.component';
 import { EXPLAIN_STREAM, ExplainStreamFn } from './session.store';
 import { SessionView } from '../core/models';
@@ -66,6 +67,10 @@ describe('ReaderPageComponent', () => {
       ],
     });
     http = TestBed.inject(HttpTestingController);
+    // `SessionStore` now refreshes `AccountStore` after every explain that reaches its end. Stubbed
+    // here so that path never sends a real `GET /api/account` that this file's tests do not expect
+    // and do not flush — this file is about the reader's own behaviour, not the account's.
+    vi.spyOn(TestBed.inject(AccountStore), 'load').mockResolvedValue(undefined);
     harness = await RouterTestingHarness.create();
   });
 
