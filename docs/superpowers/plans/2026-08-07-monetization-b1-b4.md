@@ -544,7 +544,7 @@ Subject: `feat(api): add the auth routes and gate the explain endpoint`
 - Create: `frontend/src/app/auth/sign-in-panel.component.ts` and its spec
 - Create: `frontend/src/app/auth/auth-landing.component.ts` and its spec
 - Create: `frontend/src/app/core/account.store.ts` and its spec
-- Create: `frontend/src/app/core/auth.interceptor.ts` and its spec
+- ~~Create: `frontend/src/app/core/auth.interceptor.ts` and its spec~~ **Dropped, and here is why.** The explain call goes through `sse.client.ts`, which uses raw `fetch` rather than `HttpClient`. An `HttpInterceptorFn` never sees that response, so it cannot catch the one `401` it existed to catch. The reader instead reads `SessionStore.error()?.code === 'SIGN_IN_REQUIRED'` directly. Task 10 maps the other two codes the same way.
 - Modify: `frontend/src/app/core/api.service.ts`
 - Modify: `frontend/src/app/app.config.ts`
 - Modify: `frontend/src/app/app.routes.ts`
