@@ -14,6 +14,7 @@
 - **No behaviour a learner can see changes in B0.** No existing **assertion** may change, and no existing test may be deleted, renamed or disabled. An assertion that has to change to pass is a signal that the change is not behaviour-neutral — stop and report it.
 - **Widening a test fixture is allowed and expected.** Tasks 3 and 5 each add a parameter to an existing fixture builder, with the current literal as its default, so every existing call site keeps its exact meaning. That is not an edit to a test; it is an addition to a helper. Adding a near-duplicate builder instead is the worse outcome.
 - Write all prose, KDoc and commit message bodies in ASD-STE100 Simplified Technical English. Keep the conventional-commit subject line format. **This rule binds the KDoc in this plan too.** A code block here is a specification of behaviour and not a licence to copy prose that breaks the rule. When a KDoc block in a task looks non-compliant, rewrite it and say so in your report.
+- **The concrete test for "one statement in one sentence":** a sentence must not hold two subjects that each carry their own verb. `"The migration deletes documents, so it must never start by accident"` has two — `the migration` and `it`. Split it: `"The migration deletes documents. It must never start by accident."` A compound predicate on one subject is allowed: `"This function trims the value and returns it"` has one subject. This test is what the reviewer applies, so apply it before you commit.
 - **Do not add a unique index to `principals` or `costLedger`.** `QuotaRepository.ensureIndexes` explains why: the upsert race resolution depends on it.
 - Every new TTL field is written through `EpochMillisAsBsonDateTime`. A `Long` makes a TTL index do nothing. This slice adds no TTL field, so the rule only matters if you add one.
 - The backend test command is `./gradlew build` from the repository root. It runs 325 tests today.
@@ -102,14 +103,14 @@ package com.mytetz.quota
  * How many generations a principal may make, and the length of the window they share.
  *
  * This type keeps [QuotaService] free of a tier, a trial and a subscription. A caller resolves an
- * allowance and gives it to this module. This module then counts and refuses. The `billing` module
- * owns the question "which allowance".
+ * allowance. The caller then gives it to this module. This module counts. This module refuses.
+ * The `billing` module owns the question "which allowance".
  *
  * This class checks both bounds. The call site does not.
  *
  * A count of zero refuses every generation for ever. A window of zero makes every stored window
- * already expired. [QuotaRepository.rollWindowIfExpired] then resets the counter on every call, and
- * the allowance disappears. The log says nothing. [QuotaConfig] holds the same reasoning.
+ * already expired. [QuotaRepository.rollWindowIfExpired] then resets the counter on every call.
+ * The allowance disappears. The log says nothing. [QuotaConfig] holds the same reasoning.
  */
 data class Allowance(val generations: Int, val windowMillis: Long) {
 
@@ -269,7 +270,7 @@ Add this paragraph to the class KDoc of `QuotaService`, at the end, before the c
  *
  * On [recordGeneration] the allowance is the THIRD parameter. `costMicros` stays the second.
  * `SessionRoutes` calls the method positionally. An allowance in the second position binds a cost
- * to an allowance. Both values are numbers, so the compiler reports nothing.
+ * to an allowance. Both values are numbers. The compiler therefore reports nothing.
 ```
 
 - [ ] **Step 10: Run the whole quota suite**
@@ -399,10 +400,10 @@ Then add to the class's `companion object` — create one if the class has none,
          * Sonnet 5, and not Opus 5. The reason is arithmetic and not preference.
          *
          * One explanation is about 1 000 input tokens and 500 output tokens. Opus 5 costs $5 and
-         * $25 for each 1M tokens, so one explanation costs $0.0175. Sonnet 5 costs $3 and $15, so
-         * one explanation costs $0.0105.
+         * $25 for each 1M tokens. One explanation on Opus 5 therefore costs $0.0175. Sonnet 5 costs
+         * $3 and $15. One explanation on Sonnet 5 therefore costs $0.0105.
          *
-         * The subscription is €10 each month. The Freemius fee leaves €9.53, which is about $10.29.
+         * The subscription is €10 each month. The Freemius fee leaves €9.53. That is about $10.29.
          * An allowance of 25 each day therefore costs $7.88 on Sonnet 5 and $13.13 on Opus 5. Only
          * the first number leaves a margin.
          *
@@ -421,8 +422,8 @@ Then add to the class's `companion object` — create one if the class has none,
          * stop the server. `GraphConfig.resolveMaxOutputTokens` and
          * `QuotaConfig.resolveDailyExplains` hold the same rule and the same shape.
          *
-         * This function trims the value. `fly secrets set` and a hand-edited `.env` both leave a
-         * trailing newline. A model id with a newline gives a 404 from the API.
+         * This function trims the value. `fly secrets set` leaves a trailing newline. A hand-edited
+         * `.env` does the same. A model id with a newline gives a 404 from the API.
          */
         internal fun resolveModel(raw: String?): String =
             raw?.trim()?.takeIf { it.isNotEmpty() } ?: DEFAULT_MODEL
@@ -619,7 +620,7 @@ In `ExplanationRepository.kt`, after `incrementRequestCount`:
      * Removes every explanation that a change of model family stranded. Reports how many it removed.
      *
      * The content key holds `modelFamily`. A document written under a different family is therefore
-     * unreachable: no key that a caller can compute finds it. The predicate is exact and not a
+     * unreachable. No key that a caller can compute finds it. The predicate is exact and not a
      * heuristic. The operation loses nothing that the system can serve.
      *
      * You can run this method twice. The second run matches nothing.
@@ -627,7 +628,7 @@ In `ExplanationRepository.kt`, after `incrementRequestCount`:
      * **Do not run it while two application versions are live on different families.** Each version
      * deletes the other's documents. `fly.toml` runs one machine. The caller in
      * `Components.bootstrap` also sits behind an explicit flag. A mistake here costs a regeneration
-     * and not a corruption, because the system can reproduce every deleted document from its inputs.
+     * and not a corruption. The system can reproduce every deleted document from its inputs.
      */
     suspend fun deleteWhereModelFamilyIsNot(modelFamily: String): Long =
         collection.deleteMany(Filters.ne("modelFamily", modelFamily)).deletedCount
@@ -785,8 +786,8 @@ In `SessionService.kt`, directly after `createWillGenerate`:
      * Generates this topic's seed when the store holds none. Creates no session.
      *
      * A published topic must have a seed. No other method here can establish that. [create] is the
-     * only other path to a seed, and it also inserts a [LearningSession]. A maintenance loop built
-     * on [create] therefore leaves one abandoned session for each topic.
+     * only other path to a seed. [create] also inserts a [LearningSession]. A maintenance loop
+     * built on [create] therefore leaves one abandoned session for each topic.
      *
      * The method returns true when this call generated the seed. It returns false when this call
      * found one.
@@ -916,8 +917,8 @@ In `Components.kt`, add a `companion object` to the class:
          *
          * This polarity is the opposite of `PrincipalCookieConfig.resolveSecure`. The safe value is
          * also the opposite one. There, an unrecognised value keeps a protection. Here, an
-         * unrecognised value keeps the migration off. The migration deletes documents and it calls
-         * a metered API, so it must never start by accident.
+         * unrecognised value keeps the migration off. The migration deletes documents. It also
+         * calls a metered API. It must never start by accident.
          */
         internal fun resolveMigrateOnBoot(raw: String?): Boolean =
             raw?.trim()?.equals("true", ignoreCase = true) == true
@@ -962,8 +963,8 @@ open class Components(
      * The order is load-bearing. The delete runs first. The first half then cannot delete a seed
      * that the second half generates.
      *
-     * Both halves are idempotent, so a second run is safe. The seeds cost real money. The loop
-     * therefore asks the quota gate before each seed. It stops when the global spend breaker trips.
+     * Both halves are idempotent. A second run is therefore safe. The seeds cost real money. The
+     * loop asks the quota gate before each seed. It stops when the global spend breaker trips.
      * The allowance it names holds a whole catalogue. It also bounds a runaway.
      */
     suspend fun migrate() {
