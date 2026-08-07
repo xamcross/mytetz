@@ -434,9 +434,18 @@ into it four more times.
 **`principals`** needs no schema change. Its `_id` becomes `user:<userId>` for a signed-in learner.
 `PrincipalId` already defines that namespace.
 
-**`topics`** gains one rule. **A topic with `status: "published"` must carry a resolved `seedKey`
-whose explanation document exists.** Publication pre-warms the seed. This rule is what makes an open
-catalogue safe, because an anonymous visitor can then never start a model call.
+**`topics`** gains no field. The learning engine computes a seed key from the slug, the prompt
+version and the model family. `ExplanationGraph.keyFor` does this and `SessionService.createWillGenerate`
+already reports whether the seed exists. A stored `seedKey` would duplicate state that can drift.
+
+The rule is therefore an invariant and not a column. **A published topic must have a seed
+explanation in the store.** A boot-time step generates a missing one.
+
+The invariant is a cost and latency guarantee. It is not a security boundary. An anonymous visitor
+who opens a topic with no seed causes **one** generation for that topic, one time, for every
+visitor after. The exposure without the pre-warm is therefore the size of the catalogue, which is
+29 topics and approximately $0.30, and the existing rate limiter and spend breaker both still
+apply. The pre-warm removes that $0.30 and the cold-start delay that comes with it.
 
 ---
 
@@ -472,7 +481,8 @@ Only the endpoints that can reach the model: `explain` and `quizzes`.
 
 The catalogue, the topic detail, `GET /api/sessions/{id}` and `POST /api/topic-requests` stay open
 behind the rate limiter. `POST /api/sessions` also stays open, because a pre-warmed seed is a cache
-hit that costs nothing. That is what lets an anonymous visitor read real text.
+hit that costs nothing. That is what lets an anonymous visitor read real text. Section 8.3 gives the
+bound that applies when a seed is absent.
 
 ### 9.4 The trail survives the wall
 
@@ -528,7 +538,7 @@ rule for ever.
 | Setting | Value |
 |---|---|
 | `MYTETZ_MODEL_ID` / `MYTETZ_MODEL_FAMILY` | **`claude-sonnet-5`** (was `claude-opus-5`) |
-| `MYTETZ_DAILY_EXPLAINS` | **25** (was 20). It is now the subscriber allowance. |
+| `MYTETZ_DAILY_EXPLAINS` | **25** (was 20). It is now the subscriber allowance. **It changes in B2 and not in B0** — before a gate exists it is the allowance of every anonymous visitor, and raising it early only spends money. |
 | `MYTETZ_TRIAL_GENERATIONS` | 40 |
 | `MYTETZ_TRIAL_DAYS` | 7 |
 | `MYTETZ_GRACE_DAYS` | 3 |
