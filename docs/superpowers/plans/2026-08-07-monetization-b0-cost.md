@@ -14,7 +14,7 @@
 - **No behaviour a learner can see changes in B0.** No existing **assertion** may change, and no existing test may be deleted, renamed or disabled. An assertion that has to change to pass is a signal that the change is not behaviour-neutral — stop and report it.
 - **Widening a test fixture is allowed and expected.** Tasks 3 and 5 each add a parameter to an existing fixture builder, with the current literal as its default, so every existing call site keeps its exact meaning. That is not an edit to a test; it is an addition to a helper. Adding a near-duplicate builder instead is the worse outcome.
 - Write all prose, KDoc and commit message bodies in ASD-STE100 Simplified Technical English. Keep the conventional-commit subject line format. **This rule binds the KDoc in this plan too.** A code block here is a specification of behaviour and not a licence to copy prose that breaks the rule. When a KDoc block in a task looks non-compliant, rewrite it and say so in your report.
-- **The concrete test for "one statement in one sentence":** a sentence must not hold two subjects that each carry their own verb. `"The migration deletes documents, so it must never start by accident"` has two — `the migration` and `it`. Split it: `"The migration deletes documents. It must never start by accident."` A compound predicate on one subject is allowed: `"This function trims the value and returns it"` has one subject. This test is what the reviewer applies, so apply it before you commit.
+- **The concrete test for "one statement in one sentence":** a sentence must not hold two subjects that each carry their own verb. `"The migration deletes documents, so it must never start by accident"` has two — `the migration` and `it`. Split it: `"The migration deletes documents. It must never start by accident."` A compound predicate on one subject is allowed: `"This function trims the value and returns it"` has one subject. The reviewer applies this test. Apply it yourself before you commit. **It binds a `//` comment, an assertion message and prose in `.env.example` as much as it binds a KDoc block.**
 - **Do not add a unique index to `principals` or `costLedger`.** `QuotaRepository.ensureIndexes` explains why: the upsert race resolution depends on it.
 - Every new TTL field is written through `EpochMillisAsBsonDateTime`. A `Long` makes a TTL index do nothing. This slice adds no TTL field, so the rule only matters if you add one.
 - The backend test command is `./gradlew build` from the repository root. It runs 325 tests today.
@@ -352,8 +352,8 @@ Add to `AnthropicLlmClientTest.kt`, at the end of the class:
 
     @Test
     fun `the default model is one Pricing knows`() {
-        // Pricing falls back to the dearest known rate for an unknown model, so a typo in the
-        // default would over-report every cost silently rather than fail. This is the check that
+        // Pricing falls back to the dearest known rate for an unknown model. A typo in the default
+        // would therefore over-report every cost silently rather than fail. This is the check that
         // makes the fallback safe to keep.
         val oneMillionOut = LlmUsage(inputTokens = 0, outputTokens = 1_000_000)
         assertEquals(
@@ -483,16 +483,18 @@ MYTETZ_MODEL_FAMILY=claude-sonnet-5
 Add this comment directly above them:
 
 ```
-# The model, and the family that is hashed into every content key.
+# The model. The family below is hashed into every content key.
 #
 # Sonnet 5 costs $3 and $15 for each 1M tokens. Opus 5 costs $5 and $25. One explanation is about
-# 1000 input tokens and 500 output tokens, so the two cost $0.0105 and $0.0175. At 25 explanations
-# each day the month costs $7.88 and $13.13, against $10.29 of net revenue on a €10 subscription.
+# 1000 input tokens and 500 output tokens. The two therefore cost $0.0105 and $0.0175. At 25
+# explanations each day the month costs $7.88 and $13.13. Net revenue on a €10 subscription is
+# $10.29.
 #
-# CHANGING MYTETZ_MODEL_FAMILY ORPHANS EVERY EXPLANATION IN THE STORE. That is designed behaviour:
-# the family is part of the content key, so a change invalidates the cache with no migration. Read
-# section 13 of docs/superpowers/specs/2026-08-07-monetization-design.md before you change it, and
-# run the migration in MYTETZ_MIGRATE_ON_BOOT below to remove the documents it strands.
+# CHANGING MYTETZ_MODEL_FAMILY ORPHANS EVERY EXPLANATION IN THE STORE. The design intends that.
+# The family is part of the content key. A change therefore invalidates the cache with no
+# migration. Read section 13 of docs/superpowers/specs/2026-08-07-monetization-design.md before you
+# change it. Then run the migration in MYTETZ_MIGRATE_ON_BOOT below. It removes the stranded
+# documents.
 ```
 
 - [ ] **Step 8: Run the whole build**
@@ -587,7 +589,7 @@ Then add these tests at the end of the class:
         assertEquals(
             0,
             repository.deleteWhereModelFamilyIsNot("claude-sonnet-5"),
-            "a second run finds nothing, so an operator can run it twice with no consequence",
+            "a second run finds nothing; an operator can run it twice with no consequence",
         )
     }
 
@@ -665,7 +667,7 @@ The handover records that the explanations collection has no eviction and
 that an earlier key change already left orphans. Moving to claude-sonnet-5
 strands a second set. One predicate removes both.
 
-The method is idempotent, so an operator can run it twice."
+The method is idempotent. An operator can run it twice."
 ```
 
 ---
@@ -695,9 +697,9 @@ Add these at the end of `SessionServiceTest.kt`. The file's `reset()` drops the 
 
         val generated = service.prewarmSeed("quantum-physics") { spent += it }
 
-        assertTrue(generated, "the store held no seed, so one was generated")
+        assertTrue(generated, "the store held no seed; this call generated one")
         assertEquals(1, spent.size, "the cost is reported once, the instant it is known")
-        assertTrue(spent.single() > 0, "FakeLlmClient reports real token counts, so the cost is positive")
+        assertTrue(spent.single() > 0, "FakeLlmClient reports real token counts")
     }
 
     @Test
@@ -845,14 +847,15 @@ git add backend/session/src/main/kotlin/com/mytetz/session/SessionService.kt \
 git commit -m "feat(session): generate a topic's seed without a session
 
 A published topic must have a seed explanation in the store. Only create()
-could make one, and it inserts a learning session as well, so a maintenance
-loop built on it leaves one abandoned session for every topic.
+could make one. It also inserts a learning session. A maintenance loop built
+on it therefore leaves one abandoned session for every topic.
 
 prewarmSeed generates the seed and nothing else. It reports the cost through
-the same onSpend contract create() uses, so the spend ledger sees it.
+the same onSpend contract that create() uses. The spend ledger therefore
+sees it.
 
 It reports true only when it spent. Another caller can persist the key
-between the check and the generation, and that call is then a cache hit."
+between the check and the generation. That call is then a cache hit."
 ```
 
 ---
@@ -1219,15 +1222,14 @@ The model family change strands every explanation and leaves every published
 topic without a seed. Both need fixing on the deployed machine, in that
 order, one time.
 
-The step sits behind MYTETZ_MIGRATE_ON_BOOT and only the exact word true
-turns it on. An unrecognised value means off, which is the opposite polarity
-to the cookie's secure flag, because here the step deletes documents and
-spends money.
+The step sits behind MYTETZ_MIGRATE_ON_BOOT. Only the exact word true turns
+it on. An unrecognised value means off. That polarity is the opposite of the
+cookie's secure flag. Here the step deletes documents. It also spends money.
 
-It is not an unconditional boot step. fly.toml scales to zero, so a boot
-happens on any request after an idle period, and the migration forces the
-lazy model client. An unconditional version would make catalogue browsing
-need ANTHROPIC_API_KEY, which Components' documentation forbids.
+It is not an unconditional boot step. fly.toml scales to zero. A boot
+therefore happens on any request after an idle period. The migration also
+builds the lazy model client. An unconditional version would make catalogue
+browsing need ANTHROPIC_API_KEY. Components' documentation forbids that.
 
 The seed loop asks the quota gate before each generation and stops when the
 spend breaker trips. docs/deploy.md carries the runbook."
