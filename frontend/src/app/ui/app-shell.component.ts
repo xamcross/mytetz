@@ -23,6 +23,7 @@ import { BackendState, StatusDotComponent } from './status-dot.component';
             class="bar__link"
             routerLink="/"
             routerLinkActive="bar__link--active"
+            ariaCurrentWhenActive="page"
             [routerLinkActiveOptions]="{ exact: true }"
             >Topics</a
           >
