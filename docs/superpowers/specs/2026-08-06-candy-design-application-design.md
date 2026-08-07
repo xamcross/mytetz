@@ -8,6 +8,23 @@ This document uses ASD-STE100 Simplified Technical English.
 holds five sections: `2b` and `3a` show mobile, `4a` shows desktop at 1360, `5a` and `5b` show the
 quiz and the Visualize verb. All five use one visual direction. The design calls it **Candy**.
 
+The committed file is stripped: 3,783,458 bytes became 1,359,456 bytes, a saving of 64%. Removed:
+42 of the 52 embedded woff2 subsets. Six families are gone whole — Baloo 2, Bricolage Grotesque,
+Literata, Newsreader, Nunito and Sora — because no section uses one. The devanagari, hebrew,
+vietnamese, cyrillic and greek subsets of the four families the design does use are gone too. Kept:
+the latin and latin-ext subsets of Fredoka, Figtree, Space Grotesk and IBM Plex Mono.
+
+**The vendored Babel is kept, and that was measured and not assumed.** The device frame and the
+browser frame are JSX modules that the runtime transpiles in the page. Drop the bundled Babel and
+the runtime falls back to a fetch from `unpkg.com`; with no network both frames fail to load and the
+rendered DOM loses 60 KB. Babel is 880 KB of the original file, which is 23% of it and not the 3.1
+MB an earlier note claimed — that number is Babel's size after it is decompressed, not in the file.
+The fonts were 2.62 MB, which is 69%.
+
+Verified in a real Chromium with every non-file request blocked: the stripped file renders a DOM
+byte-identical to the original, with no console error, all four sections present, and all six
+loading font faces still loading.
+
 **Parent spec.** `docs/superpowers/specs/2026-08-01-assisted-learning-engine-design.md`. This
 document changes no decision in that spec. It changes how the product looks.
 
@@ -74,7 +91,9 @@ The four files come from the design bundle. Their manifest identifiers are `6dac
 Rules:
 
 - Each `@font-face` keeps the `unicode-range` value from the design, so a Latin reader downloads
-  30 KB and not 64 KB.
+  49 KB and not 64 KB. The two `-latin` files are 20 KB and 29 KB, and a browser skips the two
+  `-latin-ext` files for English content. An earlier draft of this line said 30 KB, which is not
+  what the four files in the table add up to.
 - Each `@font-face` uses `font-display: swap`.
 - `frontend/public/fonts/OFL.txt` holds the licence text. The OFL requires it.
 - No request goes to a third-party host. Cloudflare caches the files with the rest of the origin.
@@ -105,7 +124,7 @@ Every value comes from the design file. `styles.css` declares them on `:root`.
 /* error */
 --mt-err-bg:#fff1ef; --mt-err-border:#ffc4bf; --mt-err-ink:#b83232; --mt-err-ink-2:#8a4b45;
 /* form */
---mt-r-card:26px; --mt-r-panel:22px; --mt-r-tile:20px; --mt-r-row:16px;
+--mt-r-card:26px; --mt-r-panel:22px; --mt-r-row:16px;
 --mt-border-w:2px;
 --mt-lift:0 4px 0 var(--mt-border);
 --mt-lift-card:0 5px 0 var(--mt-border);
@@ -125,8 +144,13 @@ The design keeps one rule. The code must keep it too.
 - **Teal is the current position.** The active nav item, the current trail row, a secondary
   action.
 - **Amber means "look at this".** It never means "click this".
-- **The error family is red-pink.** It is never coral. Coral is a button and red-pink is a
-  problem, and a reader must tell them apart.
+- **An error is told from a coral control by its form, and never by its hue.** `--mt-coral-press`
+  and `--mt-err-ink` measure 1.09:1 against each other. As colours they are the same, and no
+  palette change makes them different. What separates them is the shape they take. A coral primary
+  is a **filled pill with white text**. An error is **dark red text inside a pale pink card with a
+  pink border**. Fill against text, and the pale card, carry the whole distinction. That works for
+  every reader, including a reader with red-green colour blindness, because neither cue is a hue.
+  `palette.spec.ts` asserts all of it.
 
 A component that breaks the rule looks correct and reads wrong. A review must check it.
 
@@ -165,14 +189,21 @@ Four classes, for appearance with no behaviour. Each has tone modifiers.
 
 | Class | Draws | Modifiers |
 |---|---|---|
-| `.mt-card` | Surface, 2px border, radius, offset lift | `--amber`, `--error`, `--flat`, `--dashed` |
-| `.mt-pill` | A control with radius 999px | `--coral`, `--teal`, `--ghost`, `--amber` |
+| `.mt-card` | Surface, 2px border, radius, offset lift | `--amber`, `--error`, `--flat`, `--dashed`, `--raised` |
+| `.mt-pill` | A control with radius 999px | `--coral`, `--teal`, `--ghost` |
 | `.mt-chip` | A small label with radius 999px | `--teal`, `--amber`, `--error` |
 | `.mt-eyebrow` | 11px, weight 800, uppercase, 0.1em tracking | `--coral`, `--amber` |
 
 `.mt-eyebrow--coral` resolves to `--mt-coral-text` and not to `--mt-coral`. An eyebrow is 11px, so
 §3.4 rule 2 applies to it. `.mt-pill--coral` fills with `--mt-coral-press` when its label is below
 18.66px, and with `--mt-coral` at 19px or more. §3.4 rule 3.
+
+`.mt-card--raised` is the design's big card: radius `--mt-r-card` with the deeper `--mt-lift-card`.
+The reader's focus card and the skeleton that stands in for it are one card in two states, so the
+pair lives here and not in each component.
+
+There is no `.mt-pill--amber`. A pill is a control, and §3.3 says amber never means "click this".
+The amber tone stays on `.mt-card--amber` and `.mt-chip--amber`.
 
 The offset lift `0 4px 0 <colour>` is written once, here. The design uses it on eleven elements.
 A change to the look is then one edit and not eleven.
@@ -189,7 +220,8 @@ state.
 - `body`: `background: var(--mt-page)`, `color: var(--mt-ink)`,
   `font-family: var(--mt-body)`, `margin: 0`, `-webkit-font-smoothing: antialiased`.
 - `h1`–`h3`: `font-family: var(--mt-display)`, `font-weight: 600`, `margin: 0`.
-- `:focus-visible`: a 3px `--mt-teal` outline with a 2px offset. No rule sets `outline: none`.
+- `:focus-visible`: a 3px `--mt-teal` outline with a 2px offset. One rule in the project sets
+  `outline: none`, and it names one element that is not a control: `.focus__body`. See §7.6.
 - `a`: `--mt-teal`, with an underline that thickens on hover.
 
 Each page component then holds its own layout only. It holds no colour that a token names.
@@ -297,9 +329,10 @@ the first tile below the fold.
 
 `.mt-card` with 20px padding and radius `--mt-r-panel`. It holds three things:
 
-1. The category, as `.mt-eyebrow`. The first tile in document order uses `.mt-eyebrow--coral`;
-   every other tile uses `--mt-muted`. The design does this to give the grid one accent. The rule
-   is positional, so no tile needs a flag from the API.
+1. The category, as `.mt-eyebrow`, in `--mt-muted`. The design gives the first tile a coral
+   eyebrow, and the code drops it. A coral retry pill is reachable in this same view, and §3.3
+   allows one coral element. The eyebrow is decoration and the pill is the action, so the pill
+   keeps the accent.
 2. The title, Fredoka 23px/600.
 3. The summary, Figtree 14px/500, `--mt-muted`.
 
@@ -415,7 +448,11 @@ padding, and a 3px `--mt-coral` left border. The caret is `--mt-coral` and blink
 | `anchor` (input) | `{ top: number; left: number } \| null` | The position, in the host card's coordinates. |
 | `disabled` (input) | `boolean` | True while a stream runs, or when the body does not match. |
 | `chosen` (output) | `Verb` | The learner picked a verb. |
-| `dismissed` (output) | `void` | Escape, or a click outside. |
+| `dismissed` (output) | `PickerDismissal` | `'escape'` or `'outside-press'`. |
+
+The reason is on the output, and there is no second output for the keyboard path. One output keeps
+every dismissal in one place, so a host cannot subscribe to one path and forget the other. The host
+acts on the reason: see the focus rule below.
 
 #### The four verbs
 
@@ -470,6 +507,21 @@ The name is then short and the caption still reaches a screen reader.
   verb when it opens. `Tab` cycles inside it. `Escape` closes it and returns focus to the body
   paragraph.
 
+**The Tab trap needs two bindings.** Angular builds a full key name from the modifiers a reader
+holds, so `keydown.tab` never fires while Shift is down. The picker binds `keydown.tab` and
+`keydown.shift.tab` to the same handler. With one binding the backward wrap is dead code.
+
+**Only Escape returns focus.** The paragraph carries `tabindex="-1"`, so it can hold focus at all.
+An attribute contributes no character to `textContent`, so §7.4's invariant is untouched. The
+outside-press path returns nothing: it runs inside a `mousedown` listener, and a focus move there
+cancels the drag a learner starts when they reselect a phrase.
+
+**The paragraph draws no focus ring.** Measured in a real Chromium: Escape is a key press, so the
+return does match `:focus-visible`, and a 3px teal ring would draw around 62ch of prose. One rule,
+`.focus__body:focus-visible { outline: none }`, suppresses it for that element alone. The paragraph
+is not a control, and `tabindex="-1"` keeps it out of the Tab order, so no reader can arrive there
+by tabbing and then be lost. Every control keeps its ring, and an end-to-end test asserts that.
+
 #### The hint
 
 `.focus__hint` stays. It is the resting instruction: "Highlight a phrase, then choose how to go
@@ -480,9 +532,9 @@ deeper." When the body does not match the stored explanation it keeps its warnin
 
 | State | Design |
 |---|---|
-| Session load | The rail and the card are framed and empty. The card shows five skeleton bars in `--mt-skeleton`, with the eyebrow "Writing your first explanation" and the indeterminate track. This is the design at `4a`. |
+| Session load | The rail and the card are framed and empty. The card shows five skeleton bars in `--mt-skeleton`, with the eyebrow "Writing your first explanation" and the indeterminate track. This is the design at `4a`. The rail placeholder mirrors the loaded rail state for state: an eyebrow at 768px and above, a `.mt-pill--ghost` below it. Below 768px the rail stacks over the card, so a placeholder of a different height moves the card down when the text lands. The height comes from `.mt-pill` and never from a `min-height`. |
 | Load failed, nothing behind | A full-page `.mt-card--error`, centred, with a retry pill and a "Back to topics" link. |
-| Explain failed, reader behind | A `.mt-card--error` above the breadcrumb. It keeps `.banner--error`, `.banner__message`, `.banner__detail`, `.banner__retry-button` and `.banner__dismiss`. |
+| Explain failed, reader behind | A `.mt-card--error` above the breadcrumb. It keeps `.banner--error`, `.banner__message`, `.banner__detail`, `.banner__retry-button` and `.banner__dismiss`. The retry is `.mt-pill--teal` and not coral: the reader stays on screen behind this banner, so the picker's coral "Explain it" is still reachable, and §3.3 allows one coral control per view. The picker is a dialog that traps Tab, so while it is open it is the whole view and its primary must be unmistakable. The retry is then the secondary action, which is what teal names. The full-page failure below keeps its coral retry, because no picker exists there. |
 | Quota reached | The same error card. The design's "Quiz me instead" action is not rendered, because no quiz exists. The wait, which the server supplies, is stated as it is today. |
 
 ---
@@ -503,6 +555,7 @@ deeper." When the body does not match the stored explanation it keeps its warnin
 | `frontend/src/app/reader/focus-card.component.ts` | It hosts the picker. It keeps the invariant. |
 | `frontend/src/app/reader/trail-rail.component.ts` | Nested pills. The breakpoint moves to 768px. |
 | `frontend/src/app/reader/breadcrumb.component.ts` | Chips. |
+| `frontend/e2e/layout.spec.ts` | New. Every claim that needs a real layout engine. §9.5. |
 | `frontend/angular.json` | Confirm `styles.css` and `public/` are in the build. Both already are. |
 
 No file in `backend/` changes. No route changes. No model changes.
@@ -547,7 +600,30 @@ These selectors are load-bearing. The re-skin must not rename them.
 | `verb-picker` | It opens on a span. It closes on Escape, on an outside click, on a chosen verb, and on a body change. It emits the right `Verb`. Focus moves in and returns. |
 | `catalog` | The category pills come from the loaded topics. A pill and the query combine with AND. |
 | `focus-card` | The invariant test of §7.4 gains a case: the picker's DOM never enters `.focus__body`. |
-| Contrast | A unit test asserts the ratio of each text-on-surface pair in §3.4 against its background. |
+| Contrast | A unit test asserts the ratio of each text-on-surface pair in §3.4 against its background. It also asserts §3.3's real discriminator: the coral fill and the error ink are the same colour, and the two surfaces plus both text pairs are what tell them apart. |
+| Layout | `e2e/layout.spec.ts` asserts every claim that needs a real layout engine. See §9.5. |
+
+### 9.5 The layout suite
+
+The unit suite runs in jsdom, which has no layout engine and no media queries. No unit test there
+can see a position, a breakpoint or a resolved font. `frontend/e2e/layout.spec.ts` holds the claims
+that need a real browser, as assertions and never as an image comparison:
+
+- The tile grid's column count at 390px, 768px and 1360px.
+- The category pill row scrolls sideways at 390px and does not wrap.
+- The wordmark's computed size, weight and family.
+- The trail rail is a column at 768px and a drawer at 390px.
+- The reader does not move when the loaded session replaces the skeleton.
+- The picker opens below a phrase near the top and above one near the bottom.
+- The picker's four edges stay inside the card.
+- The picker is `fixed` at 390px and `absolute` at 1360px.
+- Escape returns focus to the paragraph, and draws no ring there.
+- Every control still draws its 3px teal ring.
+- `Tab` and `Shift+Tab` cycle inside the picker.
+- Every font comes from this origin, and no request reaches a Google Fonts host.
+
+A screenshot baseline is deliberately absent. It breaks on a font rebuild, on a driver update and
+on the machine it runs on, and it reports only "something moved". An assertion names the number.
 
 ### 9.4 What no test can catch
 
@@ -587,19 +663,21 @@ Date: 2026-08-07. Browser: Chromium 151.0.7922.34, run through Playwright 1.62.1
 Counts: MEASURED 19 / SCREENSHOT ONLY 0 / NOT REACHABLE 0. A real Chromium checked every row of
 §9.4's manual pass, at each width the row applies to, with a real assertion — not only a look.
 
-Two rows need a fix. Neither is fixed yet:
+Two rows needed a fix. **Both are fixed**, and each now has a permanent assertion in
+`e2e/layout.spec.ts`:
 
-- Row 9, reader session load: at 390px the page moves down 19px when the loaded session replaces
-  the skeleton. The loaded trail rail is taller than its own skeleton placeholder. This breaks
-  the "the page does not jump" claim.
-- Row 14, Escape: focus returns to `<body>`, not to the body paragraph. `.focus__body` has no
-  `tabindex`, so it cannot receive focus.
+- Row 9, reader session load: at 390px the page moved down 19px when the loaded session replaced
+  the skeleton. The loaded trail rail was taller than its own skeleton placeholder. The
+  placeholder now mirrors the loaded rail state for state. See §7.7.
+- Row 14, Escape: focus returned to `<body>`, not to the body paragraph. `.focus__body` now
+  carries `tabindex="-1"`, and only the Escape path restores focus. See §7.6.
 
 One expectation in Task 8's own brief was stale, and is not a product defect: Step 6 expects four
 font requests, but the design's own unicode-range choice correctly loads only two fonts for
 English text.
 
-Full detail: `.superpowers/sdd/2026-08-06-candy-design-application/task-8-report.md`.
+Full detail: `.superpowers/sdd/2026-08-06-candy-design-application/task-8-report.md`, and the fix
+wave in `final-fix-report.md` beside it.
 
 ---
 
