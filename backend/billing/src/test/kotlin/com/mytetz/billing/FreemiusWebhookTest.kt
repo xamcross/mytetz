@@ -85,6 +85,16 @@ class FreemiusWebhookTest {
     }
 
     @Test
+    fun `an empty secret key refuses rather than raises`() {
+        // verify is public and it takes a raw String. SecretKeySpec raises IllegalArgumentException
+        // on an empty key. A refusal is the correct answer for a caller that holds no key.
+        val body = """{"id":"evt-1","type":"subscription.created","created":1000}""".toByteArray(Charsets.UTF_8)
+        val signature = hmacLowerHex(body, SECRET_KEY)
+
+        assertFalse(FreemiusWebhook.verify(body, signature, ""))
+    }
+
+    @Test
     fun `a signature over a re-serialized body is refused`() {
         val original = """{ "id": "evt-1", "type": "subscription.created", "created": 1000 }"""
             .toByteArray(Charsets.UTF_8)
@@ -134,11 +144,16 @@ class FreemiusWebhookTest {
     // message may carry a secret — are exactly the kind of rule this task's own risk section warns
     // a missing test lets slip through.
 
+    // Each of the three tests below constructs a FreemiusConfig. A test that only called
+    // resolveRequired proved the resolver alone, and left the constructor default free to hand
+    // back a placeholder. These three run in an environment that sets no FREEMIUS_ variable, so
+    // each default reaches the resolver. Kotlin evaluates a default argument only for a parameter
+    // the caller omits, and it evaluates them in declaration order. Each test therefore passes the
+    // fields ahead of the one it tests.
+
     @Test
     fun `a missing Freemius secret key fails construction and names the variable`() {
-        val error = assertFailsWith<IllegalStateException> {
-            FreemiusConfig.resolveRequired(FreemiusConfig.SECRET_KEY_ENV, null)
-        }
+        val error = assertFailsWith<IllegalStateException> { FreemiusConfig() }
 
         assertTrue(error.message.orEmpty().contains(FreemiusConfig.SECRET_KEY_ENV))
     }
@@ -146,7 +161,7 @@ class FreemiusWebhookTest {
     @Test
     fun `a missing Freemius plan id fails construction and names the variable`() {
         val error = assertFailsWith<IllegalStateException> {
-            FreemiusConfig.resolveRequired(FreemiusConfig.PLAN_ID_ENV, null)
+            FreemiusConfig(secretKey = SECRET_KEY, productId = "a-test-product-id")
         }
 
         assertTrue(error.message.orEmpty().contains(FreemiusConfig.PLAN_ID_ENV))
@@ -154,9 +169,26 @@ class FreemiusWebhookTest {
 
     @Test
     fun `a blank Freemius value fails construction the same way a missing one does`() {
+        // A test cannot set an environment variable in this JVM, so the blank value reaches the
+        // resolver directly. The construction below covers the product id default itself.
         assertFailsWith<IllegalStateException> {
             FreemiusConfig.resolveRequired(FreemiusConfig.PRODUCT_ID_ENV, "   ")
         }
+
+        val error = assertFailsWith<IllegalStateException> { FreemiusConfig(secretKey = SECRET_KEY) }
+
+        assertTrue(error.message.orEmpty().contains(FreemiusConfig.PRODUCT_ID_ENV))
+    }
+
+    @Test
+    fun `a FreemiusConfig never prints its secret key`() {
+        val config = FreemiusConfig(secretKey = SECRET_KEY, productId = "a-test-product-id", planId = "a-test-plan-id")
+
+        val printed = config.toString()
+
+        assertFalse(printed.contains(SECRET_KEY), "the secret key reached toString")
+        assertTrue(printed.contains("a-test-product-id"), "toString must still name the fields that are not secret")
+        assertTrue(printed.contains("a-test-plan-id"))
     }
 
     @Test

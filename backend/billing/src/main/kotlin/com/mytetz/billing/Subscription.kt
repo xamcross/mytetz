@@ -54,10 +54,19 @@ enum class SubscriptionStatus { TRIALING, ACTIVE, PAST_DUE, CANCELLED, EXPIRED }
  *
  * [trialEndsAtEpochMillis], [currentPeriodEndsAtEpochMillis] and [graceEndsAtEpochMillis] each
  * belong to one [status]. [Entitlement.resolve] reads only the field that matches the stored
- * status, and it treats a missing date as a reason to refuse, never as a reason to allow.
+ * status. A missing date is a reason to refuse, with one exception: a missing
+ * [currentPeriodEndsAtEpochMillis] on [SubscriptionStatus.ACTIVE] allows. A first-payment webhook
+ * can carry no period end, and a refusal locks out a learner who has paid. See
+ * [Entitlement.resolve] for the full rule.
  *
  * [freemiusUserId] and [freemiusSubscriptionId] hold the identifiers Freemius uses for this
- * learner. A later task writes them.
+ * learner. [BillingService.apply] writes both on every event it applies.
+ *
+ * [lastEventAtEpochMillis] holds the vendor's own stamp on the last event this row applied.
+ * [BillingService.apply] is its only writer, so it always carries a vendor clock reading and never
+ * a server one. [updatedAtEpochMillis] has two writers with two clocks, so an ordering rule that
+ * read that field would compare a vendor stamp against a server stamp. A null value means no event
+ * has landed on this row yet.
  */
 @Serializable
 data class Subscription(
@@ -68,6 +77,7 @@ data class Subscription(
     val graceEndsAtEpochMillis: Long? = null,
     val freemiusUserId: String? = null,
     val freemiusSubscriptionId: String? = null,
+    val lastEventAtEpochMillis: Long? = null,
     val updatedAtEpochMillis: Long,
     val createdAtEpochMillis: Long,
 )

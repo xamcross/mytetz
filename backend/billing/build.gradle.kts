@@ -13,4 +13,8 @@ dependencies {
     implementation(libs.slf4j.api)
     testImplementation(libs.testcontainers.mongodb)
     testImplementation(libs.testcontainers.junit)
+    // BillingServiceTest and EntitlementTest attach a ListAppender straight to the logger, to read
+    // each operator alert token back. This is the technique ErrorMappingTest uses in :backend:api
+    // and MailSenderTest uses in :backend:account.
+    testImplementation(libs.logback.classic)
 }

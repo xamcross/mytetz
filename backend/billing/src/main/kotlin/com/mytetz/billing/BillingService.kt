@@ -97,18 +97,38 @@ class BillingService(
      *
      * ## The order of the checks, and why it does not move
      *
-     * The type is resolved first, against [EVENT_TYPE_TO_STATUS], and the event id is consumed
-     * only after that lookup succeeds. An unknown type logs `BILLING_UNKNOWN_EVENT` and returns
-     * without consuming the id: an operator who later adds the missing type to the map can then
-     * replay the very same event by hand. A consumed id can never be replayed.
+     * Every check that a resend can pass on a later attempt runs **before** the event id is
+     * consumed. A consumed id can never be replayed, so a refusal after that point is final. Three
+     * checks sit ahead of it:
+     *
+     * - The type, against [EVENT_TYPE_TO_STATUS]. An operator who adds a missing type to the map
+     *   can then replay the very same event by hand.
+     * - The event's [FreemiusEvent.userReference].
+     * - The row that reference names. A missing row can be a transient state, because a webhook
+     *   can reach this server before the learner's own first sign-in does.
+     *
+     * Each of the three logs its own alert token and returns without consuming the id.
      *
      * Every check after the id is consumed can return `false` more than once for the same event,
      * because Freemius may resend it and the vendor documents no retry policy this class may rely
      * on. [BillingRepository.insertEventIfAbsent] is what stops a resend from changing the row a
      * second time.
      *
-     * A write older than the row's own [Subscription.updatedAtEpochMillis] is dropped, so a
-     * renewal-failure webhook that arrives late cannot undo a renewal that already landed.
+     * ## The ordering rule
+     *
+     * An event older than the row's own [Subscription.lastEventAtEpochMillis] is dropped, so a
+     * renewal-failure webhook that arrives late cannot undo a renewal that already landed. The
+     * comparison reads [Subscription.lastEventAtEpochMillis] and not
+     * [Subscription.updatedAtEpochMillis]: this method is the only writer of that field, so both
+     * sides of the comparison come from the vendor's clock. A null value means no event has landed
+     * on this row yet, and a first event is therefore never dropped. Ordinary skew between the
+     * server clock and the vendor clock would otherwise refuse a first payment.
+     *
+     * The rule is strict. An event that shares a millisecond with the last one is applied.
+     *
+     * A drop logs `BILLING_STALE_EVENT`. The event id is already consumed at that point, so the
+     * vendor's own resend cannot recover the change. The log line is then the only record that a
+     * paid event reached this server, and an operator needs it to correct the row by hand.
      */
     suspend fun apply(event: FreemiusEvent): Boolean {
         val status = EVENT_TYPE_TO_STATUS[event.type]
@@ -116,8 +136,6 @@ class BillingService(
             log.warn("BILLING_UNKNOWN_EVENT type={} id={}", event.type, event.id)
             return false
         }
-
-        if (!repository.insertEventIfAbsent(event.id, clock())) return false
 
         val userId = event.userReference
         if (userId == null) {
@@ -131,12 +149,28 @@ class BillingService(
             return false
         }
 
-        if (event.occurredAtEpochMillis < stored.updatedAtEpochMillis) return false
+        if (!repository.insertEventIfAbsent(event.id, clock())) return false
 
-        val updated = when (status) {
+        val lastEventAt = stored.lastEventAtEpochMillis
+        if (lastEventAt != null && event.occurredAtEpochMillis < lastEventAt) {
+            log.warn(
+                "BILLING_STALE_EVENT id={} type={} occurredAt={} lastEventAt={}",
+                event.id,
+                event.type,
+                event.occurredAtEpochMillis,
+                lastEventAt,
+            )
+            return false
+        }
+
+        val moved = when (status) {
+            // A new period end replaces the stored one. An event that carries none keeps the date
+            // the row already holds. A null here would delete a good date, and
+            // Entitlement.resolveActive reads a null period end on ACTIVE as a permanent allowance.
             SubscriptionStatus.ACTIVE -> stored.copy(
                 status = SubscriptionStatus.ACTIVE,
-                currentPeriodEndsAtEpochMillis = event.periodEndsAtEpochMillis,
+                currentPeriodEndsAtEpochMillis =
+                    event.periodEndsAtEpochMillis ?: stored.currentPeriodEndsAtEpochMillis,
                 updatedAtEpochMillis = event.occurredAtEpochMillis,
             )
             SubscriptionStatus.PAST_DUE -> stored.copy(
@@ -156,6 +190,15 @@ class BillingService(
             )
             SubscriptionStatus.TRIALING -> return false // unreachable: EVENT_TYPE_TO_STATUS never maps here.
         }
+
+        // Every applied event writes both vendor ids, and an event that carries neither keeps the
+        // stored ones — the same rule as the period end above. Task 12's reconciliation asks
+        // Freemius about each row, and it needs a vendor id to ask with.
+        val updated = moved.copy(
+            freemiusUserId = event.freemiusUserId ?: stored.freemiusUserId,
+            freemiusSubscriptionId = event.freemiusSubscriptionId ?: stored.freemiusSubscriptionId,
+            lastEventAtEpochMillis = event.occurredAtEpochMillis,
+        )
 
         repository.upsert(updated)
         return true

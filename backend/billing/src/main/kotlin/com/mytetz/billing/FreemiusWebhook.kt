@@ -27,6 +27,16 @@ data class FreemiusConfig(
     val planId: String = resolveRequired(PLAN_ID_ENV, System.getenv(PLAN_ID_ENV)),
 ) {
 
+    /**
+     * Names each field and prints only two of the three values.
+     *
+     * A `data class` generates a `toString()` that prints every field, and [secretKey] is a secret.
+     * One log line, one exception message, or one debugger view then carries the key that signs
+     * every webhook. This override is what keeps that key out of all three.
+     */
+    override fun toString(): String =
+        "FreemiusConfig(secretKey=REDACTED, productId=$productId, planId=$planId)"
+
     companion object {
 
         const val SECRET_KEY_ENV: String = "FREEMIUS_SECRET_KEY"
@@ -105,9 +115,15 @@ object FreemiusWebhook {
      * the same [constantTimeEquals] comparison a correct header would reach. A length check ahead
      * of that comparison would let a caller learn the true signature's length one guess at a time;
      * there is no such check here.
+     *
+     * An empty [secretKey] is refused too. This function is public and it takes a raw `String`, so
+     * a caller can reach it with a key [FreemiusConfig] never built. `SecretKeySpec` raises
+     * `IllegalArgumentException` on an empty key. A refusal is the correct answer here, and it also
+     * keeps the key out of an exception this function would otherwise let through.
      */
     fun verify(rawBody: ByteArray, signatureHeader: String?, secretKey: String): Boolean {
         if (signatureHeader.isNullOrBlank()) return false
+        if (secretKey.isEmpty()) return false
 
         val expected = hmacLowerHex(rawBody, secretKey)
         return constantTimeEquals(expected, signatureHeader)

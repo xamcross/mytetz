@@ -1,9 +1,14 @@
 package com.mytetz.billing
 
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
 import com.mytetz.quota.Allowance
+import org.slf4j.LoggerFactory
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 
 /**
  * [Entitlement.resolve] decides who pays, so every boundary here is crossed at one millisecond
@@ -152,6 +157,28 @@ class EntitlementTest {
 
         assertIs<EntitlementDecision.Allowed>(decision)
         assertEquals(SubscriptionStatus.ACTIVE, decision.status)
+    }
+
+    @Test
+    fun `an active subscription with no period end raises the operator alert`() {
+        // This branch allows a learner for ever. The alert token is the only signal an operator
+        // gets. A rename of the token removes that alert, and every other test here stays green.
+        val row = subscription(SubscriptionStatus.ACTIVE, currentPeriodEndsAt = null)
+        val appender = ListAppender<ILoggingEvent>().apply { start() }
+        val logger = LoggerFactory.getLogger(Entitlement::class.java) as ch.qos.logback.classic.Logger
+        logger.addAppender(appender)
+
+        try {
+            Entitlement.resolve(row, CREATED, config)
+        } finally {
+            logger.detachAppender(appender)
+        }
+
+        val logged = assertNotNull(
+            appender.list.firstOrNull { it.formattedMessage.contains("BILLING_NO_PERIOD_END") },
+            "a missing period end was not logged: ${appender.list.map { it.formattedMessage }}",
+        )
+        assertTrue(logged.formattedMessage.contains("u1"), "the log line must name the user")
     }
 
     // ------------------------------------------------------------------ cancelled
