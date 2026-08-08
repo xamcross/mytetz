@@ -904,8 +904,36 @@ Subject: `feat(billing): verify and apply Freemius webhook events`
 
 | Method | Path | Answer |
 |---|---|---|
-| `POST` | `/api/billing/checkout` | `200 {"url": "..."}` with the user id as the reference, or `401` |
+| `POST` | `/api/billing/checkout` | `200 {"url": "..."}` carrying the learner's email, or `401` |
 | `POST` | `/api/billing/webhook` | `204` on success, `401` on a bad signature, `204` on a duplicate |
+
+**The checkout link is a plain URL, and the learner's email is what joins it to an account.**
+Read from the vendor documentation, not assumed:
+
+```
+https://checkout.freemius.com/product/{productId}/plan/{planId}/?user_email={email}&readonly_user=true
+```
+
+No API call creates a session. The server builds this string and answers it. `readonly_user=true`
+stops the learner changing the address at the till, which is what keeps the join reliable.
+
+**Freemius documents no arbitrary metadata parameter.** The plan and task 11 both assumed a
+`custom` field would carry our user id to the webhook and back. The vendor documents
+`affiliate_user_id` and nothing else of that kind. The documented purchase data is `user_id`,
+`plan_id` and `email`.
+
+So **email is the join key**, and `readonly_user=true` is what makes it trustworthy.
+`AccountRepository` already holds a unique index on `email`, and `MagicLinkService.normaliseEmail`
+trims and lowercases without stripping a dot or a plus tag. Apply that same normalisation to both
+sides of this join.
+
+`BillingService.apply` keeps `userReference` as its first choice, because the field may yet exist
+under a name an operator confirms. When it is absent, the API layer resolves the event's email to a
+user id and passes that. **`backend:billing` must not depend on `backend:account`** — the resolver
+is a `suspend (String) -> String?` the route supplies.
+
+An event whose email matches no account logs `BILLING_UNKNOWN_USER` and changes nothing. That is
+a learner who paid with an address they never signed in with, and it needs an operator.
 
 **The webhook route must read the raw body before any content negotiation touches it.** In Ktor, take `call.receiveChannel().toByteArray()` and parse afterwards. A route that accepts a deserialized object cannot verify the signature.
 
@@ -927,7 +955,10 @@ Required test names:
 
 ```
 `checkout answers 401 when signed out`
-`checkout returns a url carrying the user reference`
+`checkout returns a url carrying the learner's email`
+`the checkout url marks the address read-only`
+`an event with no user reference resolves by email`
+`an event whose email matches no account changes nothing`
 `the webhook route reads the raw body`
 `the webhook refuses a bad signature with 401`
 `the webhook answers 204 for a duplicate event`
