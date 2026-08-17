@@ -226,8 +226,8 @@ machine on demand.
 **`--ha=false` is not optional if you want to stay on one machine.** On a first
 deploy flyctl creates **two** machines for high availability and says the way to
 stop that is `min_machines_running = 0` — that advice is wrong; this `fly.toml`
-already sets it and flyctl still made two. Only `--ha=false` prevents it. If you
-end up with two anyway:
+set it to 0 at the time and flyctl still made two. Only `--ha=false` prevents it.
+If you end up with two anyway:
 
 ```bash
 fly scale count 1 --app mytetz --yes
@@ -241,10 +241,10 @@ than that, the runtime stage has probably stopped being a JRE stage.
 `fly.toml` declares an HTTP health check on `/api/health` every 30s. A deploy that
 never passes that check is rolled back by fly automatically.
 
-Because `min_machines_running = 0` and `auto_stop_machines = "stop"`, the machine
-stops when idle and the fly proxy cold-starts it on the next request. The first
-request after an idle period pays JVM startup plus the initial Atlas handshake.
-Set `min_machines_running = 1` if that latency ever matters more than the cost.
+`auto_stop_machines = "off"` keeps the machine up, so no visitor waits for a cold
+start. The machine boots only on a deploy, on a crash, or when you restart it by
+hand. It scaled to zero until 2026-08-18, and the comment in `fly.toml` records the
+outage that ended it. Read that comment before you set this back to `"stop"`.
 
 ### Rollback
 
@@ -366,10 +366,9 @@ Do this one time, after the deployment that carries the `claude-sonnet-5` defaul
    fly secrets unset MYTETZ_MIGRATE_ON_BOOT --app mytetz
    ```
 
-   The flag is not run-once. `fly.toml` sets `auto_stop_machines = "stop"` and
-   `min_machines_running = 0`. The machine therefore stops when idle. The fly proxy starts it
-   again on the next request. Every cold start between step 2 and this step re-runs the whole
-   migration.
+   The flag is not run-once. `fly.toml` sets `auto_stop_machines = "off"`, so the machine no
+   longer stops when it is idle. A deploy, a crash or a manual restart still boots it. Every
+   boot between step 2 and this step re-runs the whole migration.
 
    A topic can fail after its model call. That topic still spent money. The migration does not
    persist a failed generation. The next cold start spends money on that topic again. The real

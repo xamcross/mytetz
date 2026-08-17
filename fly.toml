@@ -32,10 +32,23 @@ primary_region = "fra"
 [http_service]
   internal_port = 8080
   force_https = true
-  # Scale to zero when idle; the proxy restarts the machine on the next request.
-  auto_stop_machines = "stop"
+  # The machine stays up. It does not scale to zero, and that is deliberate.
+  #
+  # Scale to zero held this app down for about 24 hours from 2026-08-16. The failure is a loop:
+  #   1. A bot scan for /wp-includes/ paths wakes the machine about every 38 seconds.
+  #   2. The JVM needs several minutes on a throttled shared-cpu-1x to bind port 8080.
+  #   3. The proxy serves no traffic in that time, calls the machine idle, and stops it mid-boot.
+  #   4. The next scan repeats the cycle. The app never binds, so every request gets a 503.
+  #
+  # The machine ran 96% of the time in that state, so scale to zero also saved almost nothing:
+  # fly bills a started machine by the clock and not by its load.
+  #
+  # "off" stops the proxy from ever stopping the machine, which breaks the loop at step 3.
+  # min_machines_running is inert while auto_stop_machines is "off". It is 1 so that a later
+  # change back to "stop" keeps one machine up rather than none.
+  auto_stop_machines = "off"
   auto_start_machines = true
-  min_machines_running = 0
+  min_machines_running = 1
 
   [http_service.http_options.response.headers]
     X-Content-Type-Options = "nosniff"
