@@ -177,26 +177,130 @@ describe('AccountPageComponent', () => {
     expect(store.view()).toEqual(active);
   });
 
-  it('manage subscription and delete account are present and inert', async () => {
-    // Neither button has a backend route to call yet — see the class doc comment. This test
-    // clicks both buttons and checks that no request goes out. A check of the markup alone is
-    // not enough proof.
+  it('manage subscription is present and inert', async () => {
+    // No backend route confirms a manage link yet — see the class doc comment. This test clicks
+    // the button and checks that no request goes out. A check of the markup alone is not proof.
     await mount((req) => req.flush(active));
 
     const manage = fixture.nativeElement.querySelector(
       '[data-action="manage-subscription"]',
     ) as HTMLButtonElement;
+
+    expect(manage.disabled).toBe(true);
+
+    manage.click();
+
+    http.expectNone('/api/billing/checkout');
+  });
+
+  it('delete account opens a confirmation panel instead of sending a request at once', async () => {
+    await mount((req) => req.flush(active));
+
     const del = fixture.nativeElement.querySelector(
       '[data-action="delete-account"]',
     ) as HTMLButtonElement;
-
-    expect(manage.disabled).toBe(true);
-    expect(del.disabled).toBe(true);
-
-    manage.click();
     del.click();
+    fixture.detectChanges();
 
-    http.expectNone('/api/billing/checkout');
     http.expectNone('/api/account/delete');
+    expect(
+      fixture.nativeElement.querySelector('[data-action="delete-account-confirm"]'),
+    ).not.toBeNull();
+    expect(text()).toContain('This cannot be undone');
+  });
+
+  it('cancelling the confirmation panel sends no request and closes it', async () => {
+    await mount((req) => req.flush(active));
+
+    (
+      fixture.nativeElement.querySelector('[data-action="delete-account"]') as HTMLButtonElement
+    ).click();
+    fixture.detectChanges();
+    (
+      fixture.nativeElement.querySelector(
+        '[data-action="delete-account-cancel"]',
+      ) as HTMLButtonElement
+    ).click();
+    fixture.detectChanges();
+
+    http.expectNone('/api/account/delete');
+    expect(
+      fixture.nativeElement.querySelector('[data-action="delete-account-confirm"]'),
+    ).toBeNull();
+    expect(fixture.nativeElement.querySelector('[data-action="delete-account"]')).not.toBeNull();
+  });
+
+  it('confirming deletion posts to the delete route and ends signed out', async () => {
+    await mount((req) => req.flush(active));
+
+    (
+      fixture.nativeElement.querySelector('[data-action="delete-account"]') as HTMLButtonElement
+    ).click();
+    fixture.detectChanges();
+    (
+      fixture.nativeElement.querySelector(
+        '[data-action="delete-account-confirm"]',
+      ) as HTMLButtonElement
+    ).click();
+
+    const deleteReq = http.expectOne('/api/account/delete');
+    expect(deleteReq.request.method).toBe('POST');
+    deleteReq.flush(null, { status: 204, statusText: 'No Content' });
+    await fixture.whenStable();
+
+    // The same rule `signOut` follows: the server clears the cookie, the next read answers 401,
+    // and the store clears the view on that 401 — no separate "deleted" state to keep in step.
+    http.expectOne('/api/account').flush(signedOut, { status: 401, statusText: '' });
+    await fixture.whenStable();
+
+    expect(store.view()).toBeNull();
+  });
+
+  it('a stale-session refusal tells the learner to sign in again', async () => {
+    await mount((req) => req.flush(active));
+
+    (
+      fixture.nativeElement.querySelector('[data-action="delete-account"]') as HTMLButtonElement
+    ).click();
+    fixture.detectChanges();
+    (
+      fixture.nativeElement.querySelector(
+        '[data-action="delete-account-confirm"]',
+      ) as HTMLButtonElement
+    ).click();
+
+    http
+      .expectOne('/api/account/delete')
+      .flush(
+        { code: 'CONFIRMATION_REQUIRED', message: 'sign in again' },
+        { status: 403, statusText: 'Forbidden' },
+      );
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(text()).toContain('Sign in again');
+    // The account view must survive a refused deletion — nothing was deleted.
+    expect(store.view()).toEqual(active);
+  });
+
+  it('a failed delete request reports a generic error and leaves the account in place', async () => {
+    await mount((req) => req.flush(active));
+
+    (
+      fixture.nativeElement.querySelector('[data-action="delete-account"]') as HTMLButtonElement
+    ).click();
+    fixture.detectChanges();
+    (
+      fixture.nativeElement.querySelector(
+        '[data-action="delete-account-confirm"]',
+      ) as HTMLButtonElement
+    ).click();
+
+    http.expectOne('/api/account/delete').flush(null, { status: 500, statusText: 'Server Error' });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(text()).toContain('Could not delete your account');
+    expect(store.view()).toEqual(active);
   });
 });

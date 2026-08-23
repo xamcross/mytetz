@@ -10,6 +10,8 @@ import com.mytetz.billing.EntitlementDecision
 import com.mytetz.quota.PrincipalId
 import com.mytetz.quota.QuotaRepository
 import com.mytetz.session.SessionService
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.cio.CIO
 import io.ktor.http.Cookie
 import io.ktor.http.CookieEncoding
 import io.ktor.http.HttpHeaders
@@ -54,7 +56,7 @@ private const val GOOGLE_STATE_COOKIE = "mytetz_g_state"
 private const val GOOGLE_VERIFIER_COOKIE = "mytetz_g_verifier"
 
 @Serializable
-data class MagicLinkRequest(val email: String)
+data class MagicLinkRequest(val email: String, val turnstileToken: String? = null)
 
 /**
  * The view `GET /api/account` answers.
@@ -76,8 +78,8 @@ data class AccountView(
 
 /**
  * `POST /api/auth/magic-link`, `GET /api/auth/magic-link/{token}`, `GET /api/auth/google`,
- * `GET /api/auth/google/callback`, `POST /api/auth/sign-out`, `POST /api/auth/sign-out-all`, and
- * `GET /api/account`.
+ * `GET /api/auth/google/callback`, `POST /api/auth/sign-out`, `POST /api/auth/sign-out-all`,
+ * `GET /api/account`, and `POST /api/account/delete`.
  *
  * ## Sign-in carries the anonymous trail
  *
@@ -100,11 +102,31 @@ data class AccountView(
  * on the very session they were reading, because the write agreed with this file and the read did
  * not.
  *
+ * ## Where Turnstile sits, and why not literally at the Google callback
+ *
+ * [turnstile] is asked to verify a token in front of `POST /api/auth/magic-link`, where the token
+ * travels in the request body the caller's own page just built. The Google flow gets the same
+ * check at `GET /api/auth/google` — the point our own frontend calls, and the last point before the
+ * browser leaves for Google entirely — and **not** at `GET /api/auth/google/callback`. A Turnstile
+ * token is short-lived and single-use; the callback fires only after a full round trip through
+ * Google's own sign-in pages, by which time a token minted before that trip has already expired or
+ * been consumed. Verifying at the start of the flow protects the same sign-up path the callback
+ * would have, and is the only place in this round trip a fresh token can actually arrive.
+ *
+ * ## The trial cap sits on [completeSignIn], and only for a caller with no row yet
+ *
+ * [completeSignIn] resolves the caller's own IP bucket through [ClientAddress] and passes it to
+ * [BillingService.startTrialIfAbsent]. That method's own KDoc holds the cap's full contract: it
+ * refuses only a *fresh* trial, never a returning learner's own row, and a refused caller still
+ * signs in — see [BillingService.startTrialIfAbsent] for why "not refused outright" is a structural
+ * property of that method's return type, and not a check this file has to remember to make.
+ *
  * [sessions], [magicLink] and [google] are factories and not the built services, for the reason
  * `SessionRoutes.kt` gives at length for its own `sessions` parameter: `Components.magicLink` and
  * `Components.googleOAuth` are each `by lazy` on a chain that can throw when a credential is
  * missing, and passing the built value would force that chain while `Application.module()` is still
  * being configured — taking down the catalogue for a deployment that never uses sign-in at all.
+ * [turnstile] carries no such chain — see `Components.turnstile`'s own KDoc — so it is passed built.
  */
 fun Route.authRoutes(
     account: AccountService,
@@ -114,6 +136,11 @@ fun Route.authRoutes(
     cookies: PrincipalCookieConfig,
     quotaRepository: QuotaRepository,
     billing: BillingService,
+    // Defaults to a Turnstile with no secret, which never opens a connection — see [Turnstile]'s
+    // own KDoc. This lets a test that has nothing to do with Turnstile, such as this file's own
+    // sibling suites `SessionRoutesTest` and `BillingRoutesTest`, build `authRoutes` without
+    // naming it, the same way [clientAddresses] already defaults for a caller that does not care.
+    turnstile: Turnstile = Turnstile(HttpClient(CIO), secretKey = null),
     clientAddresses: ClientAddressConfig = ClientAddressConfig(),
     clock: () -> Long = System::currentTimeMillis,
     magicLinkIpLimiter: FixedWindowRateLimiter = FixedWindowRateLimiter(
@@ -131,6 +158,15 @@ fun Route.authRoutes(
 
         val caller = ClientAddress.of(call, clientAddresses)
         val request = call.receive<MagicLinkRequest>()
+
+        if (!turnstile.verify(request.turnstileToken, caller)) {
+            call.respond(
+                HttpStatusCode.Forbidden,
+                ApiError("TURNSTILE_FAILED", "verification failed; reload the page and try again"),
+            )
+            return@post
+        }
+
         val addressKey = request.email.trim().lowercase()
 
         // Both limiters are checked, not short-circuited, so a caller past one limit still spends
@@ -166,11 +202,18 @@ fun Route.authRoutes(
         }
 
         val user = account.findOrCreateByEmail(email)
-        call.completeSignIn(account, sessions, cookies, billing, user)
+        call.completeSignIn(account, sessions, cookies, billing, user, ClientAddress.of(call, clientAddresses))
         call.respondRedirect("/")
     }
 
     get("/api/auth/google") {
+        val caller = ClientAddress.of(call, clientAddresses)
+        if (!turnstile.verify(call.request.queryParameters["turnstileToken"], caller)) {
+            log.info("google sign-in refused a failed Turnstile check")
+            call.respondRedirect("/auth?auth=failed")
+            return@get
+        }
+
         val state = randomUrlSafeToken()
         val verifier = randomUrlSafeToken()
         val challenge = pkceChallenge(verifier)
@@ -202,7 +245,7 @@ fun Route.authRoutes(
         try {
             val identity = google().exchange(code, verifier)
             val user = account.linkGoogle(identity)
-            call.completeSignIn(account, sessions, cookies, billing, user)
+            call.completeSignIn(account, sessions, cookies, billing, user, ClientAddress.of(call, clientAddresses))
             call.respondRedirect("/")
         } catch (e: CancellationException) {
             throw e
@@ -239,6 +282,71 @@ fun Route.authRoutes(
         }
         call.respond(accountViewFor(user, quotaRepository, billing, clock()))
     }
+
+    /**
+     * Deletes the signed-in learner's account.
+     *
+     * ## What it removes, and what it does not
+     *
+     * - The user row and every authentication session — [AccountService.deleteAccount].
+     * - Every learning session the deleted principal owns — [SessionService.deleteForPrincipal].
+     * - The principal's quota counter — [QuotaRepository.resetCounter], the same method
+     *   `QuotaService.alignWindow` already uses to drop a stale counter.
+     * - **No quiz attempt exists to remove.** The specification names one; this codebase has no
+     *   `POST /api/sessions/{id}/quizzes` route and no quiz-attempt collection yet — see the design
+     *   spec's own "when that route exists" hedge on the same feature. A future task that adds
+     *   quizzes must add its own deletion here.
+     * - **No explanation is ever removed.** An explanation is user-independent and holds nothing
+     *   personal; two learners who reach the same span by the same path share one document, so
+     *   deleting it here would destroy content every other learner reads. This is the one line the
+     *   brief states as an absolute, and it is why this route never touches `explanations`.
+     *
+     * ## The confirmation, and why it needs no token field of its own
+     *
+     * The specification asks for "a fresh confirmation token, minted by a second magic link."
+     * [AccountService.isFreshSession] is that check: a session is only as fresh as
+     * [MagicLinkService.TTL_MILLIS] allows, the same window a magic link itself carries, so
+     * confirming a deletion is exactly "sign in again" — a second pass through the unmodified
+     * magic-link machinery (or Google; both call [completeSignIn] and both mint an equally fresh
+     * session). No separate token needs to reach the browser or travel back in this route's own
+     * request body: the freshly-opened session **is** the confirmation, read straight off
+     * [AuthSession.createdAtEpochMillis] through the session id the caller's cookie already
+     * carries. A learner who deletes their account right after signing in needs no second
+     * round trip at all; one who returns to a week-old tab is asked to sign in again first.
+     *
+     * A stale session answers `403 CONFIRMATION_REQUIRED` and changes nothing — not the account, not
+     * the cookie. The caller is still signed in, exactly as they were before asking.
+     */
+    post("/api/account/delete") {
+        val sessionId = Principals.readSessionId(call, cookies)
+        val user = sessionId?.let { account.resolveSession(it) }
+        if (sessionId == null || user == null) {
+            call.respond(
+                HttpStatusCode.Unauthorized,
+                ApiError("SIGN_IN_REQUIRED", "sign in to delete your account"),
+            )
+            return@post
+        }
+
+        if (!account.isFreshSession(sessionId, clock())) {
+            call.respond(
+                HttpStatusCode.Forbidden,
+                ApiError(
+                    "CONFIRMATION_REQUIRED",
+                    "sign in again through a fresh magic link, then delete your account right away",
+                ),
+            )
+            return@post
+        }
+
+        val principalId = PrincipalId.user(user.id).value
+        sessions().deleteForPrincipal(principalId)
+        quotaRepository.resetCounter(principalId)
+        account.deleteAccount(user.id)
+
+        Principals.clearSessionCookie(call, cookies)
+        call.respond(HttpStatusCode.NoContent)
+    }
 }
 
 /**
@@ -250,7 +358,12 @@ fun Route.authRoutes(
  * [BillingService.startTrialIfAbsent] is called last and unconditionally, because both callers of
  * this function — the magic-link route and the Google route — are the two places a sign-in
  * completes, and a trial that started only on one of them would leave a learner without one who
- * happened to choose the other.
+ * happened to choose the other. Its result is discarded here: a capped [ipBucket] returns null and
+ * this sign-in still succeeds with no trial, exactly as that method's own KDoc describes. Nothing
+ * in this function needs to branch on the answer — the absence of a subscription row is itself the
+ * "offer checkout instead" state every other route already reads correctly.
+ *
+ * [ipBucket] identifies the caller for the trial cap only. It plays no part in the sign-in itself.
  */
 private suspend fun ApplicationCall.completeSignIn(
     account: AccountService,
@@ -258,12 +371,13 @@ private suspend fun ApplicationCall.completeSignIn(
     cookies: PrincipalCookieConfig,
     billing: BillingService,
     user: User,
+    ipBucket: String,
 ) {
     val anonymousPrincipal = Principals.resolve(this, cookies)
     val sessionId = account.openSession(user.id)
     Principals.setSessionCookie(this, cookies, sessionId)
     sessions().reassignPrincipal(anonymousPrincipal.value, PrincipalId.user(user.id).value)
-    billing.startTrialIfAbsent(user.id)
+    billing.startTrialIfAbsent(user.id, ipBucket)
 }
 
 /**

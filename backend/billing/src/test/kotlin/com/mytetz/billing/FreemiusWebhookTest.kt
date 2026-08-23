@@ -169,13 +169,19 @@ class FreemiusWebhookTest {
 
     @Test
     fun `a blank Freemius value fails construction the same way a missing one does`() {
-        // A test cannot set an environment variable in this JVM, so the blank value reaches the
-        // resolver directly. The construction below covers the product id default itself.
+        // Both halves call the resolver directly. A shell may export FREEMIUS_PRODUCT_ID — this
+        // task's own credentialed verification run does — and FreemiusConfig's own productId
+        // default reads that exact variable. `FreemiusConfig(secretKey = SECRET_KEY)` would then
+        // build a working config and throw nothing, and the assertion below would fail for a
+        // reason that has nothing to do with a blank value. A test must not depend on the
+        // developer's shell. See `FreemiusApiClientTest` and `ComponentsTest` for the same fix.
         assertFailsWith<IllegalStateException> {
             FreemiusConfig.resolveRequired(FreemiusConfig.PRODUCT_ID_ENV, "   ")
         }
 
-        val error = assertFailsWith<IllegalStateException> { FreemiusConfig(secretKey = SECRET_KEY) }
+        val error = assertFailsWith<IllegalStateException> {
+            FreemiusConfig.resolveRequired(FreemiusConfig.PRODUCT_ID_ENV, null)
+        }
 
         assertTrue(error.message.orEmpty().contains(FreemiusConfig.PRODUCT_ID_ENV))
     }

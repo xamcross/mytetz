@@ -96,4 +96,15 @@ class SessionRepository(database: MongoDatabase) {
         val result = collection.updateMany(Filters.eq("principalId", from), Updates.set("principalId", to))
         return result.modifiedCount
     }
+
+    /**
+     * Removes every session document that carries [principalId]. Reports how many it removed.
+     *
+     * Account deletion is the caller. It touches only this collection: an explanation is
+     * user-independent and holds nothing personal, so removing one here would destroy content
+     * every other learner shares — see `com.mytetz.api.AuthRoutes`'s own KDoc on
+     * `POST /api/account/delete` for the full scope of what an account deletion removes.
+     */
+    suspend fun deleteForPrincipal(principalId: String): Long =
+        collection.deleteMany(Filters.eq("principalId", principalId)).deletedCount
 }

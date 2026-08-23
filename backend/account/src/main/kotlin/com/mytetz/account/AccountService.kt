@@ -137,6 +137,42 @@ class AccountService(
     /** Removes every session that belongs to [userId]. Reports how many it removed. */
     suspend fun closeAllSessions(userId: String): Long = repository.deleteSessionsForUser(userId)
 
+    /**
+     * True when [sessionId] was created within [MagicLinkService.TTL_MILLIS] of
+     * [nowEpochMillis].
+     *
+     * `POST /api/account/delete` calls this before it destroys an account — see that route's own
+     * KDoc in `com.mytetz.api.AuthRoutes` for the full argument. A session this fresh proves the
+     * caller has just completed a sign-in, the same proof of account control a fresh magic link
+     * itself gives. This is why the window matches [MagicLinkService.TTL_MILLIS] rather than a
+     * second, independent constant: a "second magic link" and "a session this fresh" are the same
+     * fact, seen from the two ends of one sign-in.
+     *
+     * An old session, even one still valid for ordinary reading, does not count: a learner who
+     * signed in a week ago and left a tab open must sign in again to confirm a deletion.
+     *
+     * Returns false, rather than throwing, for a session id that names no stored session. The
+     * caller has already resolved a user from this same id, so an absent session here only means
+     * the two reads raced against a sign-out between them. False is the safe answer: it refuses
+     * the deletion instead of allowing one nothing can vouch for.
+     */
+    suspend fun isFreshSession(sessionId: String, nowEpochMillis: Long): Boolean {
+        val session = repository.findSession(sessionId) ?: return false
+        return nowEpochMillis - session.createdAtEpochMillis <= MagicLinkService.TTL_MILLIS
+    }
+
+    /**
+     * Deletes the user row and every authentication session for [userId].
+     *
+     * `POST /api/account/delete` calls this last, once every other store this codebase can reach
+     * has already been cleared — see that route's own KDoc for the full scope of an account
+     * deletion. This method covers only the two collections this module owns.
+     */
+    suspend fun deleteAccount(userId: String) {
+        repository.deleteSessionsForUser(userId)
+        repository.deleteUser(userId)
+    }
+
     companion object {
 
         /** How long a session lasts from its last slide. 30 days. */

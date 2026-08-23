@@ -93,6 +93,12 @@ open class Components(
     // test asserts. See `ComponentsTest`'s `bootstrap runs reconciliation with no Freemius
     // credential and does not throw`.
     freemiusApiClientFactory: () -> FreemiusApiClient = { FreemiusApiClient(HttpClient(CIO), FreemiusApiConfig()) },
+    // A factory, for the same testability reason `mailSenderFactory`, `googleOAuthFactory` and
+    // `freemiusApiClientFactory` are — but unlike those three, [Turnstile]'s construction never
+    // throws: [TurnstileConfig.secretKey] is nullable, and an unset `MYTETZ_TURNSTILE_SECRET` is a
+    // supported deployment state, not a missing credential. So [turnstile] below is built eagerly,
+    // the same as [account].
+    turnstileFactory: () -> Turnstile = { Turnstile(HttpClient(CIO), TurnstileConfig().secretKey) },
 ) {
 
     private val topics = TopicRepository(mongo.database)
@@ -110,6 +116,9 @@ open class Components(
 
     /** Cheap to build and needs no credential, so — unlike [magicLink] and [googleOAuth] — this is not lazy. */
     val account: AccountService = AccountService(accountRepository)
+
+    /** Cheap to build and needs no credential, so — like [account] and unlike [magicLink] — this is not lazy. */
+    val turnstile: Turnstile = turnstileFactory()
 
     private val mail: MailSender by lazy(mailSenderFactory)
 

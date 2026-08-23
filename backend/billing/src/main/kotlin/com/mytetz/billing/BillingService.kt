@@ -38,7 +38,7 @@ class BillingService(
 
     /**
      * Inserts a TRIALING row for [userId] when none exists yet, and returns the stored row either
-     * way.
+     * way. Returns null only when [ipBucket] is at its trial cap — see below.
      *
      * A row that already exists comes back untouched. This matters: a learner who signs out and
      * back in twice a day for a month must not get a fresh trial on every sign-in, or they would
@@ -47,6 +47,37 @@ class BillingService(
      * [Subscription.trialEndsAtEpochMillis] sits [BillingConfig.trialDays] days ahead of
      * [Subscription.createdAtEpochMillis], so the window between the two is always positive and
      * [Entitlement.resolve] never refuses a fresh trial for that reason.
+     *
+     * ## The trial cap
+     *
+     * [ipBucket] identifies the caller's own IP bucket, resolved by the API layer through
+     * `com.mytetz.api.ClientAddress`. A null [ipBucket] skips the cap entirely — every test in
+     * this file that does not name the cap passes null and behaves exactly as it did before this
+     * cap existed.
+     *
+     * A non-null [ipBucket] is checked against [TRIAL_CAP_PER_IP_BUCKET] fresh trials inside a
+     * rolling [TRIAL_CAP_WINDOW_MILLIS] window, **before** this method reads or builds anything
+     * about [userId]'s own row — a bucket that is already at its cap must not spend a row-read on
+     * a trial it is about to refuse. [BillingRepository.tryRecordTrialStart] checks the count and
+     * records the start as one atomic Mongo operation — see its own KDoc for why a separate read
+     * and a separate `$inc` would let two concurrent callers behind one bucket both slip past the
+     * same last slot.
+     *
+     * That atomicity bounds the bucket's own counter, but not the number of subscription rows this
+     * method ever creates for one *user*: two concurrent sign-ins for the same new [userId] can
+     * both pass the cap check and each record a start, while [insertIfAbsent] below still lets only
+     * one of the two actually create a row — the same lost-race shape "The read, the insert, and
+     * the loser" describes next. One bucket slot is then spent on a request that created no new
+     * trial. That is the one direction this leaves open, and it is the safe one: a bucket's cap can
+     * bind one sign-in earlier than strictly necessary; it can never admit more than
+     * [TRIAL_CAP_PER_IP_BUCKET] trials.
+     *
+     * A capped caller is **not refused outright**: this method returns null, `AuthRoutes.kt`'s
+     * `completeSignIn` still opens a session and signs the caller in, and the caller simply has no
+     * subscription row — the same state `GET /api/account` already reports for a caller who has
+     * none, and the same state that offers the subscribe panel instead of a wait message. Design
+     * spec section 2's own three-layer defence names this: Turnstile is the first layer, this cap
+     * is the second, and the global spend breaker is the third and final one.
      *
      * ## The read, the insert, and the loser
      *
@@ -59,10 +90,24 @@ class BillingService(
      * with a sign-in — [BillingRepository.upsert]'s `replaceOne` in place of [insertIfAbsent] would
      * let a losing sign-in downgrade an already-paying customer back to [SubscriptionStatus.TRIALING].
      */
-    suspend fun startTrialIfAbsent(userId: String): Subscription {
+    suspend fun startTrialIfAbsent(userId: String, ipBucket: String? = null): Subscription? {
         repository.find(userId)?.let { return it }
 
         val now = clock()
+        if (ipBucket != null) {
+            repository.rollTrialWindowIfExpired(ipBucket, now, TRIAL_CAP_WINDOW_MILLIS)
+            val recorded = repository.tryRecordTrialStart(ipBucket, now, TRIAL_CAP_WINDOW_MILLIS, TRIAL_CAP_PER_IP_BUCKET)
+            if (!recorded) {
+                log.info(
+                    "TRIAL_CAP_REACHED ipBucket={} already started {} trials today; " +
+                        "this sign-in still succeeds, with no trial and checkout offered instead",
+                    ipBucket,
+                    TRIAL_CAP_PER_IP_BUCKET,
+                )
+                return null
+            }
+        }
+
         val trial = Subscription(
             userId = userId,
             status = SubscriptionStatus.TRIALING,
@@ -202,5 +247,14 @@ class BillingService(
 
         repository.upsert(updated)
         return true
+    }
+
+    companion object {
+
+        /** How many fresh trials one IP bucket may start inside [TRIAL_CAP_WINDOW_MILLIS]. */
+        const val TRIAL_CAP_PER_IP_BUCKET: Int = 3
+
+        /** The trial cap's own window. A day, the same unit [DAY_MILLIS] already names. */
+        const val TRIAL_CAP_WINDOW_MILLIS: Long = DAY_MILLIS
     }
 }

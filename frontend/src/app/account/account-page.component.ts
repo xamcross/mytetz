@@ -1,4 +1,5 @@
 import { Component, OnInit, inject, signal } from '@angular/core';
+import { HttpErrorResponse } from '@angular/common/http';
 import { AllowanceMeterComponent } from './allowance-meter.component';
 import { AccountStore } from '../core/account.store';
 import { ApiService } from '../core/api.service';
@@ -15,12 +16,15 @@ import { ApiService } from '../core/api.service';
  * the browser back here after checkout. The page does not trust anything in that return URL. A
  * fresh `GET /api/account` is the only trusted source.
  *
- * "Manage subscription" and "Delete account" are present, and each button is inert.
- * `POST /api/billing/checkout` is the only billing link this backend exposes today. This task
- * does not confirm that the same checkout page also manages an existing subscription, so the
- * manage button stays inert until a task confirms this against Freemius's own documentation.
- * `POST /api/account/delete` does not exist in this codebase yet. A later task must add the
- * route, then wire this button to it. See the task 13 report for both open items.
+ * "Manage subscription" is present, and the button is inert. `POST /api/billing/checkout` is the
+ * only billing link this backend exposes today. This task does not confirm that the same
+ * checkout page also manages an existing subscription, so the manage button stays inert until a
+ * task confirms this against Freemius's own documentation. See the task 13 report.
+ *
+ * "Delete account" opens a confirmation panel first — see [confirmingDelete]. The backend needs a
+ * fresh sign-in to complete a deletion. A stale session answers `403 CONFIRMATION_REQUIRED`, and
+ * [confirmDelete] shows a message that tells the learner to sign in again, rather than a generic
+ * failure.
  */
 @Component({
   selector: 'app-account-page',
@@ -86,16 +90,47 @@ import { ApiService } from '../core/api.service';
             >
               Sign out everywhere
             </button>
-            <!-- Present and inert — see the class doc comment. -->
-            <button
-              type="button"
-              class="mt-pill mt-pill--ghost"
-              data-action="delete-account"
-              disabled
-            >
-              Delete account
-            </button>
+            @if (!confirmingDelete()) {
+              <button
+                type="button"
+                class="mt-pill mt-pill--ghost"
+                data-action="delete-account"
+                (click)="startDelete()"
+              >
+                Delete account
+              </button>
+            }
           </div>
+
+          @if (confirmingDelete()) {
+            <div class="mt-card mt-card--dashed account-page__confirm" role="alertdialog">
+              <p class="account-page__confirm-text">
+                This permanently deletes your account, every reading session and the allowance
+                meter. It does not delete any explanation — those stay in the catalogue for other
+                learners. This cannot be undone.
+              </p>
+              <div class="account-page__actions">
+                <button
+                  type="button"
+                  class="mt-pill mt-pill--coral"
+                  data-action="delete-account-confirm"
+                  [disabled]="deleting()"
+                  (click)="confirmDelete()"
+                >
+                  Yes, delete my account
+                </button>
+                <button
+                  type="button"
+                  class="mt-pill mt-pill--ghost"
+                  data-action="delete-account-cancel"
+                  [disabled]="deleting()"
+                  (click)="cancelDelete()"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          }
         </div>
       }
     </main>
@@ -142,6 +177,20 @@ import { ApiService } from '../core/api.service';
         display: flex;
         flex-wrap: wrap;
         gap: 10px;
+      }
+      .account-page__confirm {
+        width: 100%;
+        padding: 20px 24px;
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+      }
+      .account-page__confirm-text {
+        margin: 0;
+        font-size: 14px;
+        line-height: 1.55;
+        font-weight: 500;
+        color: var(--mt-muted);
       }
       .visually-hidden {
         position: absolute;
@@ -209,6 +258,54 @@ export class AccountPageComponent implements OnInit {
       await this.account.load();
     } catch {
       this.actionError.set('Could not sign out everywhere. Check your connection and try again.');
+    }
+  }
+
+  /** True while the confirm panel for account deletion is open. */
+  readonly confirmingDelete = signal(false);
+
+  /** True while a delete request is in flight. Both buttons in the confirm panel disable on this,
+   * so a second click cannot send a second `POST /api/account/delete`. */
+  readonly deleting = signal(false);
+
+  startDelete(): void {
+    this.actionError.set(null);
+    this.confirmingDelete.set(true);
+  }
+
+  cancelDelete(): void {
+    this.confirmingDelete.set(false);
+  }
+
+  /**
+   * Sends `POST /api/account/delete`.
+   *
+   * A `403` means the session is not fresh. `AuthRoutes.kt`'s own comment on the route states the
+   * rule: a fresh sign-in is the confirmation. This method reads that one status and shows a
+   * message that tells the learner to sign in again, rather than the generic failure text every
+   * other status gets.
+   *
+   * A success reads the account again, the same pattern [signOut] uses. The cleared cookie makes
+   * that read answer `401`, and `AccountStore.load` clears the view on a `401` — so the page ends
+   * on the signed-out state with no separate message to keep in step with the server.
+   */
+  async confirmDelete(): Promise<void> {
+    this.actionError.set(null);
+    this.deleting.set(true);
+    try {
+      await this.api.deleteAccount();
+      this.confirmingDelete.set(false);
+      await this.account.load();
+    } catch (err) {
+      if (err instanceof HttpErrorResponse && err.status === 403) {
+        this.actionError.set(
+          'Sign in again through a fresh magic link, then delete your account right away.',
+        );
+      } else {
+        this.actionError.set('Could not delete your account. Check your connection and try again.');
+      }
+    } finally {
+      this.deleting.set(false);
     }
   }
 }

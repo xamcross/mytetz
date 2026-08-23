@@ -2,6 +2,10 @@ package com.mytetz.billing
 
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.read.ListAppender
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.test.runTest
 import org.bson.Document
 import org.slf4j.LoggerFactory
@@ -10,6 +14,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class BillingServiceTest {
@@ -38,6 +43,9 @@ class BillingServiceTest {
         // and different tests reuse short event ids such as "evt-1". Without this drop, a row a
         // previous test left behind would make an unrelated later test look like a replay.
         database.getCollection<Document>("billingEvents").drop()
+        // Added for the trial-cap tests below: they key on a short, reused ip bucket string, so a
+        // count left behind by a previous test would make an unrelated later test look capped.
+        database.getCollection<Document>("trialStarts").drop()
         now = T0
     }
 
@@ -87,7 +95,7 @@ class BillingServiceTest {
 
     @Test
     fun `startTrialIfAbsent inserts a TRIALING row for a fresh user`() = runTest {
-        val subscription = service.startTrialIfAbsent("u1")
+        val subscription = assertNotNull(service.startTrialIfAbsent("u1"))
 
         assertEquals(SubscriptionStatus.TRIALING, subscription.status)
         assertEquals(now, subscription.createdAtEpochMillis)
@@ -97,7 +105,7 @@ class BillingServiceTest {
 
     @Test
     fun `startTrialIfAbsent leaves an existing row untouched`() = runTest {
-        val first = service.startTrialIfAbsent("u1")
+        val first = assertNotNull(service.startTrialIfAbsent("u1"))
         now += 3_600_000
 
         val second = service.startTrialIfAbsent("u1")
@@ -171,13 +179,94 @@ class BillingServiceTest {
             override suspend fun insertIfAbsent(subscription: Subscription): Boolean = false
         }
 
-        val result = BillingService(losingRace, config) { now }.startTrialIfAbsent("u1")
+        val result = assertNotNull(BillingService(losingRace, config) { now }.startTrialIfAbsent("u1"))
 
         // `winner.createdAtEpochMillis` is `now - 1_000`; a `Subscription` built locally by
         // `startTrialIfAbsent` would carry `now` instead. Comparing this field is what tells the
         // stored row apart from the one the losing call built and discarded.
         assertEquals(winner, result, "the loser's own row must not be returned")
         assertEquals(winner.createdAtEpochMillis, result.createdAtEpochMillis)
+    }
+
+    // ------------------------------------------------------------------ the trial cap
+
+    @Test
+    fun `truly concurrent trials from one ip bucket never exceed the cap`() = runTest {
+        val bucket = "203.0.113.7"
+
+        // Ten distinct new users, all racing for a bucket with room for three. A check and a
+        // separate increment would let more than three through — see
+        // `BillingRepository.tryRecordTrialStart`'s own KDoc for why the two are one atomic Mongo
+        // operation. `Dispatchers.IO` is what actually lets these ten calls interleave; `runTest`'s
+        // own dispatcher runs suspended coroutines one at a time and would prove nothing here — the
+        // same reason `AccountRepositoryTest`'s own concurrent-consume test picks it.
+        val results = coroutineScope {
+            (1..10).map { i ->
+                async(Dispatchers.IO) { service.startTrialIfAbsent("concurrent-u$i", bucket) }
+            }.awaitAll()
+        }
+
+        assertEquals(
+            BillingService.TRIAL_CAP_PER_IP_BUCKET,
+            results.count { it != null },
+            "exactly the cap's worth of trials must succeed, no more and no fewer",
+        )
+    }
+
+    @Test
+    fun `a fourth trial from one ip bucket in a day is refused`() = runTest {
+        val bucket = "203.0.113.7"
+        repeat(BillingService.TRIAL_CAP_PER_IP_BUCKET) { i ->
+            assertNotNull(service.startTrialIfAbsent("u$i", bucket), "trial $i of the cap must be allowed")
+        }
+
+        val refused = service.startTrialIfAbsent("u-fourth", bucket)
+
+        assertNull(refused, "a trial past the cap must not be started")
+        assertNull(repository.find("u-fourth"), "a refused trial must insert no row")
+    }
+
+    @Test
+    fun `an ip bucket at its cap still lets an existing user sign back in`() = runTest {
+        val bucket = "203.0.113.7"
+        repeat(BillingService.TRIAL_CAP_PER_IP_BUCKET) { i ->
+            assertNotNull(service.startTrialIfAbsent("u$i", bucket))
+        }
+
+        // u0 already has a row from the loop above. The cap must never refuse a returning user —
+        // only a fresh trial competes for the bucket's three slots.
+        val again = service.startTrialIfAbsent("u0", bucket)
+
+        assertNotNull(again)
+        assertEquals(SubscriptionStatus.TRIALING, again.status)
+    }
+
+    @Test
+    fun `the ip bucket cap resets once its window ends`() = runTest {
+        val bucket = "203.0.113.7"
+        repeat(BillingService.TRIAL_CAP_PER_IP_BUCKET) { i ->
+            assertNotNull(service.startTrialIfAbsent("u$i", bucket))
+        }
+        assertNull(service.startTrialIfAbsent("u-refused-before", bucket))
+
+        now += BillingService.TRIAL_CAP_WINDOW_MILLIS + 1
+
+        val afterReset = service.startTrialIfAbsent("u-after-reset", bucket)
+
+        assertNotNull(afterReset, "a bucket's cap must roll over once its window has passed")
+    }
+
+    @Test
+    fun `a null ip bucket skips the cap entirely`() = runTest {
+        val bucket = "203.0.113.7"
+        repeat(BillingService.TRIAL_CAP_PER_IP_BUCKET) { i ->
+            assertNotNull(service.startTrialIfAbsent("u$i", bucket))
+        }
+
+        // No ipBucket at all — the caller this signature exists for, a test that predates the cap.
+        val stillAllowed = service.startTrialIfAbsent("u-no-bucket")
+
+        assertNotNull(stillAllowed, "a null ip bucket must never be capped")
     }
 
     // ------------------------------------------------------------------ insertIfAbsent
@@ -275,7 +364,7 @@ class BillingServiceTest {
 
     @Test
     fun `subscriptionFor answers the stored row untouched`() = runTest {
-        val stored = service.startTrialIfAbsent("u1")
+        val stored = assertNotNull(service.startTrialIfAbsent("u1"))
 
         assertEquals(stored, service.subscriptionFor("u1"))
     }

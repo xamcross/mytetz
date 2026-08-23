@@ -563,6 +563,14 @@ class SessionService(
     suspend fun reassignPrincipal(fromPrincipalId: String, toPrincipalId: String): Long =
         sessions.reassignPrincipal(fromPrincipalId, toPrincipalId)
 
+    /**
+     * Removes every session that belongs to [principalId]. Reports how many it removed.
+     *
+     * Account deletion calls this. See [SessionRepository.deleteForPrincipal] for what it does and
+     * does not touch.
+     */
+    suspend fun deleteForPrincipal(principalId: String): Long = sessions.deleteForPrincipal(principalId)
+
     // ------------------------------------------------------------------ load
 
     /**

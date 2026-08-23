@@ -144,6 +144,32 @@ class SessionRepositoryTest {
     }
 
     @Test
+    fun `deleteForPrincipal removes every session for that principal and reports the count`() = runTest {
+        val other = session.copy(id = "s2", principalId = "user:carol")
+        val second = session.copy(id = "s3")
+        repository.insert(session)
+        repository.insert(second)
+        repository.insert(other)
+
+        val removed = repository.deleteForPrincipal("anon:alice")
+
+        assertEquals(2, removed)
+        assertNull(repository.findById("s1"))
+        assertNull(repository.findById("s3"))
+        assertEquals(other, repository.findById("s2"), "a different principal's session must survive")
+    }
+
+    @Test
+    fun `deleteForPrincipal for an unknown principal removes nothing and reports zero`() = runTest {
+        repository.insert(session)
+
+        val removed = repository.deleteForPrincipal("anon:nobody-ever-used-this-id")
+
+        assertEquals(0, removed)
+        assertEquals(session, repository.findById("s1"))
+    }
+
+    @Test
     fun `ensureIndexes creates the documented indexes and can be run again`() = runTest {
         repository.ensureIndexes()
         // Startup calls this on every boot against a database that already has the indexes.

@@ -83,4 +83,14 @@ export class ApiService {
   checkout(): Promise<CheckoutResponse> {
     return firstValueFrom(this.http.post<CheckoutResponse>('/api/billing/checkout', null));
   }
+
+  /**
+   * Deletes the signed-in learner's account.
+   *
+   * The route needs a fresh sign-in. An old session gets `403 CONFIRMATION_REQUIRED`.
+   * `AccountPageComponent` shows a specific message for that status.
+   */
+  deleteAccount(): Promise<void> {
+    return firstValueFrom(this.http.post<void>('/api/account/delete', null));
+  }
 }

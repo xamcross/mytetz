@@ -91,6 +91,7 @@ Sensitive values are fly secrets. `fly secrets list` shows names and digests onl
 | `ANTHROPIC_API_KEY` | for explanation generation only | the model client is built lazily, so the catalogue serves without it |
 | `FREEMIUS_SECRET_KEY` | for checkout and the webhook only | signs and verifies the Freemius webhook. Built lazily, alongside `FREEMIUS_PRODUCT_ID` and `FREEMIUS_PLAN_ID`; the catalogue, sign-in and reading all still serve with none of the three set |
 | `FREEMIUS_API_KEY` | for reconciliation only | a Bearer token for the Freemius Developer API, distinct from `FREEMIUS_SECRET_KEY`. Built lazily; with `MYTETZ_RECONCILE_ON_BOOT` on and this unset, the boot logs `RECONCILE_SKIPPED` rather than failing |
+| `MYTETZ_TURNSTILE_SECRET` | no | Turnstile checks a token in front of the magic-link request and the start of the Google flow. With this unset, the check is skipped and every sign-in still works — see section "Turnstile" below |
 
 Set them from the git-ignored `.env` at the repo root, without ever echoing them:
 
@@ -386,6 +387,47 @@ the loop. The existing seeds remain. Do the following:
 
 ---
 
+## Freemius checkout — the post-purchase return
+
+`POST /api/billing/checkout` builds a plain checkout URL. The URL sets no return address. A
+return address is a Freemius dashboard setting, not a request parameter. An operator must set it
+by hand, once, on the product's own checkout page in the Freemius dashboard.
+
+**Set the post-purchase redirect to `{MYTETZ_PUBLIC_BASE_URL}/account`.** One example is
+`https://mytetz.com/account`.
+
+`AccountPageComponent` reads a fresh `GET /api/account` on every mount. This is why the redirect
+matters: the account page shows the learner's new allowance only after this mount. A wrong
+redirect still lets the learner sign in. But the learner then does not see the new allowance
+until they open `/account` by hand.
+
+---
+
+## Turnstile
+
+`MYTETZ_TURNSTILE_SECRET` turns on a check. The check sits in front of
+`POST /api/auth/magic-link`. The check also sits in front of the start of the Google sign-in
+flow, `GET /api/auth/google`. Cloudflare Turnstile is the first of three defences against a flood
+of throwaway trial accounts. The IP-bucket trial cap is the second defence. The global spend
+ceiling is the third.
+
+**The check is skipped when this variable is unset.** Every sign-in still works. No request to
+Cloudflare is ever made. Local work and CI need no key for this reason.
+
+**This deployment does not yet render a Turnstile widget in the browser.** Task 14 added the
+backend check and this variable. An operator can turn the check on the moment a widget exists.
+Task 14 did not add the widget. `POST /api/auth/magic-link`'s body carries an optional
+`turnstileToken` field. `GET /api/auth/google` reads one from a `turnstileToken` query
+parameter. But nothing in `frontend/` sets either field yet. **Do not set
+`MYTETZ_TURNSTILE_SECRET` in production before a later task adds the widget.** With the secret
+set and no widget, every sign-in attempt sends no token, and the check refuses every one.
+
+Get a site key and a secret key from the Cloudflare dashboard, under Turnstile. The secret key is
+`MYTETZ_TURNSTILE_SECRET`. The site key is a value the browser widget itself needs. The site key
+belongs to the task that adds the widget, not to this deployment's own secrets.
+
+---
+
 ## Billing reconciliation
 
 `MYTETZ_RECONCILE_ON_BOOT` runs a sweep at every boot. The sweep reads every subscription that is
@@ -445,8 +487,30 @@ line is for an operator, and no line ever reaches a learner.
 | `BILLING_UNKNOWN_USER` | `BillingService.apply` | a webhook's `userReference` was empty, or resolved to no stored row | a learner paid with an address they never signed in with; find the account by hand and correct it |
 | `BILLING_STALE_EVENT` | `BillingService.apply` | an event arrived older than the row's last applied event, and was dropped | confirm the row's current state is still correct; the event id can never be replayed after this |
 | `BILLING_NO_PERIOD_END` | `Entitlement.resolve` | an `ACTIVE` row carries no period end | check whether the first-payment webhook for that row ever carried one; the row is granted access regardless |
-| `BILLING_DRIFT` | `Reconciliation.reconcile` | a subscription disagreed with what Freemius reports. `applied=true` means the row was corrected; `applied=false` means only a downgrade was proposed, and the row is untouched | for `applied=true`, read the before/after values — repeated drift on one row means its webhook is not arriving. For `applied=false`, decide by hand whether to apply the downgrade |
+| `BILLING_DRIFT` | `Reconciliation.reconcile` | a subscription disagreed with what Freemius reports. `applied=true` means the row was corrected; `applied=false` means only a downgrade was proposed, and the row is untouched | read the log line's own fields — see "Reading a `BILLING_DRIFT` line" below, right after this table |
 | `RECONCILE_SKIPPED` | `Components.reconcile` | `MYTETZ_RECONCILE_ON_BOOT` is on but `FREEMIUS_API_KEY` or `FREEMIUS_PRODUCT_ID` is not set | set the missing variable; nothing else needs to change, the next boot retries on its own |
 | `WEBHOOK_SIGNATURE_MISMATCH` | `BillingRoutes` | `POST /api/billing/webhook` received a body whose signature did not verify | expected from scanners and mis-configured retries; investigate only if it is frequent, or if `FREEMIUS_SECRET_KEY` was just rotated |
 | `ACCOUNT_LINK_CONFLICT` | `AuthRoutes` | a Google sign-in's email is already linked to a different Google account | a real conflict, not a bug; the learner needs the sign-in method their account already used |
 | `MAIL_SEND_FAILED` | `MailSender` | a magic-link email could not be sent | check the mail provider's status and `MYTETZ_MAIL_API_KEY`; a learner is currently unable to sign in by email |
+
+### Reading a `BILLING_DRIFT` line
+
+A `BILLING_DRIFT` line names six fields: `user`, the stored `status` and the fetched one, the
+stored `periodEnd` and the fetched one, `failedPayments`, and `applied`.
+
+**For `applied=true`,** the row is already corrected. Repeated drift on one row is the real
+signal to act on: it means that row's webhook keeps failing to arrive.
+
+**For `applied=false`,** the row is untouched, and an operator decides by hand whether to apply
+the downgrade. `failedPayments` is the field that decides how confident that decision can be:
+
+- `failedPayments=0` on a fetched `ACTIVE` is a genuine renewal. No failed payment sits behind it.
+- `failedPayments>0` does **not** prove the learner is stuck in dunning. Freemius documents no
+  reset rule for this count. The count may be cumulative across the whole subscription, so one
+  old failure from months ago can still show a positive number on an account that has since paid
+  normally, every time, since then.
+
+**The `periodEnd` before/after pair is the more reliable signal in practice.** A subscription
+still inside a dunning retry window carries a retry date only days out. A subscription that has
+genuinely renewed carries a period end a full billing period out. Read both fields together, not
+`failedPayments` alone.

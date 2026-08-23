@@ -98,3 +98,21 @@ data class BillingEvent(
     @SerialName("receivedAt") @Serializable(with = EpochMillisAsBsonDateTime::class)
     val receivedAtEpochMillis: Long,
 )
+
+/**
+ * One IP bucket's count of fresh trials started inside its current window.
+ *
+ * [ipBucket] is the document's `_id`. [BillingService.startTrialIfAbsent] reads and writes this
+ * collection to cap how many fresh trials one IP bucket may start in a day — see that method's
+ * own KDoc. [windowExpiresAtEpochMillis] drives the collection's TTL index, the same shape
+ * [Subscription]'s own sibling fields use, and for the same reason: a raw `Long` would make the
+ * TTL index a silent no-op.
+ */
+@Serializable
+data class TrialStartCount(
+    @SerialName("_id") val ipBucket: String,
+    val windowStartEpochMillis: Long,
+    @SerialName("windowExpiresAt") @Serializable(with = EpochMillisAsBsonDateTime::class)
+    val windowExpiresAtEpochMillis: Long,
+    val count: Int,
+)

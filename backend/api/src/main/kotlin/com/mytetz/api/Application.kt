@@ -134,6 +134,7 @@ fun Application.module(components: Components = Components()) {
             quotaRepository = components.quotaRepository,
             billing = components.billing,
             clientAddresses = components.clientAddresses,
+            turnstile = components.turnstile,
         )
         billingRoutes(
             account = components.account,

@@ -15,6 +15,8 @@ import com.mytetz.quota.QuotaConfig
 import com.sun.net.httpserver.HttpServer
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
+import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.respond
 import io.ktor.client.plugins.cookies.HttpCookies
 import io.ktor.client.request.get
 import io.ktor.client.request.post
@@ -24,6 +26,7 @@ import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
+import io.ktor.http.headersOf
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.install
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
@@ -71,6 +74,14 @@ class AuthRoutesTest {
         val mailSender: CapturingMailSender,
         val stack: TestFixtures.SessionStack,
         val billingRepository: BillingRepository,
+        /**
+         * A second, independently-cookied client against the same running application. The trial
+         * cap keys on the caller's IP bucket, and every client this helper builds resolves to the
+         * same socket peer — see `authApp`'s own `ClientAddressConfig(trustedHeader = null)` — so
+         * two clients this function returns are, for the cap's own purposes, "two visitors sharing
+         * one address", exactly the scenario the cap exists to bound.
+         */
+        val newClient: () -> HttpClient,
     ) {
         /** Completes a real magic-link sign-in for [http], and returns the address it signed in as. */
         suspend fun signIn(http: HttpClient = client, email: String = "learner-${UUID.randomUUID()}@example.com"): String {
@@ -109,6 +120,15 @@ class AuthRoutesTest {
         return """{"parentNodeId":"$rootNodeId","span":{"text":"$text","start":$start,"end":${start + text.length}},"verb":"EXPLAIN"}"""
     }
 
+    /** A [MockEngine] that answers `{"success": false}` to every request — no socket, no Cloudflare account. */
+    private fun rejectingTurnstileEngine(): MockEngine = MockEngine {
+        respond(
+            content = """{"success": false, "error-codes": ["invalid-input-response"]}""",
+            status = HttpStatusCode.OK,
+            headers = headersOf(HttpHeaders.ContentType, "application/json"),
+        )
+    }
+
     private fun defaultGoogleOAuth(): GoogleOAuth = GoogleOAuth(
         config = GoogleConfig(
             clientId = "test-client-id",
@@ -125,15 +145,25 @@ class AuthRoutesTest {
         // the two constants no longer name the same number. The tests below that pin a value read
         // it from `BillingConfig` for that reason.
         trialGenerations: Int = BillingConfig.DEFAULT_TRIAL_GENERATIONS,
+        // A settable clock, for the deletion-confirmation tests below: they sign in under one
+        // reading and attempt a delete under a later one, entirely through this lambda closing
+        // over a `var` the test itself owns. Every other test in this file never touches it, and
+        // gets the real clock, exactly as before this parameter existed.
+        clock: () -> Long = System::currentTimeMillis,
+        turnstile: Turnstile = Turnstile(HttpClient(CIO), secretKey = null),
         block: suspend Scope.() -> Unit,
     ) = testApplication {
         val stack = TestFixtures.sessionApp()
         val accountRepository = AccountRepository(stack.database)
-        val account = AccountService(accountRepository)
+        // The same clock the route itself reads, so a session's own `createdAtEpochMillis` and the
+        // freshness check in `POST /api/account/delete` are compared on one clock and not two —
+        // otherwise a fake `clock` here would make every session look either always fresh or never
+        // fresh, regardless of what a test actually simulates.
+        val account = AccountService(accountRepository, clock = clock)
         val mailSender = CapturingMailSender()
         val magicLink = MagicLinkService(accountRepository, mailSender, baseUrl = "http://localhost")
         val billingRepository = BillingRepository(stack.database)
-        val billing = BillingService(billingRepository, config = BillingConfig(trialGenerations = trialGenerations))
+        val billing = BillingService(billingRepository, config = BillingConfig(trialGenerations = trialGenerations)) { clock() }
 
         application {
             install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) }
@@ -163,13 +193,15 @@ class AuthRoutesTest {
                     cookies = TestFixtures.cookieConfig,
                     quotaRepository = stack.quotaRepository,
                     billing = billing,
+                    turnstile = turnstile,
                     clientAddresses = ClientAddressConfig(trustedHeader = null),
+                    clock = clock,
                 )
             }
         }
 
-        val client = createClient { install(HttpCookies); followRedirects = false }
-        Scope(client, account, mailSender, stack, billingRepository).block()
+        fun freshClient() = createClient { install(HttpCookies); followRedirects = false }
+        Scope(freshClient(), account, mailSender, stack, billingRepository, newClient = ::freshClient).block()
     }
 
     // ------------------------------------------------------------------ the magic link
@@ -596,5 +628,160 @@ class AuthRoutesTest {
         assertEquals(HttpStatusCode.TooManyRequests, refused.status)
         assertEquals("RATE_LIMITED", wireJson.decodeFromString<ApiError>(refused.bodyAsText()).code)
         assertNotNull(refused.headers[HttpHeaders.RetryAfter])
+    }
+
+    // ------------------------------------------------------------------ Turnstile
+
+    @Test
+    fun `a magic link request succeeds with no turnstile secret configured`() = authApp {
+        // Every other test in this file signs in through this exact path with no secret set — this
+        // one exists to say so directly, rather than leave it as an assumption every other test
+        // happens to rely on.
+        val response = client.post("/api/auth/magic-link") {
+            contentType(ContentType.Application.Json)
+            setBody("""{"email":"turnstile-skip-${UUID.randomUUID()}@example.com"}""")
+        }
+
+        assertEquals(HttpStatusCode.NoContent, response.status)
+    }
+
+    @Test
+    fun `a magic link request is refused when turnstile is configured and the token is bad`() =
+        authApp(turnstile = Turnstile(HttpClient(rejectingTurnstileEngine()), secretKey = "test-secret")) {
+            val response = client.post("/api/auth/magic-link") {
+                contentType(ContentType.Application.Json)
+                setBody("""{"email":"turnstile-bad-${UUID.randomUUID()}@example.com","turnstileToken":"bad"}""")
+            }
+
+            assertEquals(HttpStatusCode.Forbidden, response.status)
+            assertEquals("TURNSTILE_FAILED", wireJson.decodeFromString<ApiError>(response.bodyAsText()).code)
+        }
+
+    // ------------------------------------------------------------------ the trial cap
+
+    @Test
+    fun `a fourth trial from one ip bucket in a day is refused`() = authApp {
+        repeat(BillingService.TRIAL_CAP_PER_IP_BUCKET) { i ->
+            signIn(http = newClient(), email = "cap-$i-${UUID.randomUUID()}@example.com")
+        }
+
+        val refusedEmail = "cap-refused-${UUID.randomUUID()}@example.com"
+        signIn(http = newClient(), email = refusedEmail)
+
+        val userId = account.findOrCreateByEmail(refusedEmail).id
+        assertNull(billingRepository.find(userId), "a fourth trial from one ip bucket must not be started")
+    }
+
+    @Test
+    fun `a refused trial is offered checkout`() = authApp {
+        repeat(BillingService.TRIAL_CAP_PER_IP_BUCKET) { i ->
+            signIn(http = newClient(), email = "checkout-$i-${UUID.randomUUID()}@example.com")
+        }
+
+        val refusedClient = newClient()
+        signIn(http = refusedClient, email = "checkout-refused-${UUID.randomUUID()}@example.com")
+
+        // Not refused outright: the sign-in itself succeeded (signIn() above already asserts the
+        // 302 it requires), and the caller can still read their own account.
+        val response = refusedClient.get("/api/account")
+
+        assertEquals(HttpStatusCode.OK, response.status, response.bodyAsText())
+        val view = wireJson.decodeFromString<AccountView>(response.bodyAsText())
+        assertEquals(0, view.allowance, "a capped sign-in must offer checkout, not a fresh trial allowance")
+        assertEquals(0, view.remaining)
+        assertEquals("NONE", view.status)
+    }
+
+    // ------------------------------------------------------------------ account deletion
+
+    @Test
+    fun `deleting an account removes the user and every session`() = authApp {
+        // Created before the sign-in, the same order `signing in carries an anonymous trail to the
+        // user` uses, so this learning session is reassigned onto the user and is really the
+        // deleted account's own session — not an orphaned anonymous one the delete could never
+        // have touched either way.
+        val created = createSession()
+        val email = signIn()
+
+        val response = client.post("/api/account/delete")
+
+        assertEquals(HttpStatusCode.NoContent, response.status, response.bodyAsText())
+        assertNull(account.findByEmail(email), "the user row must be gone")
+        assertNull(stack.sessions.load(created.sessionId), "the learning session must be gone")
+        assertEquals(
+            HttpStatusCode.Unauthorized,
+            client.get("/api/account").status,
+            "the session cookie must no longer resolve to anyone",
+        )
+    }
+
+    @Test
+    fun `deleting an account leaves every explanation`() = authApp {
+        val created = createSession()
+        signIn()
+        val explanationKey = created.nodes.single { it.nodeId == created.rootNodeId }.explanationKey
+
+        val response = client.post("/api/account/delete")
+
+        assertEquals(HttpStatusCode.NoContent, response.status, response.bodyAsText())
+        assertNotNull(
+            stack.explanations.findByKey(explanationKey),
+            "an explanation must survive its own principal's deletion",
+        )
+    }
+
+    @Test
+    fun `deleting an account needs a fresh confirmation`() {
+        var now = 1_700_000_000_000L
+        authApp(clock = { now }) {
+            val email = signIn()
+            // Well past any reasonable confirmation window — a learner who signed in a week ago and
+            // left the tab open, not a boundary case.
+            now += 7 * 24 * 60 * 60 * 1000L
+
+            val response = client.post("/api/account/delete")
+
+            assertEquals(HttpStatusCode.Forbidden, response.status, response.bodyAsText())
+            assertEquals("CONFIRMATION_REQUIRED", wireJson.decodeFromString<ApiError>(response.bodyAsText()).code)
+            assertNotNull(account.findByEmail(email), "a refused deletion must leave the account in place")
+        }
+    }
+
+    @Test
+    fun `a stale confirmation is refused`() {
+        var now = 1_700_000_000_000L
+        authApp(clock = { now }) {
+            val email = signIn()
+            // One millisecond past the exact boundary `AccountService.isFreshSession` allows —
+            // pins the edge, rather than a margin so wide it could pass for any refusal at all.
+            now += MagicLinkService.TTL_MILLIS + 1
+
+            val response = client.post("/api/account/delete")
+
+            assertEquals(HttpStatusCode.Forbidden, response.status, response.bodyAsText())
+            assertEquals("CONFIRMATION_REQUIRED", wireJson.decodeFromString<ApiError>(response.bodyAsText()).code)
+            assertNotNull(account.findByEmail(email))
+        }
+    }
+
+    @Test
+    fun `a deletion right at the confirmation boundary still succeeds`() {
+        var now = 1_700_000_000_000L
+        authApp(clock = { now }) {
+            signIn()
+            now += MagicLinkService.TTL_MILLIS
+
+            val response = client.post("/api/account/delete")
+
+            assertEquals(HttpStatusCode.NoContent, response.status, response.bodyAsText())
+        }
+    }
+
+    @Test
+    fun `deleting an account while signed out answers SIGN_IN_REQUIRED`() = authApp {
+        val response = client.post("/api/account/delete")
+
+        assertEquals(HttpStatusCode.Unauthorized, response.status)
+        assertEquals("SIGN_IN_REQUIRED", wireJson.decodeFromString<ApiError>(response.bodyAsText()).code)
     }
 }

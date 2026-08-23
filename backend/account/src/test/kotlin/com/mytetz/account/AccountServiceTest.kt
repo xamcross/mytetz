@@ -212,4 +212,57 @@ class AccountServiceTest {
         val generated = (1..100).map { AccountService.newSessionId() }.toSet()
         assertEquals(100, generated.size, "every one of 100 generated session ids must be distinct")
     }
+
+    // ------------------------------------------------------------------ isFreshSession
+
+    @Test
+    fun `a session created this instant is fresh`() = runTest {
+        val user = service(now = FUTURE).findOrCreateByEmail("alice@example.com")
+        val sessionId = service(now = FUTURE).openSession(user.id)
+
+        assertEquals(true, service(now = FUTURE).isFreshSession(sessionId, FUTURE))
+    }
+
+    @Test
+    fun `a session is fresh right up to and including the magic-link ttl`() = runTest {
+        val user = service(now = FUTURE).findOrCreateByEmail("alice@example.com")
+        val sessionId = service(now = FUTURE).openSession(user.id)
+        val atTheBoundary = FUTURE + MagicLinkService.TTL_MILLIS
+
+        assertEquals(true, service(now = FUTURE).isFreshSession(sessionId, atTheBoundary))
+    }
+
+    @Test
+    fun `a session past the magic-link ttl is not fresh`() = runTest {
+        val user = service(now = FUTURE).findOrCreateByEmail("alice@example.com")
+        val sessionId = service(now = FUTURE).openSession(user.id)
+        val oneMillisecondLate = FUTURE + MagicLinkService.TTL_MILLIS + 1
+
+        assertEquals(false, service(now = FUTURE).isFreshSession(sessionId, oneMillisecondLate))
+    }
+
+    @Test
+    fun `an unknown session id is not fresh`() = runTest {
+        assertEquals(false, service(now = FUTURE).isFreshSession("no-such-session", FUTURE))
+    }
+
+    // ------------------------------------------------------------------ deleteAccount
+
+    @Test
+    fun `deleting an account removes the user and every one of its sessions`(): Unit = runTest {
+        val svc = service(now = FUTURE)
+        val alice = svc.findOrCreateByEmail("alice@example.com")
+        val bob = svc.findOrCreateByEmail("bob@example.com")
+        val aliceSession1 = svc.openSession(alice.id)
+        val aliceSession2 = svc.openSession(alice.id)
+        val bobSession = svc.openSession(bob.id)
+
+        svc.deleteAccount(alice.id)
+
+        assertNull(repository.findUserById(alice.id), "the user row must be gone")
+        assertNull(repository.findSession(aliceSession1))
+        assertNull(repository.findSession(aliceSession2))
+        assertNotNull(repository.findUserById(bob.id), "another user's account must survive")
+        assertNotNull(repository.findSession(bobSession), "another user's session must survive")
+    }
 }
