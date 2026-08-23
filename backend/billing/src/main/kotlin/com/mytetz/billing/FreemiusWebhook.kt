@@ -58,14 +58,21 @@ data class FreemiusConfig(
 /**
  * One Freemius webhook event, decoded into the fields [BillingService.apply] needs.
  *
- * [userReference] is our own user id. Task 12 sends it to Freemius as the checkout reference, and
- * Freemius returns it unchanged on every later event for that same checkout. A null value, or a
- * value that names no stored user, means [BillingService.apply] has no row to change.
+ * [userReference] is our own user id. The checkout link sends no such reference — Freemius
+ * documents no arbitrary metadata parameter, only `affiliate_user_id` — so [userReference] is
+ * null on every event today. It stays in this type for the field an operator may yet confirm,
+ * and [BillingService.apply] keeps it as its first choice for that reason.
+ *
+ * [email] is the join key the checkout link actually uses: the learner's own address, sent as
+ * `user_email` with `readonly_user=true` so Freemius cannot change it. The API layer resolves
+ * [email] to a user id when [userReference] is absent — see `BillingRoutes.kt` — because
+ * `:backend:billing` does not depend on `:backend:account` and cannot do that lookup itself.
  */
 data class FreemiusEvent(
     val id: String,
     val type: String,
     val userReference: String?,
+    val email: String?,
     val freemiusUserId: String?,
     val freemiusSubscriptionId: String?,
     val periodEndsAtEpochMillis: Long?,
@@ -82,6 +89,11 @@ data class FreemiusEvent(
  * wrong guess on an optional field does not raise an error: the field silently decodes to null.
  * [id], [type] and [occurredAtEpochMillis] carry no default, so a wrong guess on one of those
  * three raises instead, which is why [FreemiusWebhook.parse] treats only those three as required.
+ *
+ * [email] is the same kind of guess. The vendor's own documentation names `email` among the
+ * purchase data a webhook carries, but not where in the payload it sits — this guess places it
+ * at the top level, alongside `user_id`. If a captured payload nests it instead — under an
+ * `objects.user` key, for instance — this is the field to correct.
  */
 @Serializable
 internal data class FreemiusWebhookPayload(
@@ -89,6 +101,7 @@ internal data class FreemiusWebhookPayload(
     @SerialName("type") val type: String,
     @SerialName("created") val occurredAtEpochMillis: Long,
     @SerialName("custom") val userReference: String? = null,
+    @SerialName("email") val email: String? = null,
     @SerialName("user_id") val freemiusUserId: String? = null,
     @SerialName("subscription_id") val freemiusSubscriptionId: String? = null,
     @SerialName("period_end") val periodEndsAtEpochMillis: Long? = null,
@@ -144,6 +157,7 @@ object FreemiusWebhook {
             id = payload.id,
             type = payload.type,
             userReference = payload.userReference,
+            email = payload.email,
             freemiusUserId = payload.freemiusUserId,
             freemiusSubscriptionId = payload.freemiusSubscriptionId,
             periodEndsAtEpochMillis = payload.periodEndsAtEpochMillis,

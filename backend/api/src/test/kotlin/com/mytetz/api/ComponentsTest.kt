@@ -529,4 +529,32 @@ class ComponentsTest {
                 "the summary did not name the failure count: ${summary.formattedMessage}",
             )
         }
+
+    @Test
+    fun `bootstrap runs reconciliation with no Freemius credential and does not throw`() = runTest {
+        // FreemiusConfig() throws when FREEMIUS_SECRET_KEY is unset, and this test's environment
+        // sets none of the three Freemius variables — the same as a real deployment before an
+        // operator has a Freemius account at all. fetchFreemiusState never reads freemiusConfig,
+        // so bootstrap must complete regardless; see that function's own KDoc for why.
+        val components = Components(
+            mongo = Mongo(MongoConfig(uri = TestFixtures.connectionString, databaseName = "test_api_reconcile_no_creds")),
+            cookies = TestFixtures.cookieConfig,
+            llmFactory = { FakeLlmClient() },
+            reconcileOnBoot = true,
+        )
+
+        val appender = ListAppender<ILoggingEvent>().apply { start() }
+        val logger = LoggerFactory.getLogger("com.mytetz.api.Components") as ch.qos.logback.classic.Logger
+        logger.addAppender(appender)
+        try {
+            components.bootstrap()
+        } finally {
+            logger.detachAppender(appender)
+        }
+
+        assertTrue(
+            appender.list.any { it.formattedMessage.contains("RECONCILE corrected 0") },
+            "reconciliation must have run and corrected nothing, with no Freemius state to compare against",
+        )
+    }
 }

@@ -89,6 +89,7 @@ Sensitive values are fly secrets. `fly secrets list` shows names and digests onl
 | `MONGODB_URI` | yes — the app calls `error("MONGODB_URI is not set")` and refuses to boot without it | full `mongodb+srv://` string including the database user's password |
 | `MYTETZ_COOKIE_SIGNING_KEY` | yes — the app refuses to boot without it, deliberately | signs the anonymous principal cookie. There is no safe default: a known key lets anyone mint any principal. 32 characters minimum |
 | `ANTHROPIC_API_KEY` | for explanation generation only | the model client is built lazily, so the catalogue serves without it |
+| `FREEMIUS_SECRET_KEY` | for checkout, the webhook and reconciliation only | signs and verifies the Freemius webhook. Built lazily, alongside `FREEMIUS_PRODUCT_ID` and `FREEMIUS_PLAN_ID`; the catalogue, sign-in and reading all still serve with none of the three set |
 
 Set them from the git-ignored `.env` at the repo root, without ever echoing them:
 
@@ -381,3 +382,52 @@ the loop. The existing seeds remain. Do the following:
 1. Check the day's ledger.
 2. Raise `MYTETZ_GLOBAL_DAILY_COST_CEILING_USD_MICROS`, only if that is the correct action.
 3. Run the migration again tomorrow.
+
+---
+
+## Billing reconciliation
+
+`MYTETZ_RECONCILE_ON_BOOT` runs a sweep at every boot. The sweep reads every subscription that is
+not `EXPIRED`. It asks Freemius for the real state of each one. It corrects a row that has
+drifted, and it logs the correction under `BILLING_DRIFT`. This sweep is the second defence behind
+the webhook, for a delivery that never arrives. `Components.RECONCILE_LIMIT` (500) bounds one run.
+The bound stops a restart under load from flooding the Freemius API.
+
+**This flag is safe to leave set. `MYTETZ_MIGRATE_ON_BOOT` is not.** The difference is in what
+each flag does, not in how often either one runs. The migration deletes documents and calls a
+metered model API. Every migration run costs real money, so section "The B0 model migration"
+above tells you to turn that flag off again right after the run. Reconciliation only reads Mongo
+and asks Freemius. It spends nothing, so there is nothing here to turn off in a hurry.
+
+**How often "every boot" happens today.** `fly.toml` currently sets `auto_stop_machines = "off"`.
+The machine never scales to zero, because of the 2026-08-16 outage section 4 above records. A boot
+now happens only on a deploy, a crash, or a manual restart — never on a visitor after an idle
+period. If `auto_stop_machines` goes back to `"stop"`, a boot again means a cold start, and
+reconciliation then runs on every cold start too. Either way, the safety argument above still
+holds: reconciliation is safe because of what it does, and the boot frequency only changes how
+often it runs.
+
+**What reconciliation cannot yet do.** `Components.fetchFreemiusState` always answers "no
+information". Turning this flag on today therefore corrects nothing. It only costs one bounded
+Mongo read per boot. Two things block a real Freemius lookup, and this project could confirm
+neither one. First, the credential: Freemius's Developer API needs a Bearer token from a product's
+own dashboard tab, and that token is not `FREEMIUS_SECRET_KEY`. Second, the response schema: this
+project could not confirm which fields a subscription resource actually carries. An operator who
+gets both can replace that one function's body. The flag, the sweep, and the `BILLING_DRIFT` log
+stay the same.
+
+### Operator alert tokens
+
+Each row below is a `log.warn` or a `log.error` line. Each line is greppable in `fly logs`. Each
+line is for an operator, and no line ever reaches a learner.
+
+| Token | Logged in | Meaning | Operator action |
+| --- | --- | --- | --- |
+| `BILLING_UNKNOWN_EVENT` | `BillingService.apply` | a webhook named a type this deployment does not map to a status | confirm the type against the Freemius dashboard; add it to `EVENT_TYPE_TO_STATUS` if it is real |
+| `BILLING_UNKNOWN_USER` | `BillingService.apply` | a webhook's `userReference` was empty, or resolved to no stored row | a learner paid with an address they never signed in with; find the account by hand and correct it |
+| `BILLING_STALE_EVENT` | `BillingService.apply` | an event arrived older than the row's last applied event, and was dropped | confirm the row's current state is still correct; the event id can never be replayed after this |
+| `BILLING_NO_PERIOD_END` | `Entitlement.resolve` | an `ACTIVE` row carries no period end | check whether the first-payment webhook for that row ever carried one; the row is granted access regardless |
+| `BILLING_DRIFT` | `Reconciliation.reconcile` | reconciliation corrected a subscription that had drifted from Freemius | read the log line for the before/after values; repeated drift on one row means the webhook for it is not arriving |
+| `WEBHOOK_SIGNATURE_MISMATCH` | `BillingRoutes` | `POST /api/billing/webhook` received a body whose signature did not verify | expected from scanners and mis-configured retries; investigate only if it is frequent, or if `FREEMIUS_SECRET_KEY` was just rotated |
+| `ACCOUNT_LINK_CONFLICT` | `AuthRoutes` | a Google sign-in's email is already linked to a different Google account | a real conflict, not a bug; the learner needs the sign-in method their account already used |
+| `MAIL_SEND_FAILED` | `MailSender` | a magic-link email could not be sent | check the mail provider's status and `MYTETZ_MAIL_API_KEY`; a learner is currently unable to sign in by email |

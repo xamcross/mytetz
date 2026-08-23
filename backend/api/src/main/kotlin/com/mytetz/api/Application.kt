@@ -135,6 +135,16 @@ fun Application.module(components: Components = Components()) {
             billing = components.billing,
             clientAddresses = components.clientAddresses,
         )
+        billingRoutes(
+            account = components.account,
+            billing = components.billing,
+            // A factory, not the built config, for the same reason `magicLink` and `google` are
+            // above: `Components.freemiusConfig` is `by lazy` on a chain that throws when a
+            // Freemius variable is missing, and reading it here would force that chain while this
+            // module is still being configured.
+            freemiusConfig = { components.freemiusConfig },
+            cookies = components.cookies,
+        )
 
         // Every unmatched `/api/**` path, answered as JSON.
         //

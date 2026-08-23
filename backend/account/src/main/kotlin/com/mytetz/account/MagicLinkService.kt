@@ -83,8 +83,13 @@ class MagicLinkService(
          * The method refuses an address with no `@` character, with more than one `@`
          * character, with no dot after the `@` character, longer than [MAX_EMAIL_LENGTH]
          * characters, or holding a space.
+         *
+         * Public, and not `internal`, so a caller outside this module can present the same
+         * identity a sign-in would. The billing checkout route is one such caller: it must
+         * normalise a learner's email the same way before it joins that address to a Freemius
+         * checkout, or the two systems can disagree about which account one payment belongs to.
          */
-        internal fun normaliseEmail(raw: String): String? {
+        fun normaliseEmail(raw: String): String? {
             val candidate = raw.trim().lowercase()
             if (candidate.isEmpty() || candidate.length > MAX_EMAIL_LENGTH) return null
             if (candidate.any { it.isWhitespace() }) return null

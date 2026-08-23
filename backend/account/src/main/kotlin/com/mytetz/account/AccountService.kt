@@ -27,6 +27,17 @@ class AccountService(
     private val sessionIds: () -> String = { newSessionId() },
 ) {
 
+    /**
+     * Finds the user whose stored email is exactly [email], or null. Creates nothing.
+     *
+     * This is the read half [findOrCreateByEmail] does not offer on its own: a caller that must
+     * not create an account for an address it does not recognise — the billing webhook route is
+     * the one that needs it — calls this instead. [email] must already be normalised; this
+     * method does no normalisation of its own, the same division of labour
+     * [findOrCreateByEmail] already keeps with [MagicLinkService].
+     */
+    suspend fun findByEmail(email: String): User? = repository.findUserByEmail(email)
+
     /** Finds the user with [email], or creates one. */
     suspend fun findOrCreateByEmail(email: String): User {
         repository.findUserByEmail(email)?.let { return it }

@@ -11,6 +11,10 @@ import com.mytetz.account.MailSender
 import com.mytetz.account.ResendMailSender
 import com.mytetz.billing.BillingRepository
 import com.mytetz.billing.BillingService
+import com.mytetz.billing.FreemiusConfig
+import com.mytetz.billing.FreemiusSubscriptionState
+import com.mytetz.billing.Reconciliation
+import com.mytetz.billing.Subscription
 import com.mytetz.catalog.CatalogService
 import com.mytetz.catalog.TopicRepository
 import com.mytetz.catalog.TopicRequestRepository
@@ -82,6 +86,7 @@ open class Components(
     publicBaseUrl: () -> String = { resolvePublicBaseUrl(System.getenv(PUBLIC_BASE_URL_ENV)) },
     googleOAuthFactory: () -> GoogleOAuth = { defaultGoogleOAuth(publicBaseUrl) },
     val migrateOnBoot: Boolean = resolveMigrateOnBoot(System.getenv(MIGRATE_ON_BOOT_ENV)),
+    val reconcileOnBoot: Boolean = Reconciliation.resolveReconcileOnBoot(System.getenv(Reconciliation.RECONCILE_ON_BOOT_ENV)),
 ) {
 
     private val topics = TopicRepository(mongo.database)
@@ -124,6 +129,16 @@ open class Components(
     val quota = QuotaService(quotaRepository)
 
     val billing: BillingService = BillingService(billingRepository)
+
+    /**
+     * The three Freemius identifiers, read from the environment.
+     *
+     * `by lazy`, on the same reasoning [mail] and [googleOAuth] carry: [FreemiusConfig]'s default
+     * constructor throws when a variable is missing, and it must not do that until the checkout
+     * route, the webhook route, or [reconcile] actually needs it. A deployment with no Freemius
+     * account must still boot and still serve the catalogue.
+     */
+    val freemiusConfig: FreemiusConfig by lazy { FreemiusConfig() }
 
     private val llm: LlmClient by lazy(llmFactory)
 
@@ -169,6 +184,7 @@ open class Components(
         accountRepository.ensureIndexes()
         catalog.seedFromResource()
         migrate()
+        reconcile()
     }
 
     /**
@@ -239,7 +255,62 @@ open class Components(
         )
     }
 
+    /**
+     * Corrects a subscription mirror that has drifted from Freemius, when [reconcileOnBoot] is
+     * true.
+     *
+     * Unlike [migrate], this is safe to leave on: it only reads, and [RECONCILE_LIMIT] bounds one
+     * run so a cold start under load cannot flood the Freemius API. See `docs/deploy.md` for the
+     * full argument, and why the same claim does not hold for [migrateOnBoot].
+     *
+     * [Reconciliation.reconcile] takes [fetchFreemiusState] as its own query function, so this is
+     * also where [freemiusConfig] would first be forced — but [fetchFreemiusState] does not read
+     * it today; see that function's own KDoc for why.
+     */
+    suspend fun reconcile() {
+        if (!reconcileOnBoot) return
+
+        val corrected = Reconciliation.reconcile(billingRepository, limit = RECONCILE_LIMIT) { subscription ->
+            fetchFreemiusState(subscription)
+        }
+        log.info("RECONCILE corrected {} drifted subscription(s)", corrected)
+    }
+
+    /**
+     * Asks Freemius for [subscription]'s current state, for [reconcile].
+     *
+     * **This always answers null, and makes no network call.** Two things this task could not
+     * confirm stop it from doing more:
+     *
+     * - **The credential.** Freemius's Developer API authenticates with a Bearer token issued
+     *   separately, from a product's own dashboard tab — not with [FreemiusConfig.secretKey],
+     *   which signs a webhook and nothing else. This deployment's environment carries no variable
+     *   for that separate token.
+     * - **The response schema.** The vendor's own documentation for what a subscription resource
+     *   contains did not render on the pages this task could fetch, so there is no field mapping
+     *   here to even guess at, unlike [com.mytetz.billing.FreemiusWebhookPayload]'s guessed field
+     *   names, each of which stands on a page that did render.
+     *
+     * Writing a paying learner's subscription status from an unconfirmed field mapping is a worse
+     * failure than reconciling nothing, so this function is left as a placeholder rather than a
+     * guess. [Reconciliation.reconcile] already treats a null answer as "skip this row, try again
+     * next run" — the whole point of the seam being a function and not a concrete client — so
+     * turning [reconcileOnBoot] on today costs one bounded Mongo read per boot and corrects
+     * nothing. An operator who obtains the real token and the real schema replaces this
+     * function's body; [reconcile], the boot flag and the `BILLING_DRIFT` log do not change.
+     */
+    private suspend fun fetchFreemiusState(subscription: Subscription): FreemiusSubscriptionState? = null
+
     companion object {
+
+        /**
+         * How many non-terminal subscriptions [reconcile] asks Freemius about in one run.
+         *
+         * This is the bound `docs/deploy.md` argues keeps a cold start under load from flooding
+         * the Freemius API. Five hundred is generous for this product's expected scale and cheap
+         * even if [fetchFreemiusState] answered every row for real.
+         */
+        const val RECONCILE_LIMIT: Int = 500
 
         const val MIGRATE_ON_BOOT_ENV: String = "MYTETZ_MIGRATE_ON_BOOT"
         const val PUBLIC_BASE_URL_ENV: String = "MYTETZ_PUBLIC_BASE_URL"
