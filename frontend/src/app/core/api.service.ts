@@ -8,6 +8,12 @@ export interface Health {
   mongo: boolean;
 }
 
+/** The body of `POST /api/billing/checkout`. The server builds the URL and adds the learner's
+ * email. No checkout secret ever reaches the browser this way. */
+export interface CheckoutResponse {
+  url: string;
+}
+
 @Injectable({ providedIn: 'root' })
 export class ApiService {
   private readonly http = inject(HttpClient);
@@ -65,5 +71,16 @@ export class ApiService {
 
   signOutAll(): Promise<void> {
     return firstValueFrom(this.http.post<void>('/api/auth/sign-out-all', null));
+  }
+
+  /**
+   * Asks the backend for a Freemius checkout URL for the signed-in learner.
+   *
+   * The URL already carries the learner's email and `readonly_user=true`. The browser only
+   * follows this URL and never builds one itself. The route answers `401` when the caller is not
+   * signed in.
+   */
+  checkout(): Promise<CheckoutResponse> {
+    return firstValueFrom(this.http.post<CheckoutResponse>('/api/billing/checkout', null));
   }
 }

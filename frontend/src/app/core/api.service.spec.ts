@@ -150,4 +150,15 @@ describe('ApiService', () => {
 
     await expect(promise).resolves.toBeNull();
   });
+
+  it('fetches a checkout url', async () => {
+    const promise = service.checkout();
+    const req = http.expectOne('/api/billing/checkout');
+    expect(req.request.method).toBe('POST');
+    req.flush({ url: 'https://checkout.freemius.com/product/1/plan/2/?user_email=a%40b.com' });
+
+    await expect(promise).resolves.toEqual({
+      url: 'https://checkout.freemius.com/product/1/plan/2/?user_email=a%40b.com',
+    });
+  });
 });
