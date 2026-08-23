@@ -40,6 +40,11 @@ dependencies {
     // AuthRoutesTest drives GoogleOAuth against a loopback com.sun.net.httpserver.HttpServer, the
     // same way GoogleOAuthTest and MailSenderTest do in :backend:account. The CIO engine this needs
     // already reaches the test classpath through the `implementation` dependency above.
+    //
+    // FreemiusApiClientTest drives the reconciliation lookup against a MockEngine instead: no
+    // socket, no vendor account, and the request Ktor actually builds is inspected directly rather
+    // than reconstructed from what a loopback server received.
+    testImplementation(libs.ktor.client.mock)
 }
 
 val frontendDir = rootProject.file("frontend")

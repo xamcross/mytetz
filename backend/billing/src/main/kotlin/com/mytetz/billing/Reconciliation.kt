@@ -47,15 +47,36 @@ object Reconciliation {
 
     /**
      * Reads up to [limit] non-terminal subscriptions and corrects every row [fetchState]
-     * disagrees with. Returns how many rows were corrected.
+     * disagrees with, subject to the fail-safe rule below. Returns how many rows were actually
+     * written.
      *
      * [limit] is what stops a cold start under load from asking Freemius about every subscription
      * this deployment has ever seen in one burst. [BillingRepository.listNonTerminal] enforces
      * it; this function issues no request beyond the ones that bound allows.
      *
-     * Every correction is logged under `BILLING_DRIFT`, naming the user, the stored status and
-     * period end, and the values Freemius reports — an operator's only record that the mirror had
-     * gone stale, since the row itself is overwritten with no other trace.
+     * ## The fail-safe rule
+     *
+     * [fetchState] rests on a guessed mapping from Freemius's own response to
+     * [FreemiusSubscriptionState] — unlike a webhook event, which Freemius signs. A wrong guess
+     * here must not be able to take money-bearing access away from a learner who paid for it. Two
+     * rules follow from that, and both are stricter than [BillingService.apply]'s own rules for a
+     * signed webhook event:
+     *
+     * - **A period end never shortens.** The stored value and the fetched value are compared, and
+     *   the later of the two is kept — never the fetched one outright. Contrast
+     *   [BillingService.apply], which trusts a signed event's own period end completely.
+     * - **A status change is written only when it grants access.** The one case this function
+     *   trusts on [fetchState]'s word alone is a fetched [SubscriptionStatus.ACTIVE] — the same
+     *   correction a `subscription.created` or a renewal webhook would have made, had it arrived.
+     *   Every other disagreement — a downgrade to [SubscriptionStatus.CANCELLED],
+     *   [SubscriptionStatus.PAST_DUE] or [SubscriptionStatus.EXPIRED], or any change while the
+     *   status does not become `ACTIVE` — is logged and left for an operator to act on by hand.
+     *
+     * Every disagreement is logged under `BILLING_DRIFT`, naming the user, the stored status and
+     * period end, the values Freemius reports, and whether this call actually wrote them —
+     * `applied=true` or `applied=false`. This is an operator's only record that the mirror had
+     * gone stale, since an applied correction overwrites the row with no other trace, and an
+     * unapplied one changes nothing at all unless a human reads the log line.
      *
      * A [fetchState] failure for one row is logged and skipped. One learner's lookup failing must
      * not stop the sweep for every other learner in the batch — the same shape
@@ -78,27 +99,46 @@ object Reconciliation {
                 null
             } ?: continue
 
+            // Never the fetched value outright: the later of the two stands, so a wrong or a
+            // stale answer from fetchState can lengthen a learner's access but never shorten it.
+            val proposedPeriodEnd = laterOf(state.currentPeriodEndsAtEpochMillis, subscription.currentPeriodEndsAtEpochMillis)
+
             val statusDrifted = state.status != subscription.status
-            val periodEndDrifted = state.currentPeriodEndsAtEpochMillis != subscription.currentPeriodEndsAtEpochMillis
+            val periodEndDrifted = proposedPeriodEnd != subscription.currentPeriodEndsAtEpochMillis
             if (!statusDrifted && !periodEndDrifted) continue
 
+            // The one status this function ever trusts on fetchState's word alone. See "The
+            // fail-safe rule" above.
+            val applied = state.status == SubscriptionStatus.ACTIVE
+
             log.warn(
-                "BILLING_DRIFT user={} status {}->{} periodEnd {}->{}",
+                "BILLING_DRIFT user={} status {}->{} periodEnd {}->{} applied={}",
                 subscription.userId,
                 subscription.status,
                 state.status,
                 subscription.currentPeriodEndsAtEpochMillis,
-                state.currentPeriodEndsAtEpochMillis,
+                proposedPeriodEnd,
+                applied,
             )
+
+            if (!applied) continue
+
             repository.upsert(
                 subscription.copy(
                     status = state.status,
-                    currentPeriodEndsAtEpochMillis = state.currentPeriodEndsAtEpochMillis,
+                    currentPeriodEndsAtEpochMillis = proposedPeriodEnd,
                     updatedAtEpochMillis = clock(),
                 ),
             )
             corrected++
         }
         return corrected
+    }
+
+    /** The later of [fetched] and [stored]. A null on either side defers to the other. */
+    private fun laterOf(fetched: Long?, stored: Long?): Long? = when {
+        fetched == null -> stored
+        stored == null -> fetched
+        else -> maxOf(fetched, stored)
     }
 }

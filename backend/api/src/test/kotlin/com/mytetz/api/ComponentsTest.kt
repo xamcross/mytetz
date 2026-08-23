@@ -532,10 +532,10 @@ class ComponentsTest {
 
     @Test
     fun `bootstrap runs reconciliation with no Freemius credential and does not throw`() = runTest {
-        // FreemiusConfig() throws when FREEMIUS_SECRET_KEY is unset, and this test's environment
-        // sets none of the three Freemius variables — the same as a real deployment before an
-        // operator has a Freemius account at all. fetchFreemiusState never reads freemiusConfig,
-        // so bootstrap must complete regardless; see that function's own KDoc for why.
+        // FreemiusApiConfig() throws when FREEMIUS_API_KEY or FREEMIUS_PRODUCT_ID is unset, and
+        // this test's environment sets neither — the same as a real deployment before an operator
+        // has a Freemius account at all. Components.reconcile catches that failure before the
+        // sweep starts, so bootstrap must complete regardless; see that method's own KDoc for why.
         val components = Components(
             mongo = Mongo(MongoConfig(uri = TestFixtures.connectionString, databaseName = "test_api_reconcile_no_creds")),
             cookies = TestFixtures.cookieConfig,
@@ -553,8 +553,12 @@ class ComponentsTest {
         }
 
         assertTrue(
-            appender.list.any { it.formattedMessage.contains("RECONCILE corrected 0") },
-            "reconciliation must have run and corrected nothing, with no Freemius state to compare against",
+            appender.list.any { it.formattedMessage.contains("RECONCILE_SKIPPED") },
+            "reconciliation must log why it skipped the sweep, with no Freemius API credential set",
+        )
+        assertTrue(
+            appender.list.none { it.formattedMessage.contains("RECONCILE corrected") },
+            "with no credential, the sweep must never start at all",
         )
     }
 }
