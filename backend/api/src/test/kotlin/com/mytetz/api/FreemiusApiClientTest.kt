@@ -200,6 +200,15 @@ class FreemiusApiClientTest {
      * failure's message quotes a snippet of the body it failed to parse. Confirmed here with a
      * body shaped like the fixture the finding named: a value from a field the vendor's schema
      * documents as personal data.
+     *
+     * The assertion is on `throwableProxy`, not on `formattedMessage`. logback keeps a passed
+     * `Throwable` out of `getFormattedMessage()` entirely and stores it in `getThrowableProxy()`
+     * instead — the console appender prints that proxy's own message as the stack trace, which is
+     * where the real leak was, and where a `formattedMessage`-only assertion would miss it. This
+     * is the same distinction `ComponentsTest`'s own `warning.throwableProxy` assertion already
+     * relies on. A regression round proved this by temporarily restoring the old
+     * `log.warn(..., e)` call shape: the assertion below went red, `formattedMessage`-only would
+     * not have.
      */
     @Test
     fun `an undecodable body's contents never reach the log`() = runTest {
@@ -214,21 +223,43 @@ class FreemiusApiClientTest {
             logger.detachAppender(appender)
         }
 
+        assertTrue(appender.list.isNotEmpty(), "the failure must still be logged, just without the body")
         assertTrue(
             appender.list.none { it.formattedMessage.contains("203.0.113.42") },
-            "the response body must never reach the log, directly or through a caught exception's message",
+            "the response body must never reach the formatted message",
+        )
+        assertTrue(
+            appender.list.all { it.throwableProxy == null },
+            "no line may carry a throwable either — logback prints its message as the stack trace, " +
+                "which is where a decode failure actually quotes the body",
         )
     }
 
     // ------------------------------------------------------------------ FreemiusApiConfig
+    //
+    // A test cannot set an environment variable in this JVM, so every test below calls
+    // `resolveRequired` directly rather than the zero-argument `FreemiusApiConfig()` — the same
+    // technique `FreemiusConfig`'s own equivalent tests use in `:backend:billing`. Calling
+    // `FreemiusApiConfig()` itself would read this process's real FREEMIUS_API_KEY and
+    // FREEMIUS_PRODUCT_ID, if a developer happened to have either exported, which is the exact
+    // fragility a review round found in this file's own credential-guard test in ComponentsTest.
 
     @Test
     fun `a missing Freemius API key fails construction and names the variable`() {
         val error = kotlin.test.assertFailsWith<IllegalStateException> {
-            FreemiusApiConfig(productId = "prod-1")
+            FreemiusApiConfig.resolveRequired(FreemiusApiConfig.API_KEY_ENV, null)
         }
 
         assertTrue(error.message.orEmpty().contains(FreemiusApiConfig.API_KEY_ENV))
+    }
+
+    @Test
+    fun `a missing Freemius product id fails construction and names the variable`() {
+        val error = kotlin.test.assertFailsWith<IllegalStateException> {
+            FreemiusApiConfig.resolveRequired(FreemiusApiConfig.PRODUCT_ID_ENV, null)
+        }
+
+        assertTrue(error.message.orEmpty().contains(FreemiusApiConfig.PRODUCT_ID_ENV))
     }
 
     @Test

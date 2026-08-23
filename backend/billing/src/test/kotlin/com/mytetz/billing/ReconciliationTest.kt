@@ -113,6 +113,39 @@ class ReconciliationTest {
         assertTrue(line.formattedMessage.contains("applied=true"), "an applied correction must say so: ${line.formattedMessage}")
     }
 
+    /**
+     * Pinned for the review finding it fixes: an `applied=true` correction from a genuine
+     * renewal and one from a subscription sitting inside a dunning retry window both fetch
+     * `ACTIVE`, by design — see "The fail-safe rule". Without `failedPayments` on the log line an
+     * operator cannot tell the two apart from the log alone, which is the whole point of logging
+     * at all.
+     */
+    @Test
+    fun `the BILLING_DRIFT line names failedPayments, so a dunning extension is not silent`() = runTest {
+        repository.upsert(pastDueSubscription("u1"))
+        val appender = attachAppender()
+
+        try {
+            Reconciliation.reconcile(repository, limit = 10) { subscription ->
+                FreemiusSubscriptionState(
+                    status = SubscriptionStatus.ACTIVE,
+                    currentPeriodEndsAtEpochMillis = subscription.graceEndsAtEpochMillis,
+                    failedPayments = 2,
+                )
+            }
+        } finally {
+            detachAppender(appender)
+        }
+
+        val line = appender.list.firstOrNull { it.formattedMessage.contains("BILLING_DRIFT") }
+        assertNotNull(line, "a corrected row must be logged under BILLING_DRIFT")
+        assertTrue(
+            line.formattedMessage.contains("failedPayments=2"),
+            "the log line must carry the failure count an operator needs to tell a dunning " +
+                "extension from a genuine renewal: ${line.formattedMessage}",
+        )
+    }
+
     @Test
     fun `reconciliation is off unless the flag says true`() {
         assertFalse(Reconciliation.resolveReconcileOnBoot(null))

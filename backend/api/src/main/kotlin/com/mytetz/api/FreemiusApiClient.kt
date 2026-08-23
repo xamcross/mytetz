@@ -121,6 +121,11 @@ internal fun parseFreemiusDateTime(raw: String?): Long? {
  * payment, one future retry date already scheduled — derives `ACTIVE` and keeps access it has not
  * yet paid for, until an operator reads a later `BILLING_DRIFT` line. That is the same direction
  * every part of the fail-safe rule already runs: toward a grant, never toward a denial.
+ *
+ * That `BILLING_DRIFT` line is why [resource]'s [FreemiusSubscriptionResource.failedPayments]
+ * rides along on the returned [FreemiusSubscriptionState] even though it plays no further part in
+ * this function's own decision: a dunning-window `ACTIVE` and a genuine renewal `ACTIVE` look
+ * identical without it, and an operator reading the log needs to tell the two apart.
  */
 internal fun deriveState(resource: FreemiusSubscriptionResource, nowEpochMillis: Long): FreemiusSubscriptionState {
     val periodEnd = parseFreemiusDateTime(resource.nextPayment)
@@ -130,7 +135,11 @@ internal fun deriveState(resource: FreemiusSubscriptionResource, nowEpochMillis:
         (resource.failedPayments ?: 0) > 0 -> SubscriptionStatus.PAST_DUE
         else -> SubscriptionStatus.EXPIRED
     }
-    return FreemiusSubscriptionState(status = status, currentPeriodEndsAtEpochMillis = periodEnd)
+    return FreemiusSubscriptionState(
+        status = status,
+        currentPeriodEndsAtEpochMillis = periodEnd,
+        failedPayments = resource.failedPayments,
+    )
 }
 
 private val json = Json { ignoreUnknownKeys = true }
@@ -200,11 +209,13 @@ class FreemiusApiClient(
             // snippet of the body it failed to parse, and the vendor's schema holds personal data
             // (ip, zip_postal_code, vat_id) that snippet could carry. Passing [e] itself to log.warn
             // would print that message and a stack trace built from it, so this logs a string we
-            // built instead of the exception.
+            // built instead of the exception. `e.javaClass.name` and not `e::class.simpleName`:
+            // the latter is nullable and answers null for an anonymous class, which would erase
+            // the one diagnostic this line exists to keep.
             log.warn(
                 "the Freemius subscription lookup for user {} did not complete: {}",
                 subscription.userId,
-                e::class.simpleName,
+                e.javaClass.name,
             )
             null
         }

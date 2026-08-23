@@ -563,4 +563,30 @@ class ComponentsTest {
             "with no credential, the sweep must never start at all",
         )
     }
+
+    /**
+     * The one test in this file that exercises the real seam: `freemiusApiClientFactory`'s own
+     * default, `{ FreemiusApiClient(HttpClient(CIO), FreemiusApiConfig()) }`, and not a test
+     * override. Every test above it proves the *guard* works by injecting a substitute; this one
+     * proves `Components`' own default wiring — the one a real deployment actually runs — never
+     * takes a boot down, in the one environment this test cannot control: whichever the developer
+     * or CI runner happens to provide.
+     *
+     * It asserts nothing about `FREEMIUS_API_KEY` or `FREEMIUS_PRODUCT_ID`, in either direction,
+     * for that reason — a developer's shell that exports both, or neither, must leave this test
+     * green either way. The database is a fresh one with no subscription rows, so
+     * `Reconciliation.reconcile` finds nothing non-terminal to ask about and this test makes no
+     * network call whichever branch the default credential resolution takes.
+     */
+    @Test
+    fun `bootstrap's default Freemius wiring never crashes boot, whatever the environment holds`() = runTest {
+        val components = Components(
+            mongo = Mongo(MongoConfig(uri = TestFixtures.connectionString, databaseName = "test_api_reconcile_default_wiring")),
+            cookies = TestFixtures.cookieConfig,
+            llmFactory = { FakeLlmClient() },
+            reconcileOnBoot = true,
+        )
+
+        components.bootstrap() // must not throw, whatever FREEMIUS_API_KEY / FREEMIUS_PRODUCT_ID hold
+    }
 }

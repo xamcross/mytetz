@@ -8,13 +8,22 @@ private val log = LoggerFactory.getLogger(Reconciliation::class.java)
 /**
  * What Freemius reports for one subscription right now.
  *
- * [Reconciliation.reconcile] compares this against the stored row and corrects the row when the
- * two disagree. This type carries only the two fields a webhook event can already change through
- * [BillingService.apply] — a reconciliation sweep must never touch a field a webhook cannot.
+ * [Reconciliation.reconcile] compares [status] and [currentPeriodEndsAtEpochMillis] against the
+ * stored row and corrects the row when the two disagree. Both are fields a webhook event can
+ * already change through [BillingService.apply] — a reconciliation sweep must never touch a
+ * field a webhook cannot.
+ *
+ * [failedPayments] is different: [reconcile] never writes it to the stored row, and never reads
+ * it to decide anything either. It travels with this type only so a `BILLING_DRIFT` log line can
+ * carry it. A fetched [SubscriptionStatus.ACTIVE] applies the same way whether [failedPayments]
+ * is zero or ten, by design — see [reconcile]'s own "fail-safe rule" — but an operator reading
+ * the log still needs to tell a genuine renewal from a subscription sitting inside a dunning
+ * retry window, and the status and the period end alone cannot say which.
  */
 data class FreemiusSubscriptionState(
     val status: SubscriptionStatus,
     val currentPeriodEndsAtEpochMillis: Long?,
+    val failedPayments: Int? = null,
 )
 
 /**
@@ -73,10 +82,13 @@ object Reconciliation {
      *   status does not become `ACTIVE` — is logged and left for an operator to act on by hand.
      *
      * Every disagreement is logged under `BILLING_DRIFT`, naming the user, the stored status and
-     * period end, the values Freemius reports, and whether this call actually wrote them —
-     * `applied=true` or `applied=false`. This is an operator's only record that the mirror had
-     * gone stale, since an applied correction overwrites the row with no other trace, and an
-     * unapplied one changes nothing at all unless a human reads the log line.
+     * period end, the values Freemius reports, [FreemiusSubscriptionState.failedPayments], and
+     * whether this call actually wrote the change — `applied=true` or `applied=false`. This is an
+     * operator's only record that the mirror had gone stale, since an applied correction
+     * overwrites the row with no other trace, and an unapplied one changes nothing at all unless a
+     * human reads the log line. `failedPayments` is what lets that human tell an `applied=true`
+     * genuine renewal from an `applied=true` subscription sitting inside a dunning retry window —
+     * both fetch `ACTIVE`, and only the failure count tells them apart.
      *
      * A [fetchState] failure for one row is logged and skipped. One learner's lookup failing must
      * not stop the sweep for every other learner in the batch — the same shape
@@ -112,12 +124,13 @@ object Reconciliation {
             val applied = state.status == SubscriptionStatus.ACTIVE
 
             log.warn(
-                "BILLING_DRIFT user={} status {}->{} periodEnd {}->{} applied={}",
+                "BILLING_DRIFT user={} status {}->{} periodEnd {}->{} failedPayments={} applied={}",
                 subscription.userId,
                 subscription.status,
                 state.status,
                 subscription.currentPeriodEndsAtEpochMillis,
                 proposedPeriodEnd,
+                state.failedPayments,
                 applied,
             )
 
