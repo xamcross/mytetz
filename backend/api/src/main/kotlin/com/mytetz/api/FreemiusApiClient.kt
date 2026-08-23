@@ -97,26 +97,40 @@ internal fun parseFreemiusDateTime(raw: String?): Long? {
 }
 
 /**
- * Derives a [SubscriptionStatus] from [resource], since the vendor's schema carries no status
- * field of its own.
+ * Derives a [SubscriptionStatus] from [resource] as it stands at [nowEpochMillis], since the
+ * vendor's schema carries no status field of its own.
  *
  * This mapping is a best effort, not a confirmed one, and [Reconciliation.reconcile]'s own
  * fail-safe rule is what keeps a wrong guess here from being able to downgrade a paying learner:
  * only a derived [SubscriptionStatus.ACTIVE] is ever written automatically. A derived
  * [SubscriptionStatus.CANCELLED], [SubscriptionStatus.PAST_DUE] or [SubscriptionStatus.EXPIRED]
  * is logged under `BILLING_DRIFT` for an operator, never applied on this function's word alone.
+ *
+ * ## The order is deliberate, and it favours a grant over a denial
+ *
+ * A future [FreemiusSubscriptionResource.nextPayment] derives [SubscriptionStatus.ACTIVE]
+ * **whatever [FreemiusSubscriptionResource.failedPayments] holds.** [failedPayments] is
+ * documented only as "Number of failed payments associated with the subscription", with no
+ * stated reset rule, so this project cannot confirm it clears on a successful renewal. Checking
+ * it first would then read as a **cumulative** count: a learner who failed one payment and later
+ * renewed would derive [SubscriptionStatus.PAST_DUE] for ever, and the fail-safe rule above would
+ * never let the correction that restores their access — a fetched `ACTIVE` — apply. That is the
+ * exact case reconciliation exists to fix, so it is the one order this function must not take.
+ *
+ * The cost is accepted, not hidden: a subscription inside a dunning retry window — one failed
+ * payment, one future retry date already scheduled — derives `ACTIVE` and keeps access it has not
+ * yet paid for, until an operator reads a later `BILLING_DRIFT` line. That is the same direction
+ * every part of the fail-safe rule already runs: toward a grant, never toward a denial.
  */
-internal fun deriveState(resource: FreemiusSubscriptionResource): FreemiusSubscriptionState {
+internal fun deriveState(resource: FreemiusSubscriptionResource, nowEpochMillis: Long): FreemiusSubscriptionState {
+    val periodEnd = parseFreemiusDateTime(resource.nextPayment)
     val status = when {
         resource.canceledAt != null -> SubscriptionStatus.CANCELLED
+        periodEnd != null && periodEnd > nowEpochMillis -> SubscriptionStatus.ACTIVE
         (resource.failedPayments ?: 0) > 0 -> SubscriptionStatus.PAST_DUE
-        resource.nextPayment != null -> SubscriptionStatus.ACTIVE
         else -> SubscriptionStatus.EXPIRED
     }
-    return FreemiusSubscriptionState(
-        status = status,
-        currentPeriodEndsAtEpochMillis = parseFreemiusDateTime(resource.nextPayment),
-    )
+    return FreemiusSubscriptionState(status = status, currentPeriodEndsAtEpochMillis = periodEnd)
 }
 
 private val json = Json { ignoreUnknownKeys = true }
@@ -138,11 +152,14 @@ private val json = Json { ignoreUnknownKeys = true }
  * [httpClient] is injected, the same division of labour `ResendMailSender` and `GoogleOAuth`
  * already use in `:backend:account`: a production caller passes a real engine, and a test passes
  * a `MockEngine`. [apiConfig] is resolved once, by [Components], before this class is built —
- * this class never re-reads the environment itself.
+ * this class never re-reads the environment itself. [clock] carries the same default every other
+ * clock reading in this codebase uses, and a test overrides it so [deriveState]'s "future" check
+ * does not depend on when the test happens to run.
  */
 class FreemiusApiClient(
     private val httpClient: HttpClient,
     private val apiConfig: FreemiusApiConfig,
+    private val clock: () -> Long = System::currentTimeMillis,
 ) {
 
     /**
@@ -174,13 +191,21 @@ class FreemiusApiClient(
                 return null
             }
 
-            deriveState(json.decodeFromString<FreemiusSubscriptionResource>(response.bodyAsText()))
+            deriveState(json.decodeFromString<FreemiusSubscriptionResource>(response.bodyAsText()), clock())
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            // Never the response body: a Freemius error page can echo request details back, the
-            // same reasoning ResendMailSender's own KDoc gives for withholding one.
-            log.warn("the Freemius subscription lookup for user {} did not complete", subscription.userId, e)
+            // Neither the response body nor the caught exception's own message ever reaches this
+            // line — only the exception's class name does. A decode failure's message can quote a
+            // snippet of the body it failed to parse, and the vendor's schema holds personal data
+            // (ip, zip_postal_code, vat_id) that snippet could carry. Passing [e] itself to log.warn
+            // would print that message and a stack trace built from it, so this logs a string we
+            // built instead of the exception.
+            log.warn(
+                "the Freemius subscription lookup for user {} did not complete: {}",
+                subscription.userId,
+                e::class.simpleName,
+            )
             null
         }
     }

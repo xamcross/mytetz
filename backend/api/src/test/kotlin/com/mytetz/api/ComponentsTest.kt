@@ -532,15 +532,17 @@ class ComponentsTest {
 
     @Test
     fun `bootstrap runs reconciliation with no Freemius credential and does not throw`() = runTest {
-        // FreemiusApiConfig() throws when FREEMIUS_API_KEY or FREEMIUS_PRODUCT_ID is unset, and
-        // this test's environment sets neither — the same as a real deployment before an operator
-        // has a Freemius account at all. Components.reconcile catches that failure before the
-        // sweep starts, so bootstrap must complete regardless; see that method's own KDoc for why.
+        // The missing credential is simulated through the factory, not through the real
+        // environment: a developer's shell that happens to export FREEMIUS_API_KEY and
+        // FREEMIUS_PRODUCT_ID must not change this test's outcome. Components.reconcile catches
+        // exactly this failure before the sweep starts, so bootstrap must complete regardless; see
+        // that method's own KDoc for why.
         val components = Components(
             mongo = Mongo(MongoConfig(uri = TestFixtures.connectionString, databaseName = "test_api_reconcile_no_creds")),
             cookies = TestFixtures.cookieConfig,
             llmFactory = { FakeLlmClient() },
             reconcileOnBoot = true,
+            freemiusApiClientFactory = { error("${FreemiusApiConfig.API_KEY_ENV} is not set") },
         )
 
         val appender = ListAppender<ILoggingEvent>().apply { start() }

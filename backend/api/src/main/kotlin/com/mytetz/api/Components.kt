@@ -85,6 +85,14 @@ open class Components(
     googleOAuthFactory: () -> GoogleOAuth = { defaultGoogleOAuth(publicBaseUrl) },
     val migrateOnBoot: Boolean = resolveMigrateOnBoot(System.getenv(MIGRATE_ON_BOOT_ENV)),
     val reconcileOnBoot: Boolean = Reconciliation.resolveReconcileOnBoot(System.getenv(Reconciliation.RECONCILE_ON_BOOT_ENV)),
+    // A factory, for the same reason `mailSenderFactory` and `googleOAuthFactory` are: the
+    // production default throws when a credential is absent, and it must not do that until
+    // [reconcile] actually needs it. A test overrides this to simulate a missing credential
+    // directly, rather than depending on whether the environment the test happens to run in sets
+    // FREEMIUS_API_KEY or FREEMIUS_PRODUCT_ID — a developer's own shell must not change what a
+    // test asserts. See `ComponentsTest`'s `bootstrap runs reconciliation with no Freemius
+    // credential and does not throw`.
+    freemiusApiClientFactory: () -> FreemiusApiClient = { FreemiusApiClient(HttpClient(CIO), FreemiusApiConfig()) },
 ) {
 
     private val topics = TopicRepository(mongo.database)
@@ -158,9 +166,7 @@ open class Components(
      * them on separate chains means turning reconciliation on, or off, never touches whether the
      * checkout and webhook routes can build.
      */
-    private val freemiusApiClient: FreemiusApiClient by lazy {
-        FreemiusApiClient(HttpClient(CIO), FreemiusApiConfig())
-    }
+    private val freemiusApiClient: FreemiusApiClient by lazy(freemiusApiClientFactory)
 
     private val llm: LlmClient by lazy(llmFactory)
 
