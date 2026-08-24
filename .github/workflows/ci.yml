@@ -44,3 +44,76 @@ jobs:
         working-directory: frontend
         env:
           CI: true
+
+  # Builds the container image and throws it away.
+  #
+  # The image is what a deploy ships, and until this job existed nothing checked
+  # it. The `backend` job runs ./gradlew against the runner's own checkout, where
+  # every module directory exists. The Dockerfile instead copies each module
+  # build file by name, so a module added to settings.gradle.kts and forgotten
+  # there is invisible to every test. That broke a deploy on 2026-08-24. This job
+  # is what sees it next time.
+  #
+  # Pull requests only. A push to main goes straight to `deploy`, which builds the
+  # same Dockerfile itself, so running this too would build the image twice.
+  image:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Deploys to fly.io on every merge to main.
+  deploy:
+    if: github.event_name == 'push'
+    needs: [backend, frontend]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    concurrency:
+      # Two merges close together queue, and the second waits. A deploy in flight
+      # is never cancelled: flyctl stopped part way through a release leaves the
+      # app in a state this workflow cannot reason about.
+      group: deploy-main
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      # fly.io documents `--remote-only`. This uses `--local-only` on purpose.
+      # A remote builder is a fly machine that costs money while it runs, and
+      # docs/deploy.md §4 records the decision to avoid one. A GitHub runner has
+      # its own Docker daemon, so it builds the image and pushes the result to
+      # registry.fly.io without a builder machine.
+      #
+      # `--ha=false` is not optional. Without it flyctl creates two machines on a
+      # release. docs/deploy.md §4 records that `min_machines_running = 0` does
+      # not prevent it.
+      - name: Deploy to fly.io
+        run: flyctl deploy --local-only --ha=false
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      # fly rolls a release back by itself when the health check never passes, and
+      # it does that quietly. This step turns that silence into a red run.
+      # fly.toml gives the check a 10s grace period, so six tries at 10s is ample
+      # for a JVM start plus a cold Atlas handshake.
+      - name: Prove the deployed app is healthy
+        run: |
+          for attempt in 1 2 3 4 5 6; do
+            if curl -sf --max-time 10 https://mytetz.fly.dev/api/health; then
+              echo
+              echo "The deployed app reports healthy."
+              exit 0
+            fi
+            echo "Attempt ${attempt} found no healthy response. Waiting 10s."
+            sleep 10
+          done
+          echo "The deployed app never reported healthy."
+          exit 1

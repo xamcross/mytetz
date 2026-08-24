@@ -42,6 +42,14 @@ ENV GRADLE_USER_HOME=/gradle-home \
 #      Gradle distribution and every already-downloaded artifact are still there.
 # gradlew is committed with LF and the executable bit, but --chmod makes the
 # build independent of how the host checked it out.
+#
+# This list must name every module that settings.gradle.kts includes. Gradle
+# configures every included project during the resolve step below, and it fails
+# on a project whose directory is absent. A module added to settings.gradle.kts
+# and forgotten here broke a deploy on 2026-08-24: the CI job runs ./gradlew on
+# the runner checkout, where every directory exists, so nothing caught it. The
+# `image` job in .github/workflows/ci.yml now builds this file on every pull
+# request, which is what stops the list going stale unnoticed.
 COPY --chmod=0755 gradlew ./
 COPY gradle ./gradle
 COPY settings.gradle.kts build.gradle.kts ./
@@ -50,6 +58,8 @@ COPY backend/llm/build.gradle.kts         ./backend/llm/
 COPY backend/catalog/build.gradle.kts     ./backend/catalog/
 COPY backend/graph/build.gradle.kts       ./backend/graph/
 COPY backend/quota/build.gradle.kts       ./backend/quota/
+COPY backend/account/build.gradle.kts     ./backend/account/
+COPY backend/billing/build.gradle.kts     ./backend/billing/
 COPY backend/session/build.gradle.kts     ./backend/session/
 COPY backend/assess/build.gradle.kts      ./backend/assess/
 COPY backend/api/build.gradle.kts         ./backend/api/
