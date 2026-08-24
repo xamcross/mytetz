@@ -529,3 +529,55 @@ test('every font comes from this origin, and none from a Google Fonts host', asy
     'figtree-latin-ext.woff2',
   );
 });
+
+test('the mark draws at 28px, left of the wordmark', async ({ page }) => {
+  await stubCatalogueAndSession(page);
+  await page.setViewportSize(WIDTHS.wide);
+  await page.goto('/');
+  await page.locator('.topic__button').first().waitFor();
+
+  const box = await page.locator('.bar__mark app-logo-mark').boundingBox();
+
+  expect(box?.width).toBe(28);
+  expect(box?.height).toBe(28);
+});
+
+test('the mark resolves its palette tokens inside the inline SVG', async ({ page }) => {
+  await stubCatalogueAndSession(page);
+  await page.setViewportSize(WIDTHS.wide);
+  await page.goto('/');
+  await page.locator('.topic__button').first().waitFor();
+
+  // `fill="var(--mt-coral)"` is a presentation attribute, and a presentation attribute maps to a
+  // CSS declaration, so `var()` inside one has to resolve. jsdom cannot prove that — it returns
+  // the declared string — and a mark whose fill resolves to nothing draws as black. This is the
+  // one assertion that catches it.
+  const fills = await page
+    .locator('.bar__mark app-logo-mark rect')
+    .evaluateAll((els) => els.map((el) => getComputedStyle(el).fill));
+
+  expect(fills).toEqual(['rgb(228, 242, 237)', 'rgb(255, 93, 93)', 'rgb(15, 118, 110)']);
+});
+
+test('the browser can fetch every icon the page declares', async ({ page, request }) => {
+  await stubCatalogueAndSession(page);
+  await page.goto('/');
+
+  const hrefs = await page
+    .locator('head link[rel~="icon"], head link[rel~="apple-touch-icon"]')
+    .evaluateAll((els) => els.map((el) => (el as HTMLLinkElement).href));
+
+  // A declared icon that 404s is invisible in development, because the browser falls back to
+  // `/favicon.ico` without a word. Only a fetch of each declared href finds it.
+  expect(hrefs.length).toBe(3);
+  for (const href of hrefs) {
+    expect((await request.get(href)).status(), href).toBe(200);
+  }
+});
+
+test('the tab carries the product name, not the generator default', async ({ page }) => {
+  await stubCatalogueAndSession(page);
+  await page.goto('/');
+
+  expect(await page.title()).toBe('mytetz');
+});
