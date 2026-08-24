@@ -116,8 +116,35 @@ fun Application.module(components: Components = Components()) {
             // with it. See the note on `sessionRoutes` and `Components`' own KDoc.
             sessions = { components.sessions },
             quota = components.quota,
+            billing = components.billing,
+            account = components.account,
             cookies = components.cookies,
             clientAddresses = components.clientAddresses,
+        )
+        authRoutes(
+            account = components.account,
+            sessions = { components.sessions },
+            // Factories, not the built services, for the reason `sessions` above is one: each of
+            // `components.magicLink` and `components.googleOAuth` is `by lazy` on a chain that can
+            // throw when a credential is missing, and reading either here would force it while this
+            // module is still being configured. See `Components`' own KDoc.
+            magicLink = { components.magicLink },
+            google = { components.googleOAuth },
+            cookies = components.cookies,
+            quotaRepository = components.quotaRepository,
+            billing = components.billing,
+            clientAddresses = components.clientAddresses,
+            turnstile = components.turnstile,
+        )
+        billingRoutes(
+            account = components.account,
+            billing = components.billing,
+            // A factory, not the built config, for the same reason `magicLink` and `google` are
+            // above: `Components.freemiusConfig` is `by lazy` on a chain that throws when a
+            // Freemius variable is missing, and reading it here would force that chain while this
+            // module is still being configured.
+            freemiusConfig = { components.freemiusConfig },
+            cookies = components.cookies,
         )
 
         // Every unmatched `/api/**` path, answered as JSON.

@@ -520,4 +520,78 @@ class QuotaServiceTest {
         val counter = assertNotNull(repository.findCounter(alice.value))
         assertEquals(T0 + DAY_MILLIS, counter.windowExpiresAtEpochMillis)
     }
+
+    // ------------------------------------------------------------------ alignWindow
+
+    @Test
+    fun `resetCounter clears the count and the window`() = runTest {
+        service.recordGeneration(alice, costMicros = 1)
+        assertNotNull(repository.findCounter(alice.value))
+
+        repository.resetCounter(alice.value)
+
+        assertNull(repository.findCounter(alice.value))
+    }
+
+    @Test
+    fun `resetCounter on an absent principal is a no-op`() = runTest {
+        // A second principal that does hold a counter. Without it, a `resetCounter` that cleared
+        // every document rather than the one it was given would still pass the assertion below.
+        service.recordGeneration(bob, costMicros = 1)
+        val bobBefore = assertNotNull(repository.findCounter(bob.value))
+
+        // Nothing to delete for alice, and nothing to raise about it either.
+        repository.resetCounter(alice.value)
+
+        assertNull(repository.findCounter(alice.value))
+        assertEquals(bobBefore, repository.findCounter(bob.value), "resetCounter touched a principal it was not given")
+    }
+
+    @Test
+    fun `a window change resets the counter`() = runTest {
+        // Trial-shaped: a seven-day window with generations already spent, exactly the state a
+        // learner who is about to subscribe is in.
+        val trial = Allowance(generations = 40, windowMillis = 7 * DAY_MILLIS)
+        service.recordGeneration(alice, costMicros = 1, allowance = trial)
+        assertNotNull(repository.findCounter(alice.value), "fixture error: the counter must exist first")
+
+        val subscriber = Allowance(generations = 25, windowMillis = DAY_MILLIS)
+        service.alignWindow(alice, subscriber)
+
+        assertNull(
+            repository.findCounter(alice.value),
+            "a mismatched window must be cleared, or a learner who just subscribed is locked out by a trial count",
+        )
+
+        // The opposite direction, and the half that matters most: a counter whose window already
+        // matches the allowance must be left alone. A method that resets unconditionally would
+        // pass the assertion above and still be wrong — it would clear a learner's count on every
+        // single generation.
+        service.recordGeneration(bob, costMicros = 1, allowance = subscriber)
+        val before = assertNotNull(repository.findCounter(bob.value))
+
+        service.alignWindow(bob, subscriber)
+
+        val after = assertNotNull(repository.findCounter(bob.value))
+        assertEquals(before.windowStartEpochMillis, after.windowStartEpochMillis)
+        assertEquals(before.windowExpiresAtEpochMillis, after.windowExpiresAtEpochMillis)
+        assertEquals(before.explainCount, after.explainCount)
+    }
+
+    @Test
+    fun `alignWindow on an absent counter is a no-op`() = runTest {
+        // A second principal whose counter's window differs from the allowance alice's call
+        // passes. Without this mismatch, an `alignWindow` that realigned every counter in the
+        // collection rather than the one it was given would still pass the assertion below,
+        // because bob's counter would already match and an incorrect align would leave it alone.
+        val trial = Allowance(generations = 40, windowMillis = 7 * DAY_MILLIS)
+        service.recordGeneration(bob, costMicros = 1, allowance = trial)
+        val bobBefore = assertNotNull(repository.findCounter(bob.value))
+
+        // Nothing to align for alice — and nothing for alice's next check to see either.
+        service.alignWindow(alice, Allowance(generations = 25, windowMillis = DAY_MILLIS))
+
+        assertNull(repository.findCounter(alice.value))
+        assertEquals(bobBefore, repository.findCounter(bob.value), "alignWindow touched a principal it was not given")
+    }
 }

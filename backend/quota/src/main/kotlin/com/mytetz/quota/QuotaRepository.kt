@@ -121,6 +121,19 @@ open class QuotaRepository(database: MongoDatabase) {
     suspend fun ledgerFor(day: String): CostLedgerEntry? =
         ledger.find(Filters.eq("_id", day)).firstOrNull()
 
+    /**
+     * Deletes the counter for [principalId], whole.
+     *
+     * The next [incrementCounter] call for this principal starts a fresh document, under whatever
+     * window that call is given. [QuotaService.alignWindow] is the only caller: it deletes a
+     * counter whose stored window no longer matches the caller's current allowance, so that a
+     * learner's next check reads a clean slate instead of a count from an allowance that no
+     * longer applies to them.
+     */
+    suspend fun resetCounter(principalId: String) {
+        principals.deleteOne(Filters.eq("_id", principalId))
+    }
+
     private companion object {
         /** Named without an `EpochMillis` suffix because the stored value is a Date, not a number. */
         const val WINDOW_EXPIRES_AT = "windowExpiresAt"

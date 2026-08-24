@@ -318,8 +318,120 @@ class PrincipalTest {
         assertFalse(header.contains("Secure", ignoreCase = true), "Secure survived secure=false: $header")
     }
 
+    // ------------------------------------------------------------------ the session cookie
+
+    /** Installs routes over the session-cookie functions, so a test can drive them over HTTP. */
+    private fun ApplicationTestBuilder.sessionApp(with: PrincipalCookieConfig = config) {
+        application {
+            routing {
+                get("/set-session/{id}") {
+                    Principals.setSessionCookie(call, with, call.parameters["id"]!!)
+                    call.respondText("set")
+                }
+                get("/read-session") {
+                    call.respondText(Principals.readSessionId(call, with) ?: "null")
+                }
+                get("/clear-session") {
+                    Principals.clearSessionCookie(call, with)
+                    call.respondText("cleared")
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `a session id round-trips through the signed cookie`() = testApplication {
+        sessionApp()
+
+        val setResponse = client.get("/set-session/abc123")
+        val cookie = assertNotNull(setResponse.setCookiePair(), "no session cookie was set")
+
+        val readResponse = client.get("/read-session") { headers.append(HttpHeaders.Cookie, cookie) }
+
+        assertEquals("abc123", readResponse.bodyAsText())
+    }
+
+    @Test
+    fun `a signed anonymous principal is refused as a session id`() = testApplication {
+        sessionApp()
+
+        // Correctly signed, correctly shaped as a `PrincipalId.anonymous` value — and still not a
+        // session id, because it carries no session domain tag.
+        val forged = sign("anon:${UUID.randomUUID()}", key)
+
+        val response = client.get("/read-session") {
+            headers.append(HttpHeaders.Cookie, "$SESSION_COOKIE=$forged")
+        }
+
+        assertEquals("null", response.bodyAsText())
+    }
+
+    @Test
+    fun `a signed session id is refused as an anonymous principal`() = testApplication {
+        whoAmI()
+
+        // The reverse direction. A signed session value, replayed against the anonymous cookie's
+        // own route, must not be adopted as a principal.
+        val forged = sign("sid:some-session-id", key)
+
+        val body = client.get("/who") { headers.append(HttpHeaders.Cookie, "$COOKIE=$forged") }.bodyAsText()
+
+        assertFreshAnonymousPrincipal(body)
+    }
+
+    @Test
+    fun `an unsigned session cookie is refused`() = testApplication {
+        sessionApp()
+
+        val response = client.get("/read-session") {
+            headers.append(HttpHeaders.Cookie, "$SESSION_COOKIE=sid:abc123")
+        }
+
+        assertEquals("null", response.bodyAsText())
+    }
+
+    @Test
+    fun `a session cookie signed under another key is refused`() = testApplication {
+        sessionApp()
+
+        val forged = sign("sid:abc123", otherKey)
+
+        val response = client.get("/read-session") {
+            headers.append(HttpHeaders.Cookie, "$SESSION_COOKIE=$forged")
+        }
+
+        assertEquals("null", response.bodyAsText())
+    }
+
+    @Test
+    fun `the session cookie is http-only and same-site lax`() = testApplication {
+        sessionApp()
+
+        val header = assertNotNull(
+            client.get("/set-session/abc123").headers[HttpHeaders.SetCookie],
+            "no session cookie was set",
+        )
+
+        assertTrue(header.contains("HttpOnly", ignoreCase = true), "missing HttpOnly: $header")
+        assertTrue(header.contains("Path=/"), "missing Path=/: $header")
+        assertTrue(header.contains("SameSite=Lax", ignoreCase = true), "missing SameSite=Lax: $header")
+    }
+
+    @Test
+    fun `clearing the session cookie sets a zero max age`() = testApplication {
+        sessionApp()
+
+        val header = assertNotNull(
+            client.get("/clear-session").headers[HttpHeaders.SetCookie],
+            "no session cookie was set",
+        )
+
+        assertTrue(header.contains("Max-Age=0"), "expected a zero max age: $header")
+    }
+
     private companion object {
         const val COOKIE = "mytetz_pid"
+        const val SESSION_COOKIE = "mytetz_sid"
     }
 }
 

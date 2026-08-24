@@ -1,5 +1,6 @@
 import { DestroyRef, Injectable, InjectionToken, computed, inject, signal } from '@angular/core';
 import { HttpErrorResponse } from '@angular/common/http';
+import { AccountStore } from '../core/account.store';
 import { ApiService } from '../core/api.service';
 import { ExplainRequest, NodeView, SessionView, SpanPayload, Verb } from '../core/models';
 import { ExplainEvent, ExplainStreamError, explainStream } from '../core/sse.client';
@@ -108,6 +109,10 @@ interface LastExplain {
 export class SessionStore {
   private readonly api = inject(ApiService);
   private readonly stream = inject(EXPLAIN_STREAM);
+  // `providedIn: 'root'`, injected here on purpose. This store is provided per reader route, but a
+  // learner's account is one thing for the whole tab, so the root instance is the correct one to
+  // share.
+  private readonly account = inject(AccountStore);
 
   /** The id being read, kept separately from [session] so a failed load can still be retried. */
   private sessionId: string | null = null;
@@ -289,11 +294,18 @@ export class SessionStore {
     }
   }
 
-  /** Moves the focus within the loaded session. No request: every body is already here. */
+  /**
+   * Moves the focus within the loaded session. No request: every body is already here.
+   *
+   * Clears [error] too. Without this, a wall or a sign-in panel raised by a failed explain stays
+   * on screen after the learner moves to another node, and a page reload is the only escape. A
+   * learner who has moved on is no longer looking at the request that failed.
+   */
   goTo(nodeId: string): void {
     const exists = this.session()?.nodes.some((n) => n.nodeId === nodeId) ?? false;
     if (!exists) return;
     this.currentNodeId.set(nodeId);
+    this.error.set(null);
   }
 
   /**
@@ -437,10 +449,23 @@ export class SessionStore {
       // Only if this is still the current generation. An abandoned one unwinds whenever its fetch
       // gets round to rejecting, which can be after the learner has started something else in the
       // reused component — and `isStreaming.set(false)` from a generation nobody is watching would
-      // then clear the flag out from under the one they are.
+      // then clear the flag out from under the one they are. The same guard also decides the
+      // account refresh below, and for the same reason: a learner who clicks through several spans
+      // before any of them finishes must not fire one account read per click.
       if (this.inFlight === controller) {
         this.inFlight = null;
         this.isStreaming.set(false);
+        // A generation that reaches this point, win or refuse, changes the learner's remaining
+        // allowance. A completed generation spends one unit. A refusal can too: TRIAL_EXHAUSTED
+        // means the pool is now zero, and the meter must say so at once, not after a reload. The
+        // read is one small GET, so its cost is worth paying on both outcomes. A cache hit spends
+        // nothing, so this same call then returns the same numbers, which needs no special case.
+        //
+        // SIGN_IN_REQUIRED is the one refusal this skips. A signed-out visitor gets that same
+        // code on every attempt, and the account read would only ever answer 401 in reply.
+        if (this.error()?.code !== 'SIGN_IN_REQUIRED') {
+          void this.account.load();
+        }
       }
     }
   }

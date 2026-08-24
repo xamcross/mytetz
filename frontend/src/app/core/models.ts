@@ -43,3 +43,19 @@ export interface ExplainRequest {
   verb: Verb;
   variant?: number;
 }
+
+/**
+ * The body of `GET /api/account` — mirrors the backend's `AccountView` field for field.
+ *
+ * [trialEndsAtEpochMillis] and [currentPeriodEndsAtEpochMillis] hold `null` until slice B2 fills
+ * them. They are here now so a later task reads a typed field and not `undefined`.
+ */
+export interface AccountView {
+  email: string;
+  status: string;
+  trialEndsAtEpochMillis: number | null;
+  currentPeriodEndsAtEpochMillis: number | null;
+  allowance: number;
+  remaining: number;
+  resetsAtEpochMillis: number | null;
+}

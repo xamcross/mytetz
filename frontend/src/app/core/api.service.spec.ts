@@ -2,7 +2,7 @@ import { TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting, HttpTestingController } from '@angular/common/http/testing';
 import { ApiService } from './api.service';
-import { SessionView, TopicSummary } from './models';
+import { AccountView, SessionView, TopicSummary } from './models';
 
 describe('ApiService', () => {
   let service: ApiService;
@@ -102,5 +102,63 @@ describe('ApiService', () => {
     req.flush(session);
 
     await expect(promise).resolves.toEqual(session);
+  });
+
+  it('fetches the account view', async () => {
+    const account: AccountView = {
+      email: 'learner@example.com',
+      status: 'TRIALING',
+      trialEndsAtEpochMillis: null,
+      currentPeriodEndsAtEpochMillis: null,
+      allowance: 20,
+      remaining: 17,
+      resetsAtEpochMillis: 1723027200000,
+    };
+
+    const promise = service.account();
+    const req = http.expectOne('/api/account');
+    expect(req.request.method).toBe('GET');
+    req.flush(account);
+
+    await expect(promise).resolves.toEqual(account);
+  });
+
+  it('requests a magic link for the given email', async () => {
+    const promise = service.requestMagicLink('learner@example.com');
+    const req = http.expectOne('/api/auth/magic-link');
+    expect(req.request.method).toBe('POST');
+    expect(req.request.body).toEqual({ email: 'learner@example.com' });
+    req.flush(null, { status: 204, statusText: 'No Content' });
+
+    await expect(promise).resolves.toBeNull();
+  });
+
+  it('signs out of the current session', async () => {
+    const promise = service.signOut();
+    const req = http.expectOne('/api/auth/sign-out');
+    expect(req.request.method).toBe('POST');
+    req.flush(null, { status: 204, statusText: 'No Content' });
+
+    await expect(promise).resolves.toBeNull();
+  });
+
+  it('signs out of every session', async () => {
+    const promise = service.signOutAll();
+    const req = http.expectOne('/api/auth/sign-out-all');
+    expect(req.request.method).toBe('POST');
+    req.flush(null, { status: 204, statusText: 'No Content' });
+
+    await expect(promise).resolves.toBeNull();
+  });
+
+  it('fetches a checkout url', async () => {
+    const promise = service.checkout();
+    const req = http.expectOne('/api/billing/checkout');
+    expect(req.request.method).toBe('POST');
+    req.flush({ url: 'https://checkout.freemius.com/product/1/plan/2/?user_email=a%40b.com' });
+
+    await expect(promise).resolves.toEqual({
+      url: 'https://checkout.freemius.com/product/1/plan/2/?user_email=a%40b.com',
+    });
   });
 });

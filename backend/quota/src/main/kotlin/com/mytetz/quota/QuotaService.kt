@@ -66,9 +66,14 @@ sealed interface QuotaDecision {
  * resolves an [Allowance] and gives it to this class. [QuotaConfig.defaultAllowance] keeps every
  * caller that has no tier unchanged.
  *
- * On [recordGeneration] the allowance is the THIRD parameter. `costMicros` stays the second.
- * `SessionRoutes` calls the method positionally. An allowance in the second position binds a cost
- * to an allowance. Both values are numbers. The compiler therefore reports nothing.
+ * On [recordGeneration] the allowance is the THIRD parameter, and `costMicros` stays the second.
+ * The two types now differ. `Allowance` is a data class, not a number. A positional swap
+ * between them therefore fails to compile. `SessionRoutes` names all three arguments at its call
+ * site. The one remaining positional call is in `Components`'s migration step, and its own three
+ * argument types are distinct too.
+ *
+ * Name the arguments at every call site anyway. A later parameter of the same type would bring
+ * the silent swap back, and named arguments are what would still catch it then.
  */
 class QuotaService(
     private val repository: QuotaRepository,
@@ -152,4 +157,25 @@ class QuotaService(
     }
 
     suspend fun dailySpendMicros(): Long = repository.ledgerFor(today())?.costMicros ?: 0
+
+    /**
+     * Clears [principalId]'s counter when its stored window length no longer matches [allowance].
+     *
+     * A counter's window is set once, at creation, by [QuotaRepository.incrementCounter]'s own
+     * `$setOnInsert`, and does not move again on its own. A learner's entitlement can still
+     * change under it — a trial ending, a subscription starting — and the counter does not know.
+     * Left alone, a learner who has just subscribed keeps the trial's own window and the count
+     * against it, and can be refused against a new allowance for as long as that old window still
+     * has left to run.
+     *
+     * An absent counter is a no-op; there is nothing to align. Call this before a check or a
+     * record, never after — the check that follows must see the aligned window, not the stale one.
+     */
+    suspend fun alignWindow(principalId: PrincipalId, allowance: Allowance) {
+        val counter = repository.findCounter(principalId.value) ?: return
+        val storedWindowMillis = counter.windowExpiresAtEpochMillis - counter.windowStartEpochMillis
+        if (storedWindowMillis != allowance.windowMillis) {
+            repository.resetCounter(principalId.value)
+        }
+    }
 }

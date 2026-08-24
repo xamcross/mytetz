@@ -2,6 +2,8 @@ import { Component, computed, effect, inject } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { map } from 'rxjs';
+import { WallCode, WallPanelComponent } from '../account/wall-panel.component';
+import { SignInPanelComponent } from '../auth/sign-in-panel.component';
 import { SpanPayload, Verb } from '../core/models';
 import { BreadcrumbComponent } from './breadcrumb.component';
 import { FocusCardComponent } from './focus-card.component';
@@ -44,7 +46,14 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
  */
 @Component({
   selector: 'app-reader-page',
-  imports: [BreadcrumbComponent, FocusCardComponent, TrailRailComponent, RouterLink],
+  imports: [
+    BreadcrumbComponent,
+    FocusCardComponent,
+    TrailRailComponent,
+    RouterLink,
+    SignInPanelComponent,
+    WallPanelComponent,
+  ],
   providers: [SessionStore],
   template: `
     <main class="reader">
@@ -145,15 +154,21 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
               (navigate)="store.goTo($event)"
             />
 
-            <app-focus-card
-              [body]="store.currentBody()"
-              [streamingText]="store.streamingText()"
-              [isStreaming]="store.isStreaming()"
-              [step]="step()"
-              [verbLabel]="verbLabel()"
-              [topicLabel]="topicLabel()"
-              (explainRequested)="explain($event)"
-            />
+            @if (signInRequired()) {
+              <app-sign-in-panel />
+            } @else if (subscribeRequired(); as code) {
+              <app-wall-panel [code]="code" />
+            } @else {
+              <app-focus-card
+                [body]="store.currentBody()"
+                [streamingText]="store.streamingText()"
+                [isStreaming]="store.isStreaming()"
+                [step]="step()"
+                [verbLabel]="verbLabel()"
+                [topicLabel]="topicLabel()"
+                (explainRequested)="explain($event)"
+              />
+            }
           </div>
         </div>
       }
@@ -310,9 +325,42 @@ export class ReaderPageComponent {
     const failure = this.store.error();
     return failure !== null && this.store.session() === null ? failure : null;
   });
+  /** Codes that open a panel in place of the focus card: `SIGN_IN_REQUIRED` for `signInRequired`,
+   * and the two wall codes for `subscribeRequired`. Each panel already says what happened, so a
+   * banner on top of it would say the same thing twice. */
+  private static readonly PANEL_CODES: ReadonlySet<string> = new Set([
+    'SIGN_IN_REQUIRED',
+    'TRIAL_EXHAUSTED',
+    'SUBSCRIPTION_REQUIRED',
+  ]);
+
   readonly bannerError = computed(() => {
     const failure = this.store.error();
-    return failure !== null && this.store.session() !== null ? failure : null;
+    if (failure === null || this.store.session() === null) return null;
+    if (ReaderPageComponent.PANEL_CODES.has(failure.code)) return null;
+    return failure;
+  });
+
+  /**
+   * True when the last explain attempt was refused because nobody is signed in.
+   *
+   * Drives the one substitution this task makes: the sign-in panel appears where the focus card
+   * would, and the breadcrumb and the trail rail stay exactly as they were. Losing a learner's
+   * trail at the moment they are asked to sign in would be the most expensive thing this could do.
+   */
+  readonly signInRequired = computed(() => this.store.error()?.code === 'SIGN_IN_REQUIRED');
+
+  /**
+   * The wall code from the last refusal, or `null` when none applies.
+   *
+   * `TRIAL_EXHAUSTED` and `SUBSCRIPTION_REQUIRED` both open `WallPanelComponent`, and neither ever
+   * reaches `bannerError`'s wait message. A trial pool does not roll over, so the wait message would
+   * tell a spent trial to wait for a reset that never comes — the reason the backend answers these
+   * two codes instead of `429 QUOTA_EXCEEDED`.
+   */
+  readonly subscribeRequired = computed<WallCode | null>(() => {
+    const code = this.store.error()?.code;
+    return code === 'TRIAL_EXHAUSTED' || code === 'SUBSCRIPTION_REQUIRED' ? code : null;
   });
 
   /**

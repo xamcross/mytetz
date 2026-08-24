@@ -3,6 +3,7 @@ import { provideRouter } from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting, HttpTestingController } from '@angular/common/http/testing';
+import { AccountStore } from '../core/account.store';
 import { ReaderPageComponent } from './reader-page.component';
 import { EXPLAIN_STREAM, ExplainStreamFn } from './session.store';
 import { SessionView } from '../core/models';
@@ -66,24 +67,37 @@ describe('ReaderPageComponent', () => {
       ],
     });
     http = TestBed.inject(HttpTestingController);
+    // `SessionStore` now refreshes `AccountStore` after every explain that reaches its end. Stubbed
+    // here so that path never sends a real `GET /api/account` that this file's tests do not expect
+    // and do not flush — this file is about the reader's own behaviour, not the account's.
+    vi.spyOn(TestBed.inject(AccountStore), 'load').mockResolvedValue(undefined);
     harness = await RouterTestingHarness.create();
   });
 
   afterEach(() => http.verify());
 
   /**
-   * Opens the reader on `/learn/s1` and answers both requests that a load makes.
+   * Opens the reader on `/learn/{response.sessionId}` and answers both requests that a load makes.
    *
    * The store reads the session, then reads the curated topic title from the catalogue. The second
    * request is not awaited by the store, so it is flushed here. [title] of `null` answers 404,
    * which is what a topic that a curator unpublished returns.
+   *
+   * Keyed off [response]'s own id, rather than a hard-coded `'s1'`, so a test that opens more than
+   * one session — moving from one failing code to another, say — can reuse the one harness the
+   * suite already has: `RouterTestingHarness` allows only one harness for each test, and Angular
+   * reuses this component across a parameter-only route change (see the test below named for
+   * exactly that), so a second, distinctly-id'd `open()` call is what a second load needs.
    */
   async function open(
     response: SessionView = view,
     title: string | null = 'Quantum Physics',
   ): Promise<ReaderPageComponent> {
-    const component = await harness.navigateByUrl('/learn/s1', ReaderPageComponent);
-    http.expectOne('/api/sessions/s1').flush(response);
+    const component = await harness.navigateByUrl(
+      `/learn/${response.sessionId}`,
+      ReaderPageComponent,
+    );
+    http.expectOne(`/api/sessions/${response.sessionId}`).flush(response);
     await harness.fixture.whenStable();
     flushTopic(response.topicSlug, title);
     await harness.fixture.whenStable();
@@ -383,5 +397,157 @@ describe('ReaderPageComponent', () => {
     expect(harness.routeNativeElement?.querySelector('.banner__retry-button')).toBeNull();
     expect(harness.routeNativeElement?.querySelector('a[href="/"]')).toBeTruthy();
     expect(text()).not.toContain('The pillars of modern physics.');
+  });
+
+  it('the reader shows the panel on SIGN_IN_REQUIRED', async () => {
+    script = async function* (): AsyncGenerator<ExplainEvent> {
+      throw new ExplainStreamError('SIGN_IN_REQUIRED', 'sign in to keep going', null, false);
+    };
+    const component = await open();
+
+    await component.store.explain({ text: 'pillars', start: 4, end: 11 }, 'EXPLAIN');
+    harness.detectChanges();
+
+    expect(harness.routeNativeElement?.querySelector('app-sign-in-panel')).toBeTruthy();
+    // The panel replaces the focus card outright — it is not a banner layered over it.
+    expect(harness.routeNativeElement?.querySelector('.focus')).toBeNull();
+  });
+
+  it('the reader keeps the trail while the panel is open', async () => {
+    script = async function* (): AsyncGenerator<ExplainEvent> {
+      throw new ExplainStreamError('SIGN_IN_REQUIRED', 'sign in to keep going', null, false);
+    };
+    const component = await open();
+
+    await component.store.explain({ text: 'pillars', start: 4, end: 11 }, 'EXPLAIN');
+    harness.detectChanges();
+
+    expect(harness.routeNativeElement?.querySelector('app-sign-in-panel')).toBeTruthy();
+    // Losing the learner's trail at the moment they are asked to sign in is the one outcome this
+    // task must not ship — both the rail and the breadcrumb stay rendered alongside the panel.
+    expect(harness.routeNativeElement?.querySelectorAll('.trail__item').length).toBe(2);
+    expect(harness.routeNativeElement?.querySelector('.crumbs')).toBeTruthy();
+  });
+
+  it('TRIAL_EXHAUSTED opens the subscribe panel', async () => {
+    script = async function* (): AsyncGenerator<ExplainEvent> {
+      throw new ExplainStreamError('TRIAL_EXHAUSTED', 'your trial ran out', null, false);
+    };
+    const component = await open();
+
+    await component.store.explain({ text: 'pillars', start: 4, end: 11 }, 'EXPLAIN');
+    harness.detectChanges();
+
+    expect(harness.routeNativeElement?.querySelector('app-wall-panel')).toBeTruthy();
+  });
+
+  it('SUBSCRIPTION_REQUIRED opens the subscribe panel', async () => {
+    script = async function* (): AsyncGenerator<ExplainEvent> {
+      throw new ExplainStreamError(
+        'SUBSCRIPTION_REQUIRED',
+        'a subscription is required',
+        null,
+        false,
+      );
+    };
+    const component = await open();
+
+    await component.store.explain({ text: 'pillars', start: 4, end: 11 }, 'EXPLAIN');
+    harness.detectChanges();
+
+    expect(harness.routeNativeElement?.querySelector('app-wall-panel')).toBeTruthy();
+  });
+
+  it('QUOTA_EXCEEDED shows the wait message and not the subscribe panel', async () => {
+    script = async function* (): AsyncGenerator<ExplainEvent> {
+      throw new ExplainStreamError('QUOTA_EXCEEDED', 'the daily quota is spent', 3600, false);
+    };
+    const component = await open();
+
+    await component.store.explain({ text: 'pillars', start: 4, end: 11 }, 'EXPLAIN');
+    harness.detectChanges();
+
+    // The one outcome this whole task exists to rule out: a QUOTA_EXCEEDED learner — whose pool
+    // does roll over — must keep reading the wait message, and never the subscribe wall meant for
+    // the two codes whose pool does not.
+    expect(text()).toContain('Try again in 1 hour');
+    expect(harness.routeNativeElement?.querySelector('app-wall-panel')).toBeNull();
+  });
+
+  it('the trail stays visible behind every panel', async () => {
+    // Each code names the panel it must open, so a silent no-op — no panel at all — cannot pass
+    // this test merely because the trail item count is unaffected by it.
+    const codes: Array<[string, string]> = [
+      ['SIGN_IN_REQUIRED', 'app-sign-in-panel'],
+      ['TRIAL_EXHAUSTED', 'app-wall-panel'],
+      ['SUBSCRIPTION_REQUIRED', 'app-wall-panel'],
+    ];
+    for (const [index, [code, panelSelector]] of codes.entries()) {
+      // A distinct session id for each code, on the one harness this test is allowed: it is what
+      // makes each iteration a genuine parameter-only route change, so the reader's own reuse of
+      // this component instance — proven separately below — is exercised by this loop rather than
+      // sidestepped by it.
+      script = async function* (): AsyncGenerator<ExplainEvent> {
+        throw new ExplainStreamError(code, 'refused', null, false);
+      };
+      const component = await open({ ...view, sessionId: `s${index + 1}` });
+
+      await component.store.explain({ text: 'pillars', start: 4, end: 11 }, 'EXPLAIN');
+      harness.detectChanges();
+
+      expect(harness.routeNativeElement?.querySelector(panelSelector)).toBeTruthy();
+      expect(harness.routeNativeElement?.querySelectorAll('.trail__item').length).toBe(2);
+    }
+  });
+
+  it('a trail click clears the wall and shows the stored explanation', async () => {
+    script = async function* (): AsyncGenerator<ExplainEvent> {
+      throw new ExplainStreamError('TRIAL_EXHAUSTED', 'your trial ran out', null, false);
+    };
+    const component = await open();
+
+    await component.store.explain({ text: 'pillars', start: 4, end: 11 }, 'EXPLAIN');
+    harness.detectChanges();
+    expect(harness.routeNativeElement?.querySelector('app-wall-panel')).toBeTruthy();
+
+    // n0's body is already in the session response — it costs nothing to show, and the learner
+    // paid for it already.
+    harness.routeNativeElement?.querySelector<HTMLButtonElement>('[data-node-id="n0"]')?.click();
+    harness.detectChanges();
+
+    expect(harness.routeNativeElement?.querySelector('app-wall-panel')).toBeNull();
+    expect(text()).toContain('Quantum mechanics is odd.');
+  });
+
+  it('a subscribe code raises no banner', async () => {
+    const codes = ['TRIAL_EXHAUSTED', 'SUBSCRIPTION_REQUIRED'];
+    for (const [index, code] of codes.entries()) {
+      script = async function* (): AsyncGenerator<ExplainEvent> {
+        throw new ExplainStreamError(code, 'refused', null, false);
+      };
+      const component = await open({ ...view, sessionId: `s${index + 1}` });
+
+      await component.store.explain({ text: 'pillars', start: 4, end: 11 }, 'EXPLAIN');
+      harness.detectChanges();
+
+      // A code that opens a panel must not also raise a banner — the panel already says what
+      // happened, and a banner on top of it would say it twice.
+      expect(harness.routeNativeElement?.querySelector('.banner')).toBeNull();
+    }
+  });
+
+  it('SIGN_IN_REQUIRED still opens the sign-in panel and not the subscribe panel', async () => {
+    // A regression guard on the existing branch: adding the two subscribe codes to
+    // `subscribeRequired` must not pull SIGN_IN_REQUIRED along with them.
+    script = async function* (): AsyncGenerator<ExplainEvent> {
+      throw new ExplainStreamError('SIGN_IN_REQUIRED', 'sign in to keep going', null, false);
+    };
+    const component = await open();
+
+    await component.store.explain({ text: 'pillars', start: 4, end: 11 }, 'EXPLAIN');
+    harness.detectChanges();
+
+    expect(harness.routeNativeElement?.querySelector('app-sign-in-panel')).toBeTruthy();
+    expect(harness.routeNativeElement?.querySelector('app-wall-panel')).toBeNull();
   });
 });

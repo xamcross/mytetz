@@ -83,4 +83,28 @@ class SessionRepository(database: MongoDatabase) {
         )
         if (result.matchedCount == 0L) throw SessionNotFoundException(sessionId)
     }
+
+    /**
+     * Re-keys every session document that carries [from] as its `principalId` to [to]. Reports how
+     * many it changed.
+     *
+     * Sign-in is the caller: an anonymous learner's sessions carry an `anon:` principal, and a
+     * sign-in must move them onto the new `user:` principal, or the learner's history is orphaned
+     * under an id nothing else ever presents again.
+     */
+    suspend fun reassignPrincipal(from: String, to: String): Long {
+        val result = collection.updateMany(Filters.eq("principalId", from), Updates.set("principalId", to))
+        return result.modifiedCount
+    }
+
+    /**
+     * Removes every session document that carries [principalId]. Reports how many it removed.
+     *
+     * Account deletion is the caller. It touches only this collection: an explanation is
+     * user-independent and holds nothing personal, so removing one here would destroy content
+     * every other learner shares — see `com.mytetz.api.AuthRoutes`'s own KDoc on
+     * `POST /api/account/delete` for the full scope of what an account deletion removes.
+     */
+    suspend fun deleteForPrincipal(principalId: String): Long =
+        collection.deleteMany(Filters.eq("principalId", principalId)).deletedCount
 }

@@ -1,7 +1,13 @@
 package com.mytetz.api
 
+import com.mytetz.account.AccountService
+import com.mytetz.account.User
+import com.mytetz.billing.BillingService
+import com.mytetz.billing.EntitlementDecision
+import com.mytetz.billing.SubscriptionStatus
 import com.mytetz.graph.GraphChunk
 import com.mytetz.graph.Verb
+import com.mytetz.quota.Allowance
 import com.mytetz.quota.PrincipalId
 import com.mytetz.quota.QuotaDecision
 import com.mytetz.quota.QuotaService
@@ -297,6 +303,8 @@ const val MAX_SESSION_BODY_BYTES: Long = 4_096
 fun Route.sessionRoutes(
     sessions: () -> SessionService,
     quota: QuotaService,
+    billing: BillingService,
+    account: AccountService,
     cookies: PrincipalCookieConfig,
     clientAddresses: ClientAddressConfig = ClientAddressConfig(),
     sessionLimiter: FixedWindowRateLimiter = FixedWindowRateLimiter(
@@ -334,6 +342,30 @@ fun Route.sessionRoutes(
      * their cookie. A per-principal session cap, or a TTL on abandoned sessions, is a product
      * decision nobody has made; it is written down here rather than left to be discovered from a
      * disk-usage alert.
+     *
+     * ## This route must gate on the same entitlement the explain route gates on
+     *
+     * A signed-in caller's seed generation and their explanations spend against one counter
+     * document. The counter is keyed on one `user:<id>` principal, shared by both routes.
+     *
+     * A mismatch between the two routes causes two failures. First: if this route used
+     * `QuotaConfig.defaultAllowance` while the explain route resolved a subscriber's real
+     * allowance of 25 a day, this route would refuse a paying subscriber at 20 — a limit that is
+     * not theirs. Second: `QuotaService.alignWindow` would then delete the learner's counter the
+     * first time an explain request ran, because the two routes would disagree about the window's
+     * length.
+     *
+     * So this route resolves [BillingService.entitlementFor] for a signed-in caller, through
+     * [createEntitlement], and passes the result to [QuotaService.refusalFor] and to
+     * [QuotaService.recordSpend]. **This route must never add a refusal for a missing
+     * subscription.** A signed-in learner with no subscription keeps the same seed access an
+     * anonymous visitor has — see [createEntitlement].
+     *
+     * The quota gate still applies underneath that: a seed generation spends real money. An
+     * account that has used up its allowance is refused here. The refusal matches the explain
+     * route's own: `403 TRIAL_EXHAUSTED` for an exhausted trial, `429 QUOTA_EXCEEDED` for an
+     * exhausted subscriber. Task B0 pre-warms every published seed. This fires only for a topic
+     * the pre-warm missed. A cached seed is still served either way.
      */
     post("/api/sessions") {
         if (!call.bodyIsSmallEnough()) return@post
@@ -363,13 +395,22 @@ fun Route.sessionRoutes(
         // make a rate-limited request pay for building an Anthropic client, and 500 rather than 429
         // on a deployment with no key.
         val sessions = sessions()
-        val principal = Principals.resolve(call, cookies)
+        val (principal, user) = call.effectiveIdentity(account, cookies)
         val request = call.receive<CreateSessionRequest>()
+        val (allowance, status) = billing.createEntitlement(user)
 
         // `createWillGenerate` raises for an unknown or unpublished topic exactly as `create` does,
         // so the gate cannot answer a question `create` would have refused.
         if (sessions.createWillGenerate(request.topicSlug)) {
-            val refusal = quota.refusalFor(principal) { !sessions.createWillGenerate(request.topicSlug) }
+            // The same alignment the explain route runs, and for the same reason: a learner's
+            // entitlement can change under a counter that does not know it changed — a trial
+            // ending, a subscription starting. `allowance` is non-null only when an entitlement
+            // actually resolved, so an anonymous caller, or one with `SubscriptionRequired`, never
+            // resets a counter against an entitlement they do not have. See the explain route's
+            // own `alignWindow` call for the full argument.
+            if (allowance != null) quota.alignWindow(principal, allowance)
+
+            val refusal = quota.refusalFor(principal, allowance, status) { !sessions.createWillGenerate(request.topicSlug) }
             if (refusal != null) {
                 call.respondRefusal(refusal)
                 return@post
@@ -380,7 +421,7 @@ fun Route.sessionRoutes(
         // rejected by the validator, in which case `create` raises and there is no result to read a
         // cost off. `recordSpend` swallows its own failures, so this cannot fail the request.
         val created = sessions.create(principal.value, request.topicSlug) { costMicros ->
-            withContext(NonCancellable) { quota.recordSpend(principal, costMicros) }
+            withContext(NonCancellable) { quota.recordSpend(principal, costMicros, allowance) }
         }
 
         call.respond(created.session.toView(mapOf(created.seed.key to created.seed.body)))
@@ -388,7 +429,7 @@ fun Route.sessionRoutes(
 
     get("/api/sessions/{id}") {
         val sessions = sessions()
-        val principal = Principals.resolve(call, cookies)
+        val (principal, _) = call.effectiveIdentity(account, cookies)
         val id = call.parameters["id"].orEmpty()
 
         sessions.requireOwnedBy(id, principal)
@@ -431,9 +472,41 @@ fun Route.sessionRoutes(
             return@post
         }
 
+        // The sign-in gate. Second, right after the rate limiter and before `sessions()` — which
+        // forces the lazy Anthropic client — and before anything reads the request body's span. An
+        // anonymous caller must learn nothing about the session or the span: a wrong-order gate
+        // would let a `400 SPAN_MISMATCH` tell an unauthenticated prober whether a guessed span was
+        // right.
+        //
+        // Ownership and quota below key on this signed-in user's principal, and not on the caller's
+        // anonymous cookie — a fix-round correction. The anonymous principal is `Principals.resolve`,
+        // which reads only `mytetz_pid` and can never yield a `user:` principal; a session that
+        // `completeSignIn` has already reassigned onto `user:<id>` would then never match, and a
+        // learner who signs in from a reading page would meet "no such session" on the very page
+        // they were just reading. Reusing [signedInUser] here, rather than re-resolving, is also
+        // exactly what the gate above already paid for.
+        val signedInUser = Principals.readSessionId(call, cookies)?.let { account.resolveSession(it) }
+        if (signedInUser == null) {
+            call.respond(HttpStatusCode.Unauthorized, ApiError("SIGN_IN_REQUIRED", "sign in to request an explanation"))
+            return@post
+        }
+
+        val principal = PrincipalId.user(signedInUser.id)
+
+        // The entitlement gate. Third, right after sign-in and above span validation, for the same
+        // reason as the gate above: a caller with no entitlement must learn nothing about the
+        // session or the span either.
+        val entitlement = billing.entitlementFor(signedInUser.id)
+        if (entitlement !is EntitlementDecision.Allowed) {
+            call.respond(
+                HttpStatusCode.Forbidden,
+                ApiError("SUBSCRIPTION_REQUIRED", "a subscription is required to request an explanation"),
+            )
+            return@post
+        }
+
         val sessions = sessions()
 
-        val principal = Principals.resolve(call, cookies)
         val sessionId = call.parameters["id"].orEmpty()
         val request = call.receive<ExplainRequest>()
 
@@ -454,7 +527,17 @@ fun Route.sessionRoutes(
         var plan = prepare()
 
         if (!plan.cached) {
-            val refusal = quota.refusalFor(principal) {
+            // A learner's entitlement can change under a counter that does not know it changed — a
+            // trial ending, a subscription starting. This is the write path, so this is where the
+            // counter's window is brought in line with the entitlement that was just resolved. It
+            // runs here, inside the branch that would really generate, so a request the cache can
+            // still serve for free never touches the counter — and before the check below, so that
+            // check never sees a stale window. `GET /api/account` must never call this: it is a
+            // read, and a learner must not be able to clear their own count by opening the account
+            // page.
+            quota.alignWindow(principal, entitlement.allowance)
+
+            val refusal = quota.refusalFor(principal, entitlement.allowance, entitlement.status) {
                 // Re-read, and use the fresher plan: another caller may have persisted this key
                 // since. `prepare` calls no model. See property 2.
                 //
@@ -494,7 +577,7 @@ fun Route.sessionRoutes(
 
         call.respond(
             SSEServerContent(call) {
-                streamExplanation(sessions, quota, principal, plan)
+                streamExplanation(sessions, quota, principal, entitlement.allowance, plan)
             }
         )
     }
@@ -573,6 +656,7 @@ private suspend fun ServerSSESession.streamExplanation(
     sessions: SessionService,
     quota: QuotaService,
     principal: PrincipalId,
+    allowance: Allowance,
     plan: ExplainPlan,
 ) {
     // Outside the `try`, because the `finally` reads it.
@@ -598,7 +682,7 @@ private suspend fun ServerSSESession.streamExplanation(
     } catch (e: Exception) {
         send(ServerSentEvent(event = "error", data = json.encodeToString(sseErrorFor(e))))
     } finally {
-        withContext(NonCancellable) { quota.recordSpend(principal, spentMicros) }
+        withContext(NonCancellable) { quota.recordSpend(principal, spentMicros, allowance) }
     }
 }
 
@@ -669,13 +753,31 @@ private suspend fun ApplicationCall.respondRefusal(refusal: Refusal) {
  * still consulted, keeps serving everything the cache can answer for nothing. It gets its own code
  * rather than borrowing `SPEND_LIMIT`, because "we cannot tell" and "the budget is gone" need
  * different things from an operator.
+ *
+ * ## Why a trial and a subscriber get a different refusal
+ *
+ * [status] tells [QuotaDecision.PrincipalExceeded] apart into two different answers. A trial pool
+ * does not roll over: there is no midnight, no next window, nothing a `Retry-After` could honestly
+ * name. A `TRIALING` caller who has used the pool up gets `403 TRIAL_EXHAUSTED` and no `retryAfter`.
+ * Every other status — including null, for the one caller below with no entitlement to resolve —
+ * gets the original `429 QUOTA_EXCEEDED` with the real wait, unchanged.
+ *
+ * [allowance] and [status] default to null for an anonymous caller. A null [allowance] keeps
+ * `checkGeneration`'s own default. `POST /api/sessions` also passes null for a signed-in caller
+ * with no subscription, through [createEntitlement] — that caller keeps the default allowance
+ * too, and a null [status] means an exhausted default answers `QUOTA_EXCEEDED`, never
+ * `TRIAL_EXHAUSTED`. Every other caller passes its own resolved allowance and status:
+ * `POST /api/sessions` for a signed-in caller with a subscription, and
+ * `POST /api/sessions/{id}/explain` always.
  */
 private suspend fun QuotaService.refusalFor(
     principal: PrincipalId,
+    allowance: Allowance? = null,
+    status: SubscriptionStatus? = null,
     becameFree: suspend () -> Boolean,
 ): Refusal? {
     val decision = try {
-        checkGeneration(principal)
+        if (allowance != null) checkGeneration(principal, allowance) else checkGeneration(principal)
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
@@ -686,14 +788,24 @@ private suspend fun QuotaService.refusalFor(
     val refusal = when (decision) {
         QuotaDecision.Allowed -> return null
 
-        is QuotaDecision.PrincipalExceeded -> Refusal(
-            HttpStatusCode.TooManyRequests,
-            ApiError(
-                code = "QUOTA_EXCEEDED",
-                message = "you have used today's allowance of new explanations",
-                retryAfter = decision.retryAfterSeconds,
-            ),
-        )
+        is QuotaDecision.PrincipalExceeded -> if (status == SubscriptionStatus.TRIALING) {
+            Refusal(
+                HttpStatusCode.Forbidden,
+                ApiError(
+                    code = "TRIAL_EXHAUSTED",
+                    message = "the trial's explanations are used up; subscribe to keep going",
+                ),
+            )
+        } else {
+            Refusal(
+                HttpStatusCode.TooManyRequests,
+                ApiError(
+                    code = "QUOTA_EXCEEDED",
+                    message = "you have used today's allowance of new explanations",
+                    retryAfter = decision.retryAfterSeconds,
+                ),
+            )
+        }
 
         // 503, not 429: the caller did nothing wrong and there is nothing they can do differently.
         // No `retryAfter` — the budget resets at midnight UTC, and this layer holds no clock of its
@@ -721,11 +833,21 @@ private suspend fun QuotaService.refusalFor(
  *
  * Zero is not recorded. `recordGeneration` increments a *count* as well as a cost, so recording a
  * zero would spend one of the principal's daily explanations on a cache hit.
+ *
+ * [allowance] defaults to null for an anonymous caller, and for a signed-in caller with no
+ * subscription — see [createEntitlement] — both of which keep `QuotaConfig`'s own default. Every
+ * other caller passes its own resolved allowance explicitly, and by name — `recordGeneration`
+ * takes `costMicros` second and `allowance` third, both arguments below are given by name for that
+ * reason, so the two cannot be swapped silently.
  */
-private suspend fun QuotaService.recordSpend(principal: PrincipalId, spentMicros: Long) {
+private suspend fun QuotaService.recordSpend(principal: PrincipalId, spentMicros: Long, allowance: Allowance? = null) {
     if (spentMicros <= 0) return
     try {
-        recordGeneration(principal, spentMicros)
+        if (allowance != null) {
+            recordGeneration(principalId = principal, costMicros = spentMicros, allowance = allowance)
+        } else {
+            recordGeneration(principalId = principal, costMicros = spentMicros)
+        }
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
@@ -736,6 +858,71 @@ private suspend fun QuotaService.recordSpend(principal: PrincipalId, spentMicros
             spentMicros,
             e,
         )
+    }
+}
+
+/**
+ * The identity behind whatever this caller touches on `POST /api/sessions` and
+ * `GET /api/sessions/{id}`: the signed-in [User] and their principal, when the session cookie
+ * resolves to one, and a null [User] with the anonymous cookie principal otherwise.
+ *
+ * `POST /api/sessions/{id}/explain` does not call this. Sign-in is mandatory there, so the gate
+ * has already resolved the user; building `PrincipalId.user(signedInUser.id)` straight from that
+ * value is the same answer this function would give, without asking Mongo for the session a
+ * second time.
+ *
+ * `GET /api/sessions/{id}` reads only the [PrincipalId] half of the pair. `POST /api/sessions`
+ * reads the [User] half too, and resolves that caller's own entitlement from it — see
+ * [createEntitlement] — so that session creation and explanation gate on the same allowance.
+ *
+ * ## Why this matters, and what was wrong before it existed
+ *
+ * `Principals.resolve` reads only the `mytetz_pid` cookie and never returns a `user:` principal —
+ * it does not know a session cookie exists. `AuthRoutes.completeSignIn` calls
+ * `SessionService.reassignPrincipal` unconditionally on every sign-in, moving every session that
+ * currently carries the caller's anonymous principal onto `user:<id>`. A route that keeps resolving
+ * `Principals.resolve` after that point is asking Mongo for a principal that no longer owns
+ * anything: a learner who reads a topic anonymously, highlights, meets the wall, and signs in would
+ * find their own reading session answers `404 NOT_FOUND` a moment later, because the write
+ * (`reassignPrincipal`) and the read (`Principals.resolve`) disagreed about which principal the
+ * caller now is. This function is the one place that answer is decided, so the two cannot drift
+ * apart again.
+ */
+private suspend fun ApplicationCall.effectiveIdentity(
+    account: AccountService,
+    cookies: PrincipalCookieConfig,
+): Pair<PrincipalId, User?> {
+    val user = Principals.readSessionId(this, cookies)?.let { account.resolveSession(it) }
+    val principal = if (user != null) PrincipalId.user(user.id) else Principals.resolve(this, cookies)
+    return principal to user
+}
+
+/**
+ * The allowance and status `POST /api/sessions` gates on for [user].
+ *
+ * A null [user] is an anonymous caller. It gets the pair `null to null` — [QuotaService]'s own
+ * default allowance, the same one this route used before it knew about entitlements.
+ *
+ * A signed-in caller with [EntitlementDecision.SubscriptionRequired] gets the same pair. This
+ * route must never add its own refusal for a missing subscription — only the entitlement check
+ * itself stays silent. The quota gate still applies, exactly as it does for an anonymous
+ * visitor. A signed-in learner with no subscription therefore keeps the same seed access an
+ * anonymous visitor has.
+ *
+ * A signed-in caller with [EntitlementDecision.Allowed] gets that decision's own allowance and
+ * status — the same pair [BillingService.entitlementFor] would give the explain route for this
+ * user, so the two routes spend against one counter under one window.
+ *
+ * One consequence follows. A trialing learner's own seed generation now counts against their
+ * trial pool. This is correct. Task B0 pre-warms every published seed, so a trialing learner
+ * reaches `create`'s own model call only for a topic the pre-warm missed — and counting that one
+ * generation is the choice that protects the daily spend ceiling.
+ */
+private suspend fun BillingService.createEntitlement(user: User?): Pair<Allowance?, SubscriptionStatus?> {
+    if (user == null) return null to null
+    return when (val entitlement = entitlementFor(user.id)) {
+        is EntitlementDecision.Allowed -> entitlement.allowance to entitlement.status
+        EntitlementDecision.SubscriptionRequired -> null to null
     }
 }
 

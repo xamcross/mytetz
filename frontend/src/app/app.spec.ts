@@ -8,6 +8,8 @@ import {
 import { provideRouter } from '@angular/router';
 import { App } from './app';
 import { routes } from './app.routes';
+import { AccountStore } from './core/account.store';
+import { AccountView } from './core/models';
 
 /**
  * The root's own guard.
@@ -18,6 +20,10 @@ import { routes } from './app.routes';
  */
 describe('App', () => {
   let http: HttpTestingController;
+  /** Stubbed in every test, not only the one about it: without this, `ngOnInit`'s new account load
+   * would send a real `GET /api/account` that no other test in this file flushes, and `afterEach`'s
+   * `http.verify()` would fail on it. */
+  let loadAccount: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
     await TestBed.configureTestingModule({
@@ -25,6 +31,7 @@ describe('App', () => {
       providers: [provideHttpClient(), provideHttpClientTesting(), provideRouter(routes)],
     }).compileComponents();
     http = TestBed.inject(HttpTestingController);
+    loadAccount = vi.spyOn(TestBed.inject(AccountStore), 'load').mockResolvedValue(undefined);
   });
 
   afterEach(() => http.verify());
@@ -67,5 +74,38 @@ describe('App', () => {
     expect(label(await render((r) => r.error(new ProgressEvent('error'))))).toBe(
       'Backend unreachable',
     );
+  });
+
+  it('the app loads the account when it starts', async () => {
+    await render((r) => r.flush({ status: 'ok', mongo: true }));
+
+    expect(loadAccount).toHaveBeenCalledTimes(1);
+  });
+
+  it('carries a real account load from App down through the shell into the meter', async () => {
+    // Every other spec in this file stubs `load()`, and the shell's and the meter's own specs
+    // each drive one link of this chain with a hand-set signal. None of the three crosses the
+    // whole seam with a real `GET /api/account` reaching real rendered text — this spec is that
+    // one crossing.
+    loadAccount.mockRestore();
+
+    const fixture = TestBed.createComponent(App);
+    fixture.detectChanges();
+
+    const view: AccountView = {
+      email: 'learner@example.com',
+      status: 'ACTIVE',
+      trialEndsAtEpochMillis: null,
+      currentPeriodEndsAtEpochMillis: null,
+      allowance: 25,
+      remaining: 9,
+      resetsAtEpochMillis: null,
+    };
+    http.expectOne('/api/account').flush(view);
+    http.expectOne('/api/health').flush({ status: 'ok', mongo: true });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.textContent).toContain('9 of 25');
   });
 });

@@ -1002,6 +1002,31 @@ class SessionServiceTest {
         }
     }
 
+    // ------------------------------------------------------------------ reassignPrincipal
+
+    @Test
+    fun `reassignPrincipal moves every session of one principal`() = runTest {
+        val (first, _) = service.create("anon:alice", "quantum-physics") {}
+        val (second, _) = service.create("anon:alice", "quantum-physics") {}
+
+        val moved = service.reassignPrincipal("anon:alice", "user:u1")
+
+        assertEquals(2, moved, "the count returned must equal the number of sessions moved")
+        assertEquals("user:u1", sessions.findById(first.id)!!.principalId)
+        assertEquals("user:u1", sessions.findById(second.id)!!.principalId)
+    }
+
+    @Test
+    fun `reassignPrincipal leaves another principal's sessions`() = runTest {
+        val (alice, _) = service.create("anon:alice", "quantum-physics") {}
+        val (bob, _) = service.create("anon:bob", "quantum-physics") {}
+
+        service.reassignPrincipal("anon:alice", "user:u1")
+
+        assertEquals("user:u1", sessions.findById(alice.id)!!.principalId)
+        assertEquals("anon:bob", sessions.findById(bob.id)!!.principalId, "another principal's session must survive")
+    }
+
     private companion object {
         const val FIXED_NOW = 1_764_000_000_000L
     }

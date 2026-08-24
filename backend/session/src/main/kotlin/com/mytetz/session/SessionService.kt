@@ -553,6 +553,24 @@ class SessionService(
      */
     suspend fun ownerOf(sessionId: String): String? = sessions.findById(sessionId)?.principalId
 
+    /**
+     * Moves every session that carries [fromPrincipalId] onto [toPrincipalId]. Returns the count
+     * moved.
+     *
+     * A sign-in calls this so that an anonymous learner's history survives under the new principal
+     * a signed-in session carries.
+     */
+    suspend fun reassignPrincipal(fromPrincipalId: String, toPrincipalId: String): Long =
+        sessions.reassignPrincipal(fromPrincipalId, toPrincipalId)
+
+    /**
+     * Removes every session that belongs to [principalId]. Reports how many it removed.
+     *
+     * Account deletion calls this. See [SessionRepository.deleteForPrincipal] for what it does and
+     * does not touch.
+     */
+    suspend fun deleteForPrincipal(principalId: String): Long = sessions.deleteForPrincipal(principalId)
+
     // ------------------------------------------------------------------ load
 
     /**
