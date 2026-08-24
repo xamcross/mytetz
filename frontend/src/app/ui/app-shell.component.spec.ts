@@ -49,4 +49,15 @@ describe('AppShellComponent', () => {
     // well against the two numbers swapped in the template.
     expect(fixture.nativeElement.textContent).toContain('20 of 25');
   });
+
+  it('puts the mark left of the wordmark, inside the one link home', () => {
+    fixture.detectChanges();
+
+    const home = fixture.nativeElement.querySelector('.bar__mark');
+    // The mark must be the first child, not merely present somewhere in the bar. A mark that
+    // follows the word, or that sits outside the link, passes a `toBeTruthy` check and fails the
+    // design.
+    expect(home.firstElementChild?.tagName.toLowerCase()).toBe('app-logo-mark');
+    expect(home.textContent.trim()).toBe('mytetz');
+  });
 });

@@ -1,6 +1,7 @@
 import { Component, input } from '@angular/core';
 import { RouterLink, RouterLinkActive } from '@angular/router';
 import { AllowanceMeterComponent } from '../account/allowance-meter.component';
+import { LogoMarkComponent } from './logo-mark.component';
 import { BackendState, StatusDotComponent } from './status-dot.component';
 
 /**
@@ -14,11 +15,20 @@ import { BackendState, StatusDotComponent } from './status-dot.component';
  */
 @Component({
   selector: 'app-shell',
-  imports: [RouterLink, RouterLinkActive, StatusDotComponent, AllowanceMeterComponent],
+  imports: [
+    RouterLink,
+    RouterLinkActive,
+    LogoMarkComponent,
+    StatusDotComponent,
+    AllowanceMeterComponent,
+  ],
   template: `
     <header class="bar">
       <div class="bar__left">
-        <a class="bar__mark" routerLink="/">mytetz</a>
+        <a class="bar__mark" routerLink="/">
+          <app-logo-mark />
+          mytetz
+        </a>
         <nav class="bar__nav" aria-label="Sections">
           <a
             class="bar__link"
@@ -61,6 +71,9 @@ import { BackendState, StatusDotComponent } from './status-dot.component';
       }
       /* 24px at weight 600 is large text, so the fill coral is safe here. */
       .bar__mark {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
         font-family: var(--mt-display);
         font-size: 24px;
         font-weight: 600;

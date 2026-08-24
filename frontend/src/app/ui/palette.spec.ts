@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+
 /**
  * The contrast proof for the Candy palette.
  *
@@ -139,5 +141,20 @@ describe('the Candy palette', () => {
     expect(contrast(PALETTE.errBg, PALETTE.coralPress)).toBeGreaterThanOrEqual(AA_NORMAL);
     expect(contrast(PALETTE.surface, PALETTE.coralPress)).toBeGreaterThanOrEqual(AA_NORMAL);
     expect(contrast(PALETTE.errInk, PALETTE.errBg)).toBeGreaterThanOrEqual(AA_NORMAL);
+  });
+
+  it('draws the browser icon from this palette, because a file cannot read a token', () => {
+    const icon = readFileSync('public/icon.svg', 'utf8');
+
+    // `styles.css` says only it and this file state a colour. `public/icon.svg` is the one
+    // exception the rule cannot cover: the browser loads it as a document of its own, with no
+    // stylesheet, so `var(--mt-coral)` resolves to nothing and the shape vanishes. The file must
+    // therefore hold the hex. This test is what keeps the two from drifting apart.
+    const hexes = new Set(
+      (icon.match(/#[0-9a-f]{3,6}/gi) ?? []).map((h: string) => h.toLowerCase()),
+    );
+
+    expect(hexes).toEqual(new Set([PALETTE.chip, PALETTE.coral, PALETTE.teal]));
+    expect(icon).not.toContain('var(--mt-');
   });
 });

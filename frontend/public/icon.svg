@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="mytetz">
+  <!--
+    The mytetz mark: a phrase, and the deeper phrase that opens out of it.
+
+    This file and src/app/ui/logo-mark.component.ts draw the same four elements on the same
+    32-unit grid. The component names a palette token. This file cannot: the browser loads it as
+    a document of its own, with no stylesheet, so a token would resolve to nothing. The values
+    below are, in order, the tokens --mt-chip, --mt-coral and --mt-teal.
+    src/app/ui/palette.spec.ts proves that they still agree with styles.css.
+  -->
+  <rect class="tile" x="0" y="0" width="32" height="32" rx="10" fill="#e4f2ed"/>
+  <rect x="5" y="7" width="17" height="6" rx="3" fill="#ff5d5d"/>
+  <path d="M9 15V22H13" fill="none" stroke="#0f766e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="13" y="19" width="14" height="6" rx="3" fill="#0f766e"/>
+</svg>
