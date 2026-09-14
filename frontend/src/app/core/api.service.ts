@@ -1,7 +1,7 @@
 import { Injectable, inject } from '@angular/core';
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
-import { AccountView, SessionView, TopicSummary } from './models';
+import { AccountView, AuthConfig, SessionView, TopicSummary } from './models';
 
 export interface Health {
   status: string;
@@ -57,12 +57,32 @@ export class ApiService {
   }
 
   /**
+   * The sign-in methods this deployment has configured, and the public Turnstile site key if one
+   * is set. Open: it needs no account. `SignInPanelComponent` reads it before a learner has
+   * signed in at all.
+   */
+  authConfig(): Promise<AuthConfig> {
+    return firstValueFrom(this.http.get<AuthConfig>('/api/auth/config'));
+  }
+
+  /**
    * Asks the backend to email a sign-in link. Always resolves: the route answers `204` for a
    * known address and an unknown one alike, so this method carries no information about which one
    * `email` was.
+   *
+   * The body omits `turnstileToken` entirely when [turnstileToken] is `null`, and does not merely
+   * set it to `undefined`. The backend field is optional. Sending an explicit `null` there is not
+   * the same absence a deployment with no Turnstile secret expects. `AuthRoutes.kt`'s
+   * `MagicLinkRequest` reads it as missing either way. This keeps the request body identical to
+   * what it was before this field existed, whenever the panel never rendered a widget.
    */
-  requestMagicLink(email: string): Promise<void> {
-    return firstValueFrom(this.http.post<void>('/api/auth/magic-link', { email }));
+  requestMagicLink(email: string, turnstileToken?: string | null): Promise<void> {
+    return firstValueFrom(
+      this.http.post<void>(
+        '/api/auth/magic-link',
+        turnstileToken ? { email, turnstileToken } : { email },
+      ),
+    );
   }
 
   signOut(): Promise<void> {

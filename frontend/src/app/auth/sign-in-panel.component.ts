@@ -1,6 +1,15 @@
-import { Component, inject, signal } from '@angular/core';
+import {
+  Component,
+  ElementRef,
+  afterRenderEffect,
+  computed,
+  inject,
+  signal,
+  viewChild,
+} from '@angular/core';
 import { HttpErrorResponse } from '@angular/common/http';
 import { ApiService } from '../core/api.service';
+import { TurnstileApi, loadTurnstileScript } from './turnstile';
 
 /**
  * The panel a signed-out learner sees in place of an explanation.
@@ -16,6 +25,23 @@ import { ApiService } from '../core/api.service';
  * purpose, and this panel shows the identical "check your email" message for both outcomes.
  * Anything that varied the message by outcome would let a caller learn who has an account by
  * trying addresses one at a time.
+ *
+ * ## The Turnstile widget
+ *
+ * `ApiService.authConfig` names the site key. It answers `null` when this deployment holds no
+ * Turnstile secret. See `TurnstileConfig`'s own KDoc on the backend. A `null` site key renders no
+ * widget, and loads no script at all. [turnstileSiteKey] gates both the container in the template
+ * and the render effect below.
+ *
+ * One widget covers both ways in. Its token travels two ways: as `turnstileToken` on the
+ * magic-link request, and appended to [googleHref] as a query parameter on the Google link.
+ * `AuthRoutes.kt` already reads it in both places. Loading the script, and rendering the widget,
+ * both happen inside `afterRenderEffect`. Angular guarantees that hook never runs on the server,
+ * so the SSR requirement above holds for the widget too.
+ *
+ * A `403 TURNSTILE_FAILED` answer resets the widget. [resetTurnstile] clears the spent token, and
+ * asks Cloudflare's own script for a fresh one. A learner who solved the challenge once then need
+ * not load a whole new page to solve it again.
  */
 @Component({
   selector: 'app-sign-in-panel',
@@ -47,7 +73,15 @@ import { ApiService } from '../core/api.service';
           </button>
         </form>
 
-        <a class="mt-pill mt-pill--ghost sign-in-panel__google" href="/api/auth/google">
+        @if (turnstileSiteKey(); as key) {
+          <div
+            class="sign-in-panel__turnstile"
+            #turnstileContainer
+            data-testid="turnstile-container"
+          ></div>
+        }
+
+        <a class="mt-pill mt-pill--ghost sign-in-panel__google" [attr.href]="googleHref()">
           Continue with Google
         </a>
       }
@@ -117,6 +151,64 @@ export class SignInPanelComponent {
   readonly submitting = signal(false);
   readonly validationError = signal<string | null>(null);
 
+  /** `null` until `GET /api/auth/config` answers. Stays `null` for good on a deployment with no
+   * Turnstile secret — see this class's own KDoc. Either way, no widget renders. */
+  readonly turnstileSiteKey = signal<string | null>(null);
+  private readonly turnstileToken = signal<string | null>(null);
+
+  private readonly turnstileContainer = viewChild<ElementRef<HTMLElement>>('turnstileContainer');
+  private turnstileApi: TurnstileApi | null = null;
+  private turnstileWidgetId: string | null = null;
+
+  /** `/api/auth/google`, with `turnstileToken` appended once the widget has produced one. This is
+   * a plain `<a href>`, so the token has to sit in the URL itself. See this class's own KDoc on
+   * why this is a real navigation, and not a `fetch`. */
+  readonly googleHref = computed(() => {
+    const token = this.turnstileToken();
+    return token === null
+      ? '/api/auth/google'
+      : `/api/auth/google?turnstileToken=${encodeURIComponent(token)}`;
+  });
+
+  constructor() {
+    void this.loadConfig();
+
+    afterRenderEffect({
+      read: () => {
+        const key = this.turnstileSiteKey();
+        const container = this.turnstileContainer()?.nativeElement;
+        // `turnstileApi !== null` stops a second render call once the tracked signals settle to a
+        // value this effect has already acted on. A repeat `render()` on the same container is
+        // not idempotent. Cloudflare's own API expects exactly one call for each widget.
+        if (key === null || container === undefined || this.turnstileApi !== null) return;
+
+        loadTurnstileScript()
+          .then((api) => {
+            this.turnstileApi = api;
+            this.turnstileWidgetId = api.render(container, {
+              sitekey: key,
+              callback: (token) => this.turnstileToken.set(token),
+            });
+          })
+          .catch(() => {
+            // The widget failed to load. A learner can still submit. The token stays null, and
+            // the server then answers `403 TURNSTILE_FAILED`. That is the same outcome as a
+            // learner who never solved a rendered challenge, and not a dead end of its own.
+          });
+      },
+    });
+  }
+
+  private async loadConfig(): Promise<void> {
+    try {
+      const config = await this.api.authConfig();
+      this.turnstileSiteKey.set(config.turnstileSiteKey);
+    } catch {
+      // No widget without a working config read. A deployment with a secret set stays reachable
+      // by Google in the meantime. Sign-in degrades, and does not break.
+    }
+  }
+
   onInput(event: Event): void {
     this.email.set((event.target as HTMLInputElement).value);
     this.validationError.set(null);
@@ -132,31 +224,46 @@ export class SignInPanelComponent {
 
     this.submitting.set(true);
     try {
-      await this.api.requestMagicLink(address);
+      await this.api.requestMagicLink(address, this.turnstileToken());
       this.sent.set(true);
     } catch (err) {
-      this.validationError.set(describeRequestFailure(err));
+      const body = err instanceof HttpErrorResponse ? asApiErrorBody(err.error) : null;
+      if (body?.code === 'TURNSTILE_FAILED') this.resetTurnstile();
+      this.validationError.set(describeRequestFailure(body));
     } finally {
       this.submitting.set(false);
     }
+  }
+
+  /** Clears the spent token, and asks Cloudflare's own widget for a fresh one. A `403
+   * TURNSTILE_FAILED` answer then does not strand the learner behind a challenge nothing but a
+   * full reload can solve a second time. */
+  private resetTurnstile(): void {
+    this.turnstileToken.set(null);
+    const widgetId = this.turnstileWidgetId;
+    if (this.turnstileApi && widgetId !== null) this.turnstileApi.reset(widgetId);
   }
 }
 
 /**
  * What the learner reads when `requestMagicLink` itself fails.
  *
- * `AuthRoutes.kt` refuses this route two ways: `429 RATE_LIMITED` (`MAGIC_LINK_PER_IP`/
- * `MAGIC_LINK_PER_ADDRESS`) and `413 PAYLOAD_TOO_LARGE` (`MAX_AUTH_BODY_BYTES`, which an ordinary
- * address never reaches). `RATE_LIMITED` gets its own message: "check your connection" is wrong
- * advice for a learner who is not offline and fixes nothing by retrying at once. Every other
- * failure — a dropped connection, `PAYLOAD_TOO_LARGE`, a 500 — reduces to one generic message.
- * Neither branch says anything about the address itself, so the address's known/unknown status
- * stays unrevealed either way.
+ * `AuthRoutes.kt` refuses this route three ways: `429 RATE_LIMITED`
+ * (`MAGIC_LINK_PER_IP`/`MAGIC_LINK_PER_ADDRESS`), `403 TURNSTILE_FAILED`, and
+ * `413 PAYLOAD_TOO_LARGE` (`MAX_AUTH_BODY_BYTES`, which an ordinary address never reaches).
+ * `RATE_LIMITED` gets its own message. "Check your connection" is wrong advice for a learner who
+ * is not offline, and fixes nothing by retrying at once. `TURNSTILE_FAILED` shows the server's own
+ * message, and not a generic one. `submit()` has already reset the widget by the time this runs.
+ * The learner needs to know a fresh attempt is what comes next. Every other failure — a dropped
+ * connection, `PAYLOAD_TOO_LARGE`, a 500 — reduces to one generic message. No branch names the
+ * address itself. The address's known or unknown status stays unrevealed either way.
  */
-function describeRequestFailure(err: unknown): string {
-  const body = err instanceof HttpErrorResponse ? asApiErrorBody(err.error) : null;
+function describeRequestFailure(body: ApiErrorBody | null): string {
   if (body?.code === 'RATE_LIMITED') {
     return 'Too many requests have been made. Try again shortly.';
+  }
+  if (body?.code === 'TURNSTILE_FAILED') {
+    return body.message;
   }
   return 'Could not send the link. Check your connection and try again.';
 }

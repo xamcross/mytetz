@@ -59,3 +59,16 @@ export interface AccountView {
   remaining: number;
   resetsAtEpochMillis: number | null;
 }
+
+/**
+ * The body of `GET /api/auth/config`. It mirrors the backend's `AuthConfigView`, field for field.
+ *
+ * Nothing reads `googleEnabled` or `magicLinkEnabled` today. A later task hides the matching
+ * sign-in control when its method is not configured. `SignInPanelComponent` reads only
+ * `turnstileSiteKey`, to decide whether to load the Turnstile widget at all.
+ */
+export interface AuthConfig {
+  turnstileSiteKey: string | null;
+  googleEnabled: boolean;
+  magicLinkEnabled: boolean;
+}
