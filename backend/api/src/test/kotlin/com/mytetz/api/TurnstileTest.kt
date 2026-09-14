@@ -1,5 +1,9 @@
 package com.mytetz.api
 
+import ch.qos.logback.classic.Level
+import ch.qos.logback.classic.Logger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
@@ -8,10 +12,12 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import kotlinx.coroutines.test.runTest
+import org.slf4j.LoggerFactory
 import java.io.IOException
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -131,5 +137,71 @@ class TurnstileTest {
         val turnstile = Turnstile(clientReturning("not json"), secretKey = "test-secret")
 
         assertFalse(turnstile.verify(token = "a-token"))
+    }
+}
+
+class TurnstileConfigTest {
+
+    @Test
+    fun `a blank site key resolves the same as an unset one`() {
+        assertNull(TurnstileConfig.resolveSiteKey(null))
+        assertNull(TurnstileConfig.resolveSiteKey(""))
+        assertNull(TurnstileConfig.resolveSiteKey("   "))
+    }
+
+    @Test
+    fun `a site key is trimmed`() {
+        assertEquals("a-site-key", TurnstileConfig.resolveSiteKey("  a-site-key  "))
+    }
+}
+
+/**
+ * [logIfMismatched] against a real logback appender.
+ *
+ * This is the same [ListAppender] technique `ComponentsTest` uses on `RECONCILE_SKIPPED`. See
+ * that suite for the shared reasoning.
+ */
+class TurnstileMismatchWarningTest {
+
+    private fun capturedWarnings(block: () -> Unit): List<String> {
+        val appender = ListAppender<ILoggingEvent>().apply { start() }
+        val logger = LoggerFactory.getLogger("com.mytetz.api.Turnstile") as Logger
+        logger.addAppender(appender)
+        try {
+            block()
+        } finally {
+            logger.detachAppender(appender)
+        }
+        return appender.list.filter { it.level == Level.WARN }.map { it.formattedMessage }
+    }
+
+    @Test
+    fun `a secret with no site key logs one WARN line naming both variables`() {
+        val warnings = capturedWarnings {
+            logIfMismatched(TurnstileConfig(secretKey = "a-secret", siteKey = null))
+        }
+
+        assertEquals(1, warnings.size, "the block must log exactly one WARN line. It logged $warnings")
+        assertTrue(warnings.single().contains(TurnstileConfig.SECRET_KEY_ENV))
+        assertTrue(warnings.single().contains(TurnstileConfig.SITE_KEY_ENV))
+    }
+
+    @Test
+    fun `a secret with a site key logs nothing`() {
+        val warnings = capturedWarnings {
+            logIfMismatched(TurnstileConfig(secretKey = "a-secret", siteKey = "a-site-key"))
+        }
+
+        assertEquals(emptyList(), warnings)
+    }
+
+    @Test
+    fun `no secret at all logs nothing, with or without a site key`() {
+        val warnings = capturedWarnings {
+            logIfMismatched(TurnstileConfig(secretKey = null, siteKey = null))
+            logIfMismatched(TurnstileConfig(secretKey = null, siteKey = "a-site-key"))
+        }
+
+        assertEquals(emptyList(), warnings)
     }
 }

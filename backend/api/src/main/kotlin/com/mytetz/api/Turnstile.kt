@@ -23,22 +23,53 @@ private val json = Json { ignoreUnknownKeys = true }
 private fun encodeFormValue(value: String): String = URLEncoder.encode(value, Charsets.UTF_8)
 
 /**
- * The Cloudflare Turnstile secret this deployment holds, or null.
+ * The Cloudflare Turnstile secret and site key this deployment holds. Each field is null or not,
+ * on its own.
  *
- * [secretKey] carries no default beyond "unset". Unlike [com.mytetz.billing.FreemiusConfig], a
- * missing value here does not throw: Turnstile is *skipped* when [SECRET_KEY_ENV] is unset, so
- * local work and CI need no key. A throwing config would force every credential-free test in this
- * module to inject one just to reach the routes it verifies.
+ * [secretKey] carries no default beyond "unset". A missing value here does not throw. Turnstile is
+ * *skipped* when [SECRET_KEY_ENV] is unset. Local work and CI then need no key. A throwing config
+ * would force every credential-free test in this module to inject one, only to reach the routes it
+ * verifies.
+ *
+ * [siteKey] follows the same rule, and stays independent of [secretKey] on purpose. Sharing this
+ * value with the browser is safe. It names which widget to load, and Cloudflare's own docs treat a
+ * site key as public. [secretKey] goes nowhere except Cloudflare's own `siteverify` endpoint.
+ * [logIfMismatched] is the one place the two values meet.
  */
 data class TurnstileConfig(
     val secretKey: String? = resolveSecretKey(System.getenv(SECRET_KEY_ENV)),
+    val siteKey: String? = resolveSiteKey(System.getenv(SITE_KEY_ENV)),
 ) {
     companion object {
 
         const val SECRET_KEY_ENV: String = "MYTETZ_TURNSTILE_SECRET"
+        const val SITE_KEY_ENV: String = "MYTETZ_TURNSTILE_SITE_KEY"
 
         /** Trims [raw] and turns a blank value into null, the same as an unset one already is. */
         internal fun resolveSecretKey(raw: String?): String? = raw?.trim()?.takeIf { it.isNotEmpty() }
+
+        /** [resolveSecretKey] states this same rule for [siteKey]. See that KDoc. */
+        internal fun resolveSiteKey(raw: String?): String? = raw?.trim()?.takeIf { it.isNotEmpty() }
+    }
+}
+
+/**
+ * Warns once when [config] carries a secret but no site key.
+ *
+ * That combination refuses every sign-in, and does so silently. With no site key, the browser
+ * never renders a widget. No token is ever produced. [Turnstile.verify] then refuses every caller
+ * on a null token — see that method's own KDoc. `Components` calls this function once, at
+ * construction. An operator who sets the secret before the site key then sees the cause in the
+ * boot log, and not only a stream of refused sign-ins with no explanation.
+ */
+internal fun logIfMismatched(config: TurnstileConfig) {
+    if (config.secretKey != null && config.siteKey == null) {
+        log.warn(
+            "{} is set and {} is not; every sign-in will fail the Turnstile check until the " +
+                "site key is set too",
+            TurnstileConfig.SECRET_KEY_ENV,
+            TurnstileConfig.SITE_KEY_ENV,
+        )
     }
 }
 

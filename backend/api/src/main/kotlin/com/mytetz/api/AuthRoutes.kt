@@ -59,6 +59,23 @@ private const val GOOGLE_VERIFIER_COOKIE = "mytetz_g_verifier"
 data class MagicLinkRequest(val email: String, val turnstileToken: String? = null)
 
 /**
+ * The view `GET /api/auth/config` answers.
+ *
+ * None of the three fields has a default. `HealthResponse.ready`'s own KDoc states the reason this
+ * matters here too. kotlinx.serialization omits a property that equals its declared default,
+ * unless `encodeDefaults` is on. This application's `ContentNegotiation` install does not turn it
+ * on. A defaulted `turnstileSiteKey: String? = null` would then vanish from the body in exactly the
+ * "Turnstile is off" case. The frontend needs that case as an explicit `null`, and not as an
+ * absent field.
+ */
+@Serializable
+data class AuthConfigView(
+    val turnstileSiteKey: String?,
+    val googleEnabled: Boolean,
+    val magicLinkEnabled: Boolean,
+)
+
+/**
  * The view `GET /api/account` answers.
  *
  * [status], [trialEndsAtEpochMillis] and [currentPeriodEndsAtEpochMillis] come from the caller's own
@@ -77,9 +94,9 @@ data class AccountView(
 )
 
 /**
- * `POST /api/auth/magic-link`, `GET /api/auth/magic-link/{token}`, `GET /api/auth/google`,
- * `GET /api/auth/google/callback`, `POST /api/auth/sign-out`, `POST /api/auth/sign-out-all`,
- * `GET /api/account`, and `POST /api/account/delete`.
+ * `GET /api/auth/config`, `POST /api/auth/magic-link`, `GET /api/auth/magic-link/{token}`,
+ * `GET /api/auth/google`, `GET /api/auth/google/callback`, `POST /api/auth/sign-out`,
+ * `POST /api/auth/sign-out-all`, `GET /api/account`, and `POST /api/account/delete`.
  *
  * ## Sign-in carries the anonymous trail
  *
@@ -141,6 +158,11 @@ fun Route.authRoutes(
     // sibling suites `SessionRoutesTest` and `BillingRoutesTest`, build `authRoutes` without
     // naming it, the same way [clientAddresses] already defaults for a caller that does not care.
     turnstile: Turnstile = Turnstile(HttpClient(CIO), secretKey = null),
+    // The production value comes from `Components.turnstileSiteKey`. That property reads the
+    // environment directly — see its own KDoc for why it does not travel through `turnstile`
+    // above. This defaults to null. Most of this file's tests have nothing to do with the widget,
+    // and so need not name it.
+    turnstileSiteKey: String? = null,
     clientAddresses: ClientAddressConfig = ClientAddressConfig(),
     clock: () -> Long = System::currentTimeMillis,
     magicLinkIpLimiter: FixedWindowRateLimiter = FixedWindowRateLimiter(
@@ -152,6 +174,44 @@ fun Route.authRoutes(
         windowMillis = MAGIC_LINK_WINDOW_MILLIS,
     ),
 ) {
+
+    /**
+     * Open. It needs no account and no cookie. The sign-in panel reads this route before a
+     * learner has signed in at all. It uses the answer to decide whether to render the Turnstile
+     * widget, and which sign-in controls to show.
+     *
+     * [googleEnabled] and [magicLinkEnabled] each come from one call, inside a `try`, to [google]
+     * or [magicLink]. The result reports whether the call succeeded. It does not re-derive the
+     * credential rules those two factories already enforce. `Components.reconcile` states the same
+     * shape, for the same reason: a second, hand-written copy of "which variables must be set"
+     * drifts from the real one the moment either changes. A call that only probes for success
+     * cannot drift, because it *is* the real check. [google] and [magicLink] are the `by lazy`
+     * chains `Components` builds. A successful probe here costs nothing on every later call. The
+     * [CancellationException] rethrow keeps a request cancellation from reading as "not
+     * configured".
+     *
+     * The response never carries a secret. [turnstileSiteKey] is the one credential-shaped value
+     * this route answers with. It is public by design — see `TurnstileConfig`'s own KDoc.
+     */
+    get("/api/auth/config") {
+        val googleEnabled = try {
+            google()
+            true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            false
+        }
+        val magicLinkEnabled = try {
+            magicLink()
+            true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            false
+        }
+        call.respond(AuthConfigView(turnstileSiteKey, googleEnabled, magicLinkEnabled))
+    }
 
     post("/api/auth/magic-link") {
         if (!call.authBodyIsSmallEnough()) return@post
