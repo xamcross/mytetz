@@ -39,6 +39,7 @@ import java.util.Base64
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -151,6 +152,11 @@ class AuthRoutesTest {
         // gets the real clock, exactly as before this parameter existed.
         clock: () -> Long = System::currentTimeMillis,
         turnstile: Turnstile = Turnstile(HttpClient(CIO), secretKey = null),
+        turnstileSiteKey: String? = null,
+        // Null keeps every existing test on a magic link that always works. See the fallback to
+        // the real [magicLink] below. A `GET /api/auth/config` test overrides this to a throwing
+        // lambda. That proves the route reports `magicLinkEnabled: false` with no real credential.
+        magicLinkFactory: (() -> MagicLinkService)? = null,
         block: suspend Scope.() -> Unit,
     ) = testApplication {
         val stack = TestFixtures.sessionApp()
@@ -188,12 +194,13 @@ class AuthRoutesTest {
                 authRoutes(
                     account = account,
                     sessions = { stack.sessions },
-                    magicLink = { magicLink },
+                    magicLink = magicLinkFactory ?: { magicLink },
                     google = googleOAuthFactory,
                     cookies = TestFixtures.cookieConfig,
                     quotaRepository = stack.quotaRepository,
                     billing = billing,
                     turnstile = turnstile,
+                    turnstileSiteKey = turnstileSiteKey,
                     clientAddresses = ClientAddressConfig(trustedHeader = null),
                     clock = clock,
                 )
@@ -783,5 +790,77 @@ class AuthRoutesTest {
 
         assertEquals(HttpStatusCode.Unauthorized, response.status)
         assertEquals("SIGN_IN_REQUIRED", wireJson.decodeFromString<ApiError>(response.bodyAsText()).code)
+    }
+
+    // ------------------------------------------------------------------ the config route
+
+    @Test
+    fun `the config route needs no sign-in`() = authApp {
+        // `authApp`'s two factories both build a working service by default. See
+        // `defaultGoogleOAuth`, and the real, in-memory `MagicLinkService` it always wires. No
+        // cookie is set on this client at all. The route must answer regardless.
+        val response = client.get("/api/auth/config")
+
+        assertEquals(HttpStatusCode.OK, response.status)
+        val body = wireJson.decodeFromString<AuthConfigView>(response.bodyAsText())
+        assertTrue(body.googleEnabled)
+        assertTrue(body.magicLinkEnabled)
+    }
+
+    @Test
+    fun `googleEnabled is false when the google factory throws`() = authApp(
+        googleOAuthFactory = { error("GOOGLE_CLIENT_SECRET is not set") },
+    ) {
+        val response = client.get("/api/auth/config")
+
+        val body = wireJson.decodeFromString<AuthConfigView>(response.bodyAsText())
+        assertFalse(body.googleEnabled)
+        assertTrue(body.magicLinkEnabled, "a google failure must not disable the mail path too")
+    }
+
+    @Test
+    fun `magicLinkEnabled is false when the magic-link factory throws`() = authApp(
+        magicLinkFactory = { error("MYTETZ_MAIL_MODE is not set") },
+    ) {
+        val response = client.get("/api/auth/config")
+
+        val body = wireJson.decodeFromString<AuthConfigView>(response.bodyAsText())
+        assertFalse(body.magicLinkEnabled)
+        assertTrue(body.googleEnabled, "a mail failure must not disable the google path too")
+    }
+
+    @Test
+    fun `the configured site key is reported, and a missing one is reported as null and not omitted`() {
+        authApp(turnstileSiteKey = "test-site-key") {
+            val body = wireJson.decodeFromString<AuthConfigView>(client.get("/api/auth/config").bodyAsText())
+            assertEquals("test-site-key", body.turnstileSiteKey)
+        }
+
+        authApp {
+            val text = client.get("/api/auth/config").bodyAsText()
+            // Decoding alone cannot fail this the way `HealthResponse.ready`'s own KDoc warns
+            // about. `AuthConfigView.turnstileSiteKey` carries no default. kotlinx.serialization
+            // then has no default value to omit it in favour of. An absent field would fail to
+            // decode, and not silently become null. The literal check below pins the wire shape
+            // directly. A future default added to that field would then fail this test, and not
+            // pass it by accident.
+            assertTrue(text.contains(""""turnstileSiteKey":null"""), "the body must carry an explicit null: $text")
+            val body = wireJson.decodeFromString<AuthConfigView>(text)
+            assertNull(body.turnstileSiteKey)
+        }
+    }
+
+    @Test
+    fun `the response never carries the turnstile secret`() = authApp(
+        turnstile = Turnstile(HttpClient(CIO), secretKey = "super-secret-turnstile-value"),
+        // A throwing credential resolver's own exception message can name the missing variable's
+        // value, in some deployments' own error text. This proves that text never reaches the
+        // caller either. It is not enough to prove only that the boolean is correct.
+        googleOAuthFactory = { error("GOOGLE_CLIENT_SECRET=super-secret-google-value is not set") },
+    ) {
+        val text = client.get("/api/auth/config").bodyAsText()
+
+        assertFalse(text.contains("super-secret-turnstile-value"))
+        assertFalse(text.contains("super-secret-google-value"))
     }
 }

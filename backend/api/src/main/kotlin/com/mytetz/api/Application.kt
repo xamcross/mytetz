@@ -135,6 +135,7 @@ fun Application.module(components: Components = Components()) {
             billing = components.billing,
             clientAddresses = components.clientAddresses,
             turnstile = components.turnstile,
+            turnstileSiteKey = components.turnstileSiteKey,
         )
         billingRoutes(
             account = components.account,

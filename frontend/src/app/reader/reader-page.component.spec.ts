@@ -4,6 +4,7 @@ import { RouterTestingHarness } from '@angular/router/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting, HttpTestingController } from '@angular/common/http/testing';
 import { AccountStore } from '../core/account.store';
+import { ApiService } from '../core/api.service';
 import { ReaderPageComponent } from './reader-page.component';
 import { EXPLAIN_STREAM, ExplainStreamFn } from './session.store';
 import { SessionView } from '../core/models';
@@ -71,6 +72,15 @@ describe('ReaderPageComponent', () => {
     // here so that path never sends a real `GET /api/account` that this file's tests do not expect
     // and do not flush — this file is about the reader's own behaviour, not the account's.
     vi.spyOn(TestBed.inject(AccountStore), 'load').mockResolvedValue(undefined);
+    // `SignInPanelComponent` reads `GET /api/auth/config` on construction. Several tests below
+    // open the wall it lives behind. Stubbed to a deployment with no Turnstile secret, for the
+    // same reason as `AccountStore.load` above: this file is about the reader's wall, and not
+    // the widget.
+    vi.spyOn(TestBed.inject(ApiService), 'authConfig').mockResolvedValue({
+      turnstileSiteKey: null,
+      googleEnabled: true,
+      magicLinkEnabled: true,
+    });
     harness = await RouterTestingHarness.create();
   });
 

@@ -120,6 +120,22 @@ open class Components(
     /** Cheap to build and needs no credential, so — like [account] and unlike [magicLink] — this is not lazy. */
     val turnstile: Turnstile = turnstileFactory()
 
+    /**
+     * The public Cloudflare Turnstile site key this deployment holds, or null.
+     *
+     * `authRoutes`' `GET /api/auth/config` route reports it to the browser. The browser then
+     * decides whether to load the widget script at all. This property reads the environment
+     * directly, apart from [turnstileFactory]'s own [TurnstileConfig]. That factory lets a test
+     * inject a [Turnstile] built on a secret with no matching real environment variable. This
+     * property must still answer from the real deployment either way.
+     *
+     * [logIfMismatched] runs here too, once, at boot. It does not run inside one of the lazy
+     * chains the credentialed services above use. An unset site key is not a missing credential on
+     * its own. It is a supported "Turnstile is off" state. Only the *combination* of a secret with
+     * no site key is worth a WARN. [logIfMismatched]'s own KDoc gives the reason.
+     */
+    val turnstileSiteKey: String? = TurnstileConfig().also { logIfMismatched(it) }.siteKey
+
     private val mail: MailSender by lazy(mailSenderFactory)
 
     val magicLink: MagicLinkService by lazy {
