@@ -26,6 +26,16 @@ import { TurnstileApi, loadTurnstileScript } from './turnstile';
  * Anything that varied the message by outcome would let a caller learn who has an account by
  * trying addresses one at a time.
  *
+ * ## A sign-in method this deployment has not configured
+ *
+ * [googleEnabled] and [magicLinkEnabled] each hide their own control. Each hides its control when
+ * `GET /api/auth/config` reports the matching backend factory as not built. A learner then sees
+ * only the control that works, and not one that always answers `503`.
+ *
+ * The config read and a later submit happen at two different moments. A control can still fail at
+ * submit time, even after the config read reported it as enabled. [describeRequestFailure]'s own
+ * `SIGN_IN_UNAVAILABLE` branch covers that case for the email form.
+ *
  * ## The Turnstile widget
  *
  * `ApiService.authConfig` names the site key. It answers `null` when this deployment holds no
@@ -55,35 +65,39 @@ import { TurnstileApi, loadTurnstileScript } from './turnstile';
       } @else {
         <p class="sign-in-panel__lead">Sign in to keep going.</p>
 
-        <form class="sign-in-panel__form" (submit)="submit($event)">
-          <label class="sign-in-panel__label" for="sign-in-email">Email address</label>
-          <input
-            id="sign-in-email"
-            class="sign-in-panel__input"
-            type="email"
-            autocomplete="email"
-            [value]="email()"
-            (input)="onInput($event)"
-          />
-          @if (validationError(); as message) {
-            <p class="sign-in-panel__error" role="alert">{{ message }}</p>
-          }
-          <button type="submit" class="mt-pill mt-pill--coral" [disabled]="submitting()">
-            Email me a sign-in link
-          </button>
-        </form>
+        @if (magicLinkEnabled()) {
+          <form class="sign-in-panel__form" (submit)="submit($event)">
+            <label class="sign-in-panel__label" for="sign-in-email">Email address</label>
+            <input
+              id="sign-in-email"
+              class="sign-in-panel__input"
+              type="email"
+              autocomplete="email"
+              [value]="email()"
+              (input)="onInput($event)"
+            />
+            @if (validationError(); as message) {
+              <p class="sign-in-panel__error" role="alert">{{ message }}</p>
+            }
+            <button type="submit" class="mt-pill mt-pill--coral" [disabled]="submitting()">
+              Email me a sign-in link
+            </button>
+          </form>
 
-        @if (turnstileSiteKey(); as key) {
-          <div
-            class="sign-in-panel__turnstile"
-            #turnstileContainer
-            data-testid="turnstile-container"
-          ></div>
+          @if (turnstileSiteKey(); as key) {
+            <div
+              class="sign-in-panel__turnstile"
+              #turnstileContainer
+              data-testid="turnstile-container"
+            ></div>
+          }
         }
 
-        <a class="mt-pill mt-pill--ghost sign-in-panel__google" [attr.href]="googleHref()">
-          Continue with Google
-        </a>
+        @if (googleEnabled()) {
+          <a class="mt-pill mt-pill--ghost sign-in-panel__google" [attr.href]="googleHref()">
+            Continue with Google
+          </a>
+        }
       }
     </div>
   `,
@@ -156,6 +170,12 @@ export class SignInPanelComponent {
   readonly turnstileSiteKey = signal<string | null>(null);
   private readonly turnstileToken = signal<string | null>(null);
 
+  /** True until `GET /api/auth/config` answers otherwise. A learner sees both controls while the
+   * config read is in flight, or when it fails outright — a config read never disables a control
+   * this way, only an explicit `false` in the answer does. */
+  readonly googleEnabled = signal(true);
+  readonly magicLinkEnabled = signal(true);
+
   private readonly turnstileContainer = viewChild<ElementRef<HTMLElement>>('turnstileContainer');
   private turnstileApi: TurnstileApi | null = null;
   private turnstileWidgetId: string | null = null;
@@ -203,9 +223,11 @@ export class SignInPanelComponent {
     try {
       const config = await this.api.authConfig();
       this.turnstileSiteKey.set(config.turnstileSiteKey);
+      this.googleEnabled.set(config.googleEnabled);
+      this.magicLinkEnabled.set(config.magicLinkEnabled);
     } catch {
-      // No widget without a working config read. A deployment with a secret set stays reachable
-      // by Google in the meantime. Sign-in degrades, and does not break.
+      // No widget without a working config read. Both controls stay shown, and sign-in degrades
+      // by way of the 503 each one answers on its own, rather than breaking outright here.
     }
   }
 
@@ -248,15 +270,18 @@ export class SignInPanelComponent {
 /**
  * What the learner reads when `requestMagicLink` itself fails.
  *
- * `AuthRoutes.kt` refuses this route three ways: `429 RATE_LIMITED`
- * (`MAGIC_LINK_PER_IP`/`MAGIC_LINK_PER_ADDRESS`), `403 TURNSTILE_FAILED`, and
- * `413 PAYLOAD_TOO_LARGE` (`MAX_AUTH_BODY_BYTES`, which an ordinary address never reaches).
- * `RATE_LIMITED` gets its own message. "Check your connection" is wrong advice for a learner who
- * is not offline, and fixes nothing by retrying at once. `TURNSTILE_FAILED` shows the server's own
- * message, and not a generic one. `submit()` has already reset the widget by the time this runs.
- * The learner needs to know a fresh attempt is what comes next. Every other failure — a dropped
- * connection, `PAYLOAD_TOO_LARGE`, a 500 — reduces to one generic message. No branch names the
- * address itself. The address's known or unknown status stays unrevealed either way.
+ * `AuthRoutes.kt` refuses this route four ways: `429 RATE_LIMITED`
+ * (`MAGIC_LINK_PER_IP`/`MAGIC_LINK_PER_ADDRESS`), `403 TURNSTILE_FAILED`,
+ * `413 PAYLOAD_TOO_LARGE` (`MAX_AUTH_BODY_BYTES`, which an ordinary address never reaches), and
+ * `503 SIGN_IN_UNAVAILABLE` (the mail configuration is missing). `RATE_LIMITED` gets its own
+ * message. "Check your connection" is wrong advice for a learner who is not offline, and fixes
+ * nothing by retrying at once. `TURNSTILE_FAILED` shows the server's own message, and not a
+ * generic one. `submit()` has already reset the widget by the time this runs. The learner needs
+ * to know a fresh attempt is what comes next. `SIGN_IN_UNAVAILABLE` points the learner at the
+ * other control on this same panel, in case the config route reported it enabled before it
+ * stopped working. Every other failure — a dropped connection, `PAYLOAD_TOO_LARGE`, a 500 —
+ * reduces to one generic message. No branch names the address itself. The address's known or
+ * unknown status stays unrevealed either way.
  */
 function describeRequestFailure(body: ApiErrorBody | null): string {
   if (body?.code === 'RATE_LIMITED') {
@@ -264,6 +289,9 @@ function describeRequestFailure(body: ApiErrorBody | null): string {
   }
   if (body?.code === 'TURNSTILE_FAILED') {
     return body.message;
+  }
+  if (body?.code === 'SIGN_IN_UNAVAILABLE') {
+    return 'Email sign-in is not available right now. Use Google.';
   }
   return 'Could not send the link. Check your connection and try again.';
 }

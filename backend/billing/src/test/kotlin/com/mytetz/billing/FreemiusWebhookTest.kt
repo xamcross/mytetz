@@ -187,6 +187,23 @@ class FreemiusWebhookTest {
     }
 
     @Test
+    fun `resolveRequired's failure names the variable before anything else in its own message`() {
+        // `com.mytetz.api.ConfigGate.buildConfiguredOrNull`, in the `:backend:api` module, reads
+        // this exact message across a module boundary, by a regex that takes the first
+        // variable-shaped name it finds. It never sees this test, or this class. This test is the
+        // guard on its side of that boundary: it pins the one property that regex depends on, so
+        // a future edit to this message fails here first.
+        val message = assertFailsWith<IllegalStateException> {
+            FreemiusConfig.resolveRequired(FreemiusConfig.SECRET_KEY_ENV, null)
+        }.message.orEmpty()
+
+        assertTrue(
+            message.startsWith(FreemiusConfig.SECRET_KEY_ENV),
+            "the variable name must lead the message: $message",
+        )
+    }
+
+    @Test
     fun `a FreemiusConfig never prints its secret key`() {
         val config = FreemiusConfig(secretKey = SECRET_KEY, productId = "a-test-product-id", planId = "a-test-plan-id")
 

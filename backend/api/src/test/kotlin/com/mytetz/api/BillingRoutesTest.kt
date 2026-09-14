@@ -34,6 +34,7 @@ import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -132,7 +133,13 @@ class BillingRoutesTest {
         return """{"parentNodeId":"$rootNodeId","span":{"text":"$text","start":$start,"end":${start + text.length}},"verb":"EXPLAIN"}"""
     }
 
-    private fun app(block: suspend Scope.() -> Unit) = testApplication {
+    private fun app(
+        // Null keeps every existing test on a Freemius config that always builds. See the
+        // fallback to the real `freemiusConfig` below. A config-missing test overrides this to a
+        // throwing lambda, the same shape `AuthRoutesTest`'s own `magicLinkFactory` uses.
+        freemiusConfigFactory: (() -> FreemiusConfig)? = null,
+        block: suspend Scope.() -> Unit,
+    ) = testApplication {
         val stack = TestFixtures.sessionApp()
         val accountRepository = AccountRepository(stack.database)
         val account = AccountService(accountRepository)
@@ -169,7 +176,7 @@ class BillingRoutesTest {
                 billingRoutes(
                     account = account,
                     billing = billing,
-                    freemiusConfig = { freemiusConfig },
+                    freemiusConfig = freemiusConfigFactory ?: { freemiusConfig },
                     cookies = TestFixtures.cookieConfig,
                 )
             }
@@ -353,4 +360,43 @@ class BillingRoutesTest {
 
     private suspend fun Scope.sessionView(sessionId: String): SessionView =
         wireJson.decodeFromString(client.get("/api/sessions/$sessionId").bodyAsText())
+
+    // ------------------------------------------------------------------ a missing freemius configuration
+
+    @Test
+    fun `checkout answers BILLING_UNAVAILABLE when the freemius configuration is missing`() = app(
+        freemiusConfigFactory = { error("FREEMIUS_PRODUCT_ID is not set") },
+    ) {
+        signIn()
+
+        val response = client.post("/api/billing/checkout")
+
+        assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
+        assertEquals("BILLING_UNAVAILABLE", response.apiError().code)
+    }
+
+    @Test
+    fun `the webhook answers BILLING_UNAVAILABLE when the freemius configuration is missing`() = app(
+        freemiusConfigFactory = { error("FREEMIUS_SECRET_KEY is not set") },
+    ) {
+        val response = client.post("/api/billing/webhook") {
+            contentType(ContentType.Application.Json)
+            setBody("""{"id":"evt-1","type":"subscription.created","created":1000}""")
+        }
+
+        assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
+        assertEquals("BILLING_UNAVAILABLE", response.apiError().code)
+    }
+
+    @Test
+    fun `the BILLING_UNAVAILABLE body names no variable`() = app(
+        freemiusConfigFactory = { error("FREEMIUS_PRODUCT_ID=super-secret-value is not set") },
+    ) {
+        signIn()
+
+        val response = client.post("/api/billing/checkout")
+
+        assertFalse(response.bodyAsText().contains("FREEMIUS_PRODUCT_ID"))
+        assertFalse(response.bodyAsText().contains("super-secret-value"))
+    }
 }
