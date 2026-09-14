@@ -414,17 +414,27 @@ ceiling is the third.
 **The check is skipped when this variable is unset.** Every sign-in still works. No request to
 Cloudflare is ever made. Local work and CI need no key for this reason.
 
-**This deployment does not yet render a Turnstile widget in the browser.** Task 14 added the
-backend check and this variable. An operator can turn the check on the moment a widget exists.
-Task 14 did not add the widget. `POST /api/auth/magic-link`'s body carries an optional
-`turnstileToken` field. `GET /api/auth/google` reads one from a `turnstileToken` query
-parameter. But nothing in `frontend/` sets either field yet. **Do not set
-`MYTETZ_TURNSTILE_SECRET` in production before a later task adds the widget.** With the secret
-set and no widget, every sign-in attempt sends no token, and the check refuses every one.
+**The sign-in panel renders the widget itself, from `GET /api/auth/config`.** That route reports
+`MYTETZ_TURNSTILE_SITE_KEY` to the browser as `turnstileSiteKey`. A null value there means the site
+key is unset. The panel then renders no widget and loads no script. A learner who sees the widget
+solves it once. The resulting token then travels two ways: as `turnstileToken` in the magic-link
+body, and as a `turnstileToken` query parameter on the Google link. Both are exactly where the
+backend check already reads it.
 
-Get a site key and a secret key from the Cloudflare dashboard, under Turnstile. The secret key is
-`MYTETZ_TURNSTILE_SECRET`. The site key is a value the browser widget itself needs. The site key
-belongs to the task that adds the widget, not to this deployment's own secrets.
+**Set both variables together, from the same Cloudflare Turnstile widget, or set neither.**
+`MYTETZ_TURNSTILE_SECRET` is the secret key. It checks a token on the server, and must never reach
+the browser. `MYTETZ_TURNSTILE_SITE_KEY` is the site key. It is public by design. The widget
+cannot render without it. A secret with the site key unset makes every sign-in fail. The widget
+never renders. No token is then ever produced. The server refuses every caller on that missing
+token. The boot log carries a WARN line naming both variables when a deployment is in that state.
+Do not mistake that line for a Cloudflare account fault.
+
+```
+fly secrets set MYTETZ_TURNSTILE_SECRET="<secret key>" MYTETZ_TURNSTILE_SITE_KEY="<site key>" --app mytetz
+```
+
+Get both values from the Cloudflare dashboard, under Turnstile. Create one widget for the
+`mytetz.com` hostname, and copy the pair it gives you.
 
 ---
 
