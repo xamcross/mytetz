@@ -1692,7 +1692,13 @@ string template: `questionId = "${if (nudge) "retry" else "gen"}-$index-${UUID.r
 - [ ] **Step 4: Run the tests and confirm they pass**
 
 Run: `./gradlew :backend:assess:test --tests "com.mytetz.assess.QuizServiceTest"`
-Expected: PASS, all eight tests.
+Expected: PASS, all seven tests.
+
+Also add a `@BeforeTest reset()` that drops the `quizTemplates` and `quizAttempts` collections
+before each test, mirroring Task 6's `QuizRepositoryTest` — `MongoTestSupport.database("service")`
+is one shared database for the whole class, and most of this file's tests derive the same content
+key from the same scope key, so without a reset an earlier test's cached template collides with a
+later one that expects a fresh generation.
 
 - [ ] **Step 5: Run the whole `assess` module's tests**
 
