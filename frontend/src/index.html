@@ -2,12 +2,40 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>mytetz</title>
+    <title>mytetz: understand hard topics one sentence at a time</title>
+    <meta
+      name="description"
+      content="Pick a topic like quantum physics or game theory. Highlight any phrase you do not understand, and get an explanation that fits where you are."
+    />
     <base href="/" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="icon" type="image/svg+xml" href="icon.svg" />
     <link rel="icon" type="image/x-icon" href="favicon.ico" />
     <link rel="apple-touch-icon" href="apple-touch-icon.png" />
+
+    <!--
+      No canonical tag and no og:url here, on purpose. This file is the shell for every route, so
+      a fixed value here would point every route at "/". Issue #35 sets a per-route title and
+      description. Issue #45 sets a canonical tag on each topic page.
+    -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="mytetz" />
+    <meta property="og:title" content="mytetz: understand hard topics one sentence at a time" />
+    <meta
+      property="og:description"
+      content="Pick a topic like quantum physics or game theory. Highlight any phrase you do not understand, and get an explanation that fits where you are."
+    />
+    <meta property="og:image" content="https://mytetz.com/og-image.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebSite",
+        "name": "mytetz",
+        "url": "https://mytetz.com/"
+      }
+    </script>
   </head>
   <body>
     <app-root></app-root>
