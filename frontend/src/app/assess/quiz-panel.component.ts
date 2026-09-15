@@ -1,4 +1,15 @@
-import { Component, computed, effect, inject, input, output, signal } from '@angular/core';
+import {
+  Component,
+  DestroyRef,
+  ElementRef,
+  afterRenderEffect,
+  computed,
+  effect,
+  inject,
+  input,
+  output,
+  signal,
+} from '@angular/core';
 import { ApiService } from '../core/api.service';
 import { QuizAnswerPayload, QuizKind, QuizQuestionView, QuizResultView } from '../core/models';
 
@@ -13,6 +24,12 @@ type QuizPhase = 'loading' | 'question' | 'result';
  * `answers[]` array in one call, and there is no route that scores one question at a time. So
  * this component never claims an answer is right or wrong before that call returns. A learner
  * moves through every question with Next, then Finish, and sees every result together.
+ *
+ * This is a dialog, and it holds the same three keyboard behaviours as `VerbPickerComponent`:
+ * Escape closes it, Tab and Shift+Tab keep focus inside it, and focus moves in on open and back
+ * to whatever opened it on close. Unlike the picker, this panel's own content changes over time —
+ * loading, then a question, then a result, or an error — so the focus-trap query and the initial
+ * focus move both read the panel's current buttons rather than a fixed list.
  */
 @Component({
   selector: 'app-quiz-panel',
@@ -21,7 +38,11 @@ type QuizPhase = 'loading' | 'question' | 'result';
       class="quiz-panel mt-card mt-card--raised"
       role="dialog"
       aria-modal="true"
+      tabindex="-1"
       [attr.aria-label]="title()"
+      (keydown.escape)="close.emit()"
+      (keydown.tab)="onTab($event)"
+      (keydown.shift.tab)="onTab($event)"
     >
       @if (error(); as message) {
         <p class="quiz-panel__error" role="alert">{{ message }}</p>
@@ -146,6 +167,8 @@ type QuizPhase = 'loading' | 'question' | 'result';
 })
 export class QuizPanelComponent {
   private readonly api = inject(ApiService);
+  private readonly host = inject(ElementRef<HTMLElement>);
+  private readonly destroyRef = inject(DestroyRef);
 
   readonly sessionId = input.required<string>();
   readonly kind = input.required<QuizKind>();
@@ -180,6 +203,56 @@ export class QuizPanelComponent {
       this.nodeId();
       void this.start();
     });
+
+    // Read before the effect above renders anything of this panel's own, so it names whatever
+    // the learner had focused a moment ago — ordinarily the button that opened this panel. Not
+    // read from `document` directly: `this.host`'s own document is what a test's fixture uses.
+    const trigger = this.host.nativeElement.ownerDocument?.activeElement;
+    this.destroyRef.onDestroy(() => {
+      if (trigger instanceof HTMLElement && trigger !== trigger.ownerDocument.body) trigger.focus();
+    });
+
+    // Runs after every render this panel's own signals cause, not once: the panel's first render
+    // is the loading phase, which holds no button at all, so the button a learner should land on
+    // does not exist yet at that point. `tabindex="-1"` on the dialog root is the fallback for
+    // exactly that render.
+    afterRenderEffect({
+      read: () => {
+        this.phase();
+        const panel = this.host.nativeElement;
+        const active = panel.ownerDocument.activeElement;
+        if (active instanceof HTMLElement && panel.contains(active)) return;
+        (this.focusableElements()[0] ?? panel).focus();
+      },
+    });
+  }
+
+  /** Every element inside this panel a learner can currently reach with the keyboard. Queried
+   * fresh on every call, rather than cached, because which buttons exist changes with `phase()`
+   * and a disabled Next button must never be one of them. */
+  private focusableElements(): HTMLElement[] {
+    const buttons = this.host.nativeElement.querySelectorAll('button:not([disabled])');
+    return Array.from(buttons) as HTMLElement[];
+  }
+
+  /**
+   * Keeps Tab inside the panel, the same trap `VerbPickerComponent.onTab` runs. Without this, Tab
+   * walks into the page behind what claims to be a modal dialog.
+   */
+  onTab(event: Event): void {
+    const key = event as KeyboardEvent;
+    const elements = this.focusableElements();
+    if (elements.length === 0) return;
+    const first = elements[0];
+    const last = elements[elements.length - 1];
+    const active = this.host.nativeElement.ownerDocument.activeElement;
+    if (key.shiftKey && active === first) {
+      key.preventDefault();
+      last.focus();
+    } else if (!key.shiftKey && active === last) {
+      key.preventDefault();
+      first.focus();
+    }
   }
 
   private async start(): Promise<void> {

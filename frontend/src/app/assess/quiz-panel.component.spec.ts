@@ -68,6 +68,65 @@ describe('QuizPanelComponent', () => {
     expect(dialog.getAttribute('aria-label')).toBeTruthy();
   });
 
+  it('moves focus into the panel once a question loads', async () => {
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const dialog = fixture.nativeElement.querySelector('[role="dialog"]') as HTMLElement;
+    expect(dialog.contains(document.activeElement)).toBe(true);
+  });
+
+  it('closes on Escape, the same as VerbPickerComponent', async () => {
+    const closed: void[] = [];
+    component.close.subscribe(() => closed.push(undefined));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const dialog = fixture.nativeElement.querySelector('[role="dialog"]') as HTMLElement;
+    dialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+
+    expect(closed.length).toBe(1);
+  });
+
+  it('keeps Tab inside the panel', async () => {
+    await fixture.whenStable();
+    component.choose(0);
+    fixture.detectChanges();
+
+    const options = Array.from(
+      fixture.nativeElement.querySelectorAll('.quiz-panel__option'),
+    ) as HTMLButtonElement[];
+    const next = fixture.nativeElement.querySelector(
+      '.quiz-panel__actions .mt-pill--coral',
+    ) as HTMLButtonElement;
+
+    // Tab from the last focusable element (Next, now enabled) wraps back to the first (option a).
+    next.focus();
+    next.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+    fixture.detectChanges();
+    expect(document.activeElement).toBe(options[0]);
+
+    // Shift+Tab from the first focusable element wraps back to the last.
+    options[0].dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true }),
+    );
+    fixture.detectChanges();
+    expect(document.activeElement).toBe(next);
+  });
+
+  it('returns focus to whatever opened it, once it closes', async () => {
+    const trigger = document.createElement('button');
+    document.body.appendChild(trigger);
+    trigger.focus();
+
+    const opened = create();
+    await opened.whenStable();
+    opened.destroy();
+
+    expect(document.activeElement).toBe(trigger);
+    document.body.removeChild(trigger);
+  });
+
   it('shows the stem and every option of the current question', async () => {
     await fixture.whenStable();
     fixture.detectChanges();
