@@ -16,11 +16,24 @@ import {
 
 const ROUTES = ['/privacy', '/terms', '/imprint'];
 
+/** Issue #35's own acceptance criteria: the tab names the page, not the generic title
+ * `index.html` sets for every route. */
+const TITLES: Record<string, string> = {
+  '/privacy': 'Privacy policy | mytetz',
+  '/terms': 'Terms of service | mytetz',
+  '/imprint': 'Imprint | mytetz',
+};
+
 for (const route of ROUTES) {
   test(`${route} renders with HTTP 200`, async ({ page }) => {
     const response = await page.goto(route);
     expect(response?.status()).toBe(200);
     await expect(page.locator('h1')).toBeVisible();
+  });
+
+  test(`${route} sets its own tab title`, async ({ page }) => {
+    await page.goto(route);
+    expect(await page.title()).toBe(TITLES[route]);
   });
 }
 
@@ -81,6 +94,17 @@ test('the footer carries the three legal links on the catalogue, the reader, the
   await page.goto('/account');
   await page.getByText('learner@example.com').waitFor();
   expect(await footerLinks(page)).toEqual(['/privacy', '/terms', '/imprint']);
+});
+
+test('the account and auth tabs carry their own title', async ({ page }) => {
+  await stubActiveAccount(page);
+  await page.goto('/account');
+  await page.getByText('learner@example.com').waitFor();
+  expect(await page.title()).toBe('Your account | mytetz');
+
+  await page.goto('/auth?auth=failed');
+  await expect(page.getByText('Sign-in did not complete.')).toBeVisible();
+  expect(await page.title()).toBe('Sign-in | mytetz');
 });
 
 test('each footer link navigates to its own legal page', async ({ page }) => {

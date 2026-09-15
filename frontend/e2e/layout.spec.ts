@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import type { SessionView, TopicSummary } from '../src/app/core/models';
-import { SEED, selectPhrase, stubCatalogueAndSession } from './support';
+import { SEED, openQuantumPhysicsSession, selectPhrase, stubCatalogueAndSession } from './support';
 
 /**
  * What only a real browser can check about the Candy design.
@@ -582,4 +582,13 @@ test('the tab carries the product name, not the generator default', async ({ pag
   // Issue #34 replaced the bare "mytetz" title with one line that also states the product, so a
   // crawler and a shared link read it before any JavaScript runs.
   expect(await page.title()).toBe('mytetz: understand hard topics one sentence at a time');
+});
+
+test('the reader tab carries the topic once a session opens', async ({ page }) => {
+  await stubCatalogueAndSession(page);
+  await openQuantumPhysicsSession(page);
+
+  // Issue #35: `ReaderPageComponent` sets this itself, once the session names its topic — no
+  // static `title` in `app.routes.ts` could, since the topic is not known until then.
+  expect(await page.title()).toBe('Quantum Physics | mytetz');
 });
