@@ -353,10 +353,10 @@ internal fun sseErrorFor(cause: Throwable): ApiError = when (cause) {
         ApiError("CORRUPT_SESSION", "this session's stored data is inconsistent and cannot be read")
     }
 
-    // Not raisable from inside a stream today: quiz generation finishes, or fails, before the
-    // first byte goes out. Present anyway, because the coverage test below requires every
-    // status-mapping arm to have a streaming counterpart — see [GenerationFailedException]'s own
-    // arm for the same argument.
+    // This exception is not raisable from inside a stream today. Quiz generation finishes, or
+    // fails, before the first byte goes out. This arm is present anyway. The coverage test below
+    // requires every status-mapping arm to have a streaming counterpart. See
+    // [GenerationFailedException]'s own arm for the same argument.
     is QuizUnavailableException -> {
         log.warn("quiz generation produced nothing usable mid-stream", cause)
         ApiError("QUIZ_UNAVAILABLE", "no quiz could be generated for this material; try again")

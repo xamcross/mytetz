@@ -162,7 +162,8 @@ class QuizRoutesTest {
         val firstExplanationKey = Json.parseToJsonElement(session.bodyAsText()).jsonObject
             .getValue("nodes").jsonArray.first()
             .jsonObject.getValue("explanationKey").jsonPrimitive.content
-        // One valid question is enough for `getOrGenerate` to succeed; it need not cover every key.
+        // One valid question is enough for `getOrGenerate` to succeed. It does not need to cover
+        // every key.
         stack.llm.nextStructuredJson = validQuizJson(firstExplanationKey)
 
         val response = client.post("/api/sessions/$sessionId/quizzes") {
@@ -173,11 +174,11 @@ class QuizRoutesTest {
         assertEquals(HttpStatusCode.OK, response.status)
     }
 
-    // A pool of 2 is spent in full by `newSessionWithOneChild`: the seed generation and the one
-    // explain call. The trial pool counts every generation this principal makes, so the quiz
-    // request below is refused before it reaches the model. `BillingConfig` requires a positive
-    // pool, so 0 is not a legal value here — see `SessionRoutesTest`'s own trial-exhaustion tests
-    // for the same pattern.
+    // `newSessionWithOneChild` spends a pool of 2 in full. The seed generation spends one. The one
+    // explain call spends the other. The trial pool counts every generation this principal makes.
+    // So the quiz request below is refused before it reaches the model. `BillingConfig` requires a
+    // positive pool. Zero is not a legal value here. See `SessionRoutesTest`'s own trial-exhaustion
+    // tests for the same pattern.
     @Test
     fun `an exhausted allowance refuses quiz generation the same way it refuses explain`() = app(trialGenerations = 2) {
         val sessionId = newSessionWithOneChild()
