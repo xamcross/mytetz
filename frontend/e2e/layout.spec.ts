@@ -579,5 +579,7 @@ test('the tab carries the product name, not the generator default', async ({ pag
   await stubCatalogueAndSession(page);
   await page.goto('/');
 
-  expect(await page.title()).toBe('mytetz');
+  // Issue #34 replaced the bare "mytetz" title with one line that also states the product, so a
+  // crawler and a shared link read it before any JavaScript runs.
+  expect(await page.title()).toBe('mytetz: understand hard topics one sentence at a time');
 });
