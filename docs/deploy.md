@@ -288,12 +288,18 @@ dashboard / API and are not automated by this repo.**
    stops streaming — the single most likely cause of "explanations never arrive".
 5. **Rate limiting rule:** `/api/*`, 60 requests per minute per IP.
 6. **Bot Fight Mode: on.**
+7. **Redirect Rule: `www` to apex.** Rules > Redirect Rules > "Redirect www to
+   apex (301)". Condition: `http.host eq "www.mytetz.com"`. Action: a dynamic
+   redirect to `concat("https://mytetz.com", http.request.uri.path)`, status
+   `301`, "Preserve query string" on. The rule runs at the edge, so the `www`
+   DNS record stays proxied and the fly certificate for `www` stays in place.
 
 Verify end to end:
 
 ```bash
 curl -s https://mytetz.com/api/health         # {"status":"ok","mongo":true,"ready":true}
 curl -sI https://mytetz.com/api/health | grep -i cf-cache-status   # expect BYPASS/DYNAMIC
+curl -sS -o /dev/null -w "%{http_code} %{redirect_url}\n" "https://www.mytetz.com/privacy?x=1"   # expect 301 https://mytetz.com/privacy?x=1
 ```
 
 If `https://mytetz.fly.dev/api/health` is healthy but `https://mytetz.com/api/health`
