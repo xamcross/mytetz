@@ -1,0 +1,12 @@
+# Mytetz
+
+> Mytetz is a learning app. A reader picks a topic from a curated catalogue and studies it in a focused, guided reader.
+
+The catalogue lists topics by title, category, and summary. A reader can search and filter the catalogue, then start a session that opens the topic in the reader.
+
+## Pages
+
+- [Catalogue](https://mytetz.com/): the curated list of topics, and the site's home page.
+- [Privacy policy](https://mytetz.com/privacy)
+- [Terms of service](https://mytetz.com/terms)
+- [Imprint](https://mytetz.com/imprint)
