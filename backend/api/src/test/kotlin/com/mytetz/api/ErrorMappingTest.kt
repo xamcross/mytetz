@@ -3,6 +3,7 @@ package com.mytetz.api
 import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.read.ListAppender
+import com.mytetz.assess.QuizUnavailableException
 import com.mytetz.graph.GenerationFailedException
 import com.mytetz.graph.Verb
 import com.mytetz.session.CorruptSessionException
@@ -380,7 +381,7 @@ class ErrorMappingTest {
      * How many `exception<...>` arms `installErrorMapping` registers, excluding the `Throwable`
      * catch-all. Hand written on purpose; see the test that reads it.
      */
-    private val REGISTERED_EXCEPTION_ARMS = 13
+    private val REGISTERED_EXCEPTION_ARMS = 14
 
     /**
      * Every type `installErrorMapping` registers an `exception<...>` arm for, read out of the source.
@@ -417,6 +418,7 @@ class ErrorMappingTest {
         NotFoundException("session s1 for principal anon:p not found"),
         CorruptSessionException("s-broken", "parent cycle through node n3"),
         GenerationFailedException("upstream generation failed for k1"),
+        QuizUnavailableException("no valid quiz question could be generated for scope [k1]"),
         BadRequestException("body was not json"),
         // The concrete types the pipeline actually raises, not their registered supertypes — the
         // coverage check below walks the hierarchy, so `JsonConvertException` stands in for

@@ -2,6 +2,9 @@ package com.mytetz.api
 
 import com.mongodb.kotlin.client.coroutine.MongoClient
 import com.mongodb.kotlin.client.coroutine.MongoDatabase
+import com.mytetz.assess.QuizRepository
+import com.mytetz.assess.QuizService
+import com.mytetz.assess.QuizValidator
 import com.mytetz.catalog.CatalogService
 import com.mytetz.catalog.TopicRepository
 import com.mytetz.catalog.TopicRequestRepository
@@ -197,6 +200,22 @@ object TestFixtures {
             database.getCollection<Document>("sessions").deleteOne(Filters.eq("_id", sessionId))
         }
     }
+
+    /**
+     * A quiz stack sharing the same Mongo database and the same [FakeLlmClient] a caller's
+     * [SessionStack] already built, so a test can create a session, read its explanations, and then
+     * ask for a quiz over them without a second store disagreeing with the first about what exists.
+     */
+    fun quizApp(stack: SessionStack): QuizStack {
+        val repository = QuizRepository(stack.database)
+        runBlocking { repository.ensureIndexes() }
+        return QuizStack(
+            repository = repository,
+            service = QuizService(repository, stack.llm, QuizValidator()),
+        )
+    }
+
+    class QuizStack(val repository: QuizRepository, val service: QuizService)
 
     /**
      * Makes one key disappear for exactly one read.

@@ -1,0 +1,195 @@
+package com.mytetz.api
+
+import com.mytetz.account.AccountRepository
+import com.mytetz.account.AccountService
+import com.mytetz.account.MagicLinkService
+import com.mytetz.account.MailSender
+import com.mytetz.billing.BillingConfig
+import com.mytetz.billing.BillingRepository
+import com.mytetz.billing.BillingService
+import io.ktor.client.HttpClient
+import io.ktor.client.plugins.cookies.HttpCookies
+import io.ktor.client.request.get
+import io.ktor.client.request.post
+import io.ktor.client.request.setBody
+import io.ktor.client.statement.bodyAsText
+import io.ktor.http.ContentType
+import io.ktor.http.HttpStatusCode
+import io.ktor.http.contentType
+import io.ktor.serialization.kotlinx.json.json
+import io.ktor.server.application.install
+import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.server.routing.routing
+import io.ktor.server.testing.testApplication
+import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import java.util.UUID
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
+
+class QuizRoutesTest {
+
+    private class CapturingMailSender : MailSender {
+        private val links = mutableMapOf<String, String>()
+        override suspend fun sendMagicLink(email: String, link: String) { links[email] = link }
+        fun tokenFor(email: String): String = links.getValue(email).substringAfterLast("/")
+    }
+
+    /**
+     * One valid quiz question, for [sourceKey].
+     *
+     * The fake LLM answers with an empty question list by default, and the validator rejects an
+     * empty answer. [sourceKey] must equal a real explanation key from the session under test. Read
+     * that key from `GET /api/sessions/{id}` first, then pass it here.
+     */
+    private fun validQuizJson(sourceKey: String) = """
+        {"questions":[{"stem":"Why is the sky blue?","options":["a","b","c","d"],"correctIndex":1,"sourceKey":"$sourceKey","rationale":"Rayleigh scattering."}]}
+    """.trimIndent()
+
+    private class Scope(
+        val client: HttpClient,
+        val mailSender: CapturingMailSender,
+        val stack: TestFixtures.SessionStack,
+    ) {
+        suspend fun signIn(http: HttpClient = client): String {
+            val email = "learner-${UUID.randomUUID()}@example.com"
+            http.post("/api/auth/magic-link") {
+                contentType(ContentType.Application.Json)
+                setBody("""{"email":"$email"}""")
+            }
+            http.get("/api/auth/magic-link/${mailSender.tokenFor(email)}")
+            return email
+        }
+    }
+
+    private fun app(trialGenerations: Int = 40, block: suspend Scope.() -> Unit) = testApplication {
+        val stack = TestFixtures.sessionApp()
+        val quiz = TestFixtures.quizApp(stack)
+        val accountRepository = AccountRepository(stack.database)
+        val account = AccountService(accountRepository)
+        val mailSender = CapturingMailSender()
+        val magicLink = MagicLinkService(accountRepository, mailSender, baseUrl = "http://localhost")
+        val billingRepository = BillingRepository(stack.database)
+        val billing = BillingService(billingRepository, config = BillingConfig(trialGenerations = trialGenerations))
+
+        application {
+            install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) }
+            installErrorMapping()
+            routing {
+                sessionRoutes(
+                    sessions = { stack.sessions }, quota = stack.quota, billing = billing, account = account,
+                    cookies = TestFixtures.cookieConfig, clientAddresses = ClientAddressConfig(trustedHeader = null),
+                )
+                quizRoutes(
+                    sessions = { stack.sessions }, quizzes = { quiz.service }, quota = stack.quota, billing = billing,
+                    account = account, cookies = TestFixtures.cookieConfig,
+                    clientAddresses = ClientAddressConfig(trustedHeader = null),
+                )
+                authRoutes(
+                    account = account, sessions = { stack.sessions }, magicLink = { magicLink },
+                    google = { error("google sign-in is not exercised by QuizRoutesTest") },
+                    cookies = TestFixtures.cookieConfig, quotaRepository = stack.quotaRepository, billing = billing,
+                    clientAddresses = ClientAddressConfig(trustedHeader = null),
+                )
+            }
+        }
+
+        val http = createClient { install(HttpCookies) }
+        runBlocking { Scope(http, mailSender, stack).block() }
+    }
+
+    /** Creates a signed-in session with one EXPLAIN child node beyond the seed, so TEST_ME on the
+     * root has real material and EXAM has two nodes to scope over. */
+    private suspend fun Scope.newSessionWithOneChild(): String {
+        signIn()
+        val created = client.post("/api/sessions") {
+            contentType(ContentType.Application.Json)
+            setBody("""{"topicSlug":"quantum-physics"}""")
+        }
+        val sessionId = Json.parseToJsonElement(created.bodyAsText()).jsonObject.getValue("sessionId").jsonPrimitive.content
+        val rootNodeId = Json.parseToJsonElement(created.bodyAsText()).jsonObject.getValue("rootNodeId").jsonPrimitive.content
+        client.post("/api/sessions/$sessionId/explain") {
+            contentType(ContentType.Application.Json)
+            setBody(
+                """{"parentNodeId":"$rootNodeId","span":{"text":"fundamental physical theory","start":25,"end":52},"verb":"EXPLAIN"}"""
+            )
+        }
+        return sessionId
+    }
+
+    @Test
+    fun `an anonymous caller is refused before anything is generated`() = app {
+        val response = client.post("/api/sessions/does-not-matter/quizzes") {
+            contentType(ContentType.Application.Json)
+            setBody("""{"kind":"TEST_ME","nodeId":"n1"}""")
+        }
+        assertEquals(HttpStatusCode.Unauthorized, response.status)
+        assertTrue("SIGN_IN_REQUIRED" in response.bodyAsText())
+    }
+
+    @Test
+    fun `a template returned to the browser carries no correctIndex`() = app {
+        val sessionId = newSessionWithOneChild()
+        val session = client.get("/api/sessions/$sessionId")
+        val sessionBody = Json.parseToJsonElement(session.bodyAsText()).jsonObject
+        val rootNodeId = sessionBody.getValue("rootNodeId").jsonPrimitive.content
+        val rootExplanationKey = sessionBody.getValue("nodes").jsonArray
+            .first { it.jsonObject.getValue("nodeId").jsonPrimitive.content == rootNodeId }
+            .jsonObject.getValue("explanationKey").jsonPrimitive.content
+        // The route sends the model no scope key it can guess ahead of time, so the fake answer
+        // must cite the session's own real key or the validator drops it.
+        stack.llm.nextStructuredJson = validQuizJson(rootExplanationKey)
+
+        val response = client.post("/api/sessions/$sessionId/quizzes") {
+            contentType(ContentType.Application.Json)
+            setBody("""{"kind":"TEST_ME","nodeId":"$rootNodeId"}""")
+        }
+
+        assertEquals(HttpStatusCode.OK, response.status)
+        assertFalse("correctIndex" in response.bodyAsText(), "the wire shape must never carry the answer")
+        assertTrue("attemptId" in response.bodyAsText())
+    }
+
+    @Test
+    fun `exam scopes over every node in the session`() = app {
+        val sessionId = newSessionWithOneChild()
+        val session = client.get("/api/sessions/$sessionId")
+        val firstExplanationKey = Json.parseToJsonElement(session.bodyAsText()).jsonObject
+            .getValue("nodes").jsonArray.first()
+            .jsonObject.getValue("explanationKey").jsonPrimitive.content
+        // One valid question is enough for `getOrGenerate` to succeed; it need not cover every key.
+        stack.llm.nextStructuredJson = validQuizJson(firstExplanationKey)
+
+        val response = client.post("/api/sessions/$sessionId/quizzes") {
+            contentType(ContentType.Application.Json)
+            setBody("""{"kind":"EXAM"}""")
+        }
+
+        assertEquals(HttpStatusCode.OK, response.status)
+    }
+
+    // A pool of 2 is spent in full by `newSessionWithOneChild`: the seed generation and the one
+    // explain call. The trial pool counts every generation this principal makes, so the quiz
+    // request below is refused before it reaches the model. `BillingConfig` requires a positive
+    // pool, so 0 is not a legal value here — see `SessionRoutesTest`'s own trial-exhaustion tests
+    // for the same pattern.
+    @Test
+    fun `an exhausted allowance refuses quiz generation the same way it refuses explain`() = app(trialGenerations = 2) {
+        val sessionId = newSessionWithOneChild()
+        val session = client.get("/api/sessions/$sessionId")
+        val rootNodeId = Json.parseToJsonElement(session.bodyAsText()).jsonObject.getValue("rootNodeId").jsonPrimitive.content
+
+        val response = client.post("/api/sessions/$sessionId/quizzes") {
+            contentType(ContentType.Application.Json)
+            setBody("""{"kind":"TEST_ME","nodeId":"$rootNodeId"}""")
+        }
+
+        assertEquals(HttpStatusCode.Forbidden, response.status)
+        assertTrue("TRIAL_EXHAUSTED" in response.bodyAsText())
+    }
+}

@@ -1,5 +1,6 @@
 package com.mytetz.api
 
+import com.mytetz.assess.QuizUnavailableException
 import com.mytetz.graph.GenerationFailedException
 import com.mytetz.session.CorruptSessionException
 import com.mytetz.session.DepthLimitException
@@ -231,6 +232,14 @@ fun Application.installErrorMapping() {
             )
         }
 
+        exception<QuizUnavailableException> { call, cause ->
+            log.warn("quiz generation produced nothing usable", cause)
+            call.respond(
+                HttpStatusCode.BadGateway,
+                ApiError("QUIZ_UNAVAILABLE", "no quiz could be generated for this material; try again"),
+            )
+        }
+
         /*
          * Its own code and its own log line, which is the whole reason Task 1.9 made this a distinct
          * type carrying a `sessionId` field rather than a message fragment. A dangling parent, a
@@ -342,6 +351,15 @@ internal fun sseErrorFor(cause: Throwable): ApiError = when (cause) {
     is CorruptSessionException -> {
         logCorruptSession(cause)
         ApiError("CORRUPT_SESSION", "this session's stored data is inconsistent and cannot be read")
+    }
+
+    // Not raisable from inside a stream today: quiz generation finishes, or fails, before the
+    // first byte goes out. Present anyway, because the coverage test below requires every
+    // status-mapping arm to have a streaming counterpart — see [GenerationFailedException]'s own
+    // arm for the same argument.
+    is QuizUnavailableException -> {
+        log.warn("quiz generation produced nothing usable mid-stream", cause)
+        ApiError("QUIZ_UNAVAILABLE", "no quiz could be generated for this material; try again")
     }
 
     is IllegalArgumentException -> {

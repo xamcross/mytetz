@@ -53,6 +53,12 @@ class QuizService(
     fun keyFor(scopeKeys: List<String>, kind: QuizKind): String =
         QuizContentKey.derive(scopeKeys, kind, config.promptVersion, llm.modelFamily)
 
+    /** True when a template for [key] already exists. This check calls no model. */
+    suspend fun isCached(key: String): Boolean = repository.findByKey(key) != null
+
+    /** Stores a fresh attempt. Call this once, right after [startAttempt] creates it. */
+    suspend fun saveAttempt(attempt: QuizAttempt) = repository.insertAttempt(attempt)
+
     /**
      * A cache hit costs nothing and calls no model.
      *
