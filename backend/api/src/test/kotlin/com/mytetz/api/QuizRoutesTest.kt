@@ -4,6 +4,8 @@ import com.mytetz.account.AccountRepository
 import com.mytetz.account.AccountService
 import com.mytetz.account.MagicLinkService
 import com.mytetz.account.MailSender
+import com.mytetz.assess.QuizAttempt
+import com.mytetz.assess.QuizRepository
 import com.mytetz.billing.BillingConfig
 import com.mytetz.billing.BillingRepository
 import com.mytetz.billing.BillingService
@@ -57,6 +59,7 @@ class QuizRoutesTest {
         val client: HttpClient,
         val mailSender: CapturingMailSender,
         val stack: TestFixtures.SessionStack,
+        val quizRepository: QuizRepository,
     ) {
         suspend fun signIn(http: HttpClient = client): String {
             val email = "learner-${UUID.randomUUID()}@example.com"
@@ -111,7 +114,7 @@ class QuizRoutesTest {
         }
 
         val http = createClient { install(HttpCookies) }
-        runBlocking { Scope(this@testApplication, http, mailSender, stack).block() }
+        runBlocking { Scope(this@testApplication, http, mailSender, stack, quiz.repository).block() }
     }
 
     /** Creates a signed-in session with one EXPLAIN child node beyond the seed, so TEST_ME on the
@@ -260,6 +263,38 @@ class QuizRoutesTest {
         // only prove that a repeated request is refused.
         val otherLearner = anotherLearner()
         val response = otherLearner.post("/api/sessions/$sessionId/quizzes/$attemptId/answers") {
+            contentType(ContentType.Application.Json)
+            setBody("""{"answers":[]}""")
+        }
+
+        assertEquals(HttpStatusCode.NotFound, response.status)
+    }
+
+    @Test
+    fun `an attempt owned by a different principal is refused as not found, even inside the caller's own session`() = app {
+        // The test above proves session-ownership isolation: requireOwnedBy refuses a second
+        // learner before the route ever reaches the attempt lookup. This test reaches past that
+        // check. The session below genuinely belongs to the caller, so requireOwnedBy passes, and
+        // only the route's own attempt.principalId check can still refuse the request.
+        val sessionId = newSessionWithOneChild()
+
+        // Inserted directly through the repository, bypassing the generation route, so an attempt
+        // can exist in the caller's own session while belonging to a different principal. The
+        // template id is a placeholder: the route raises before it ever looks the template up.
+        val foreignAttempt = QuizAttempt(
+            id = "attempt-${UUID.randomUUID()}",
+            principalId = "user:someone-else",
+            sessionId = sessionId,
+            templateId = "placeholder-template",
+            answers = emptyList(),
+            score = null,
+            total = 1,
+            createdAtEpochMillis = 0,
+            submittedAtEpochMillis = null,
+        )
+        quizRepository.upsertAttempt(foreignAttempt)
+
+        val response = client.post("/api/sessions/$sessionId/quizzes/${foreignAttempt.id}/answers") {
             contentType(ContentType.Application.Json)
             setBody("""{"answers":[]}""")
         }
