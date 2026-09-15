@@ -62,7 +62,7 @@ data class QuizResultView(
  * generation calls the same model on the same billing path as an explanation. A caller that
  * disconnects before a cost is recorded, or that mints a new principal on every request, spends
  * nothing into the ledger either way. This limit is the one bound that still applies to that
- * caller. See `EXPLAINS_PER_CALLER`'s own KDoc for the full argument; nothing in it is specific
+ * caller. See `EXPLAINS_PER_CALLER`'s own KDoc for the full argument. Nothing in it is specific
  * to explanations.
  */
 const val QUIZZES_PER_CALLER: Int = 20
@@ -78,7 +78,8 @@ const val QUIZ_WINDOW_MILLIS: Long = 10L * 60 * 1000
  * `bodyIsSmallEnough`, `refusalFor` and `recordSpend` helpers rather than a second copy of them.
  * See section 9.3 of the monetization design: "Only the endpoints that can reach the model: explain
  * and quizzes." The answers route reaches no model. It gates on a body-size check, sign-in and
- * ownership only, and it refuses a second submission for the same attempt — see the route below.
+ * ownership only. It also refuses a second submission for the same attempt. See the answers
+ * route below for that check.
  */
 fun Route.quizRoutes(
     sessions: () -> SessionService,
@@ -149,8 +150,9 @@ fun Route.quizRoutes(
             val refusal = quota.refusalFor(principal, entitlement.allowance, entitlement.status) {
                 // Re-read: another caller may have persisted this key since. This calls no model.
                 // See `refusalFor`'s own KDoc, and `SessionRoutes.kt`'s equivalent re-check. A
-                // throw here must not become the answer — a Mongo blip must degrade to "keep the
-                // refusal", not to an uncaught 500 on a request the cache might have served.
+                // throw here must not become the answer. A Mongo blip must degrade to "keep the
+                // refusal". It must not turn into an uncaught 500 on a request the cache might
+                // have served.
                 try {
                     quizService.isCached(key)
                 } catch (e: CancellationException) {
@@ -168,8 +170,8 @@ fun Route.quizRoutes(
 
         val template = quizService.getOrGenerate(scopeKeys, request.kind, sources) { costMicros ->
             // `NonCancellable`: a client that disconnects mid-generation must not skip this write.
-            // See `SessionRoutes.kt`'s own `streamExplanation` for the full argument — an unwritten
-            // node is free, and sampled tokens are not.
+            // See `SessionRoutes.kt`'s own `streamExplanation` for the full argument. An unwritten
+            // node is free. Sampled tokens are not.
             withContext(NonCancellable) { quota.recordSpend(principal, costMicros, entitlement.allowance) }
         }
 
@@ -208,8 +210,9 @@ fun Route.quizRoutes(
             throw QuizAttemptNotFoundException(attemptId)
         }
 
-        // A second submission would score again for free and, worse, return the full answer key a
-        // second time — the one thing this route must never hand out more than once per attempt.
+        // A second submission would score again for free. Worse, it would return the full answer
+        // key a second time. This route must never hand out the answer key more than once for
+        // one attempt.
         if (attempt.submittedAtEpochMillis != null) {
             call.respond(
                 HttpStatusCode.Conflict,

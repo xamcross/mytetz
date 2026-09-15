@@ -193,12 +193,13 @@ class QuizRoutesTest {
         assertEquals(HttpStatusCode.OK, response.status)
     }
 
-    // `newSessionWithOneChild` gives a session with two nodes: the seed (root) and one explain
-    // child. examMaxSources capped to 1 keeps only the most recent node — the child — so the
-    // root's own explanation key falls out of scope. The fake cites the root's key, so if the cap
-    // is honoured that question is dropped as out of scope on both attempts, and nothing else
-    // gets generated. If the cap were not honoured, the root's key would stay in scope and this
-    // would be a normal 200 — the same shape "exam scopes over every node" above already covers.
+    // `newSessionWithOneChild` gives a session with two nodes: the seed root and one explain
+    // child. examMaxSources capped to 1 keeps only the most recent node. That node is the child.
+    // The root's own explanation key then falls out of scope. The fake cites the root's key. If
+    // the cap works, the validator drops that question as out of scope on both attempts. Nothing
+    // valid is generated then, and the route answers 502. If the cap did not work, the root's key
+    // would stay in scope. The route would then answer 200, the same shape the "exam scopes over
+    // every node" test above already covers.
     @Test
     fun `exam takes only the most recent examMaxSources nodes`() =
         app(quizConfig = QuizConfig(examMaxSources = 1)) {
@@ -240,15 +241,15 @@ class QuizRoutesTest {
         assertTrue("TRIAL_EXHAUSTED" in response.bodyAsText())
     }
 
-    // A pool of 3: the seed generation spends one, the one explain call spends the second, and the
+    // A pool of 3: the seed generation spends one. The one explain call spends the second. The
     // first quiz request below spends the third and exhausts the pool. The EXAM request that
-    // follows is a cache MISS for a different scope, so it proves the pool really is exhausted —
-    // it is refused the same way the exhaustion test above is. The final, identical TEST_ME
-    // request is a cache HIT: `isCached` answers true for it, so the `if (!cached)` branch — the
-    // only place the quota gate runs — never executes, and it must still succeed.
-    // `stack.llm.structuredCalls` proves no request past the first ever reaches the model — quiz
-    // generation calls `structured()`, not `stream()`, so it is this list and not
-    // `stack.generations` that must stay at 1 throughout.
+    // follows is a cache miss for a different scope. It proves the pool really is exhausted: it
+    // is refused the same way the exhaustion test above is refused. The final, identical TEST_ME
+    // request is a cache hit. `isCached` answers true for it, so the `if (!cached)` branch never
+    // runs. That branch is the only place the quota gate runs. The request must still succeed.
+    // `stack.llm.structuredCalls` proves no request past the first ever reaches the model. Quiz
+    // generation calls `structured()`, not `stream()`. So it is this list, and not
+    // `stack.generations`, that must stay at 1 throughout.
     @Test
     fun `a cache hit skips the quota gate, even once the allowance is fully spent`() = app(trialGenerations = 3) {
         val sessionId = newSessionWithOneChild()

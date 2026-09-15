@@ -71,8 +71,8 @@ class QuizAttemptNotFoundException(val attemptId: String) : Exception("no such q
  * The fields score and submittedAtEpochMillis are null until QuizService.score records answers.
  * `QuizRoutes.kt` refuses a second submission once submittedAtEpochMillis is set. It answers
  * 409 ALREADY_ANSWERED, and it does not call QuizService.score again. This class itself still
- * lets a caller overwrite both fields, because this class enforces no rule of its own; the route
- * is where the rule lives.
+ * lets a caller overwrite both fields. This class enforces no rule of its own. The route is
+ * where the rule lives.
  */
 @Serializable
 data class QuizAttempt(

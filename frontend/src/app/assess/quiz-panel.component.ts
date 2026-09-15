@@ -25,11 +25,11 @@ type QuizPhase = 'loading' | 'question' | 'result';
  * this component never claims an answer is right or wrong before that call returns. A learner
  * moves through every question with Next, then Finish, and sees every result together.
  *
- * This is a dialog, and it holds the same three keyboard behaviours as `VerbPickerComponent`:
- * Escape closes it, Tab and Shift+Tab keep focus inside it, and focus moves in on open and back
- * to whatever opened it on close. Unlike the picker, this panel's own content changes over time —
- * loading, then a question, then a result, or an error — so the focus-trap query and the initial
- * focus move both read the panel's current buttons rather than a fixed list.
+ * This is a dialog, and it holds the same three keyboard behaviours as `VerbPickerComponent`.
+ * Escape closes it. Tab and Shift+Tab keep focus inside it. Focus moves in when it opens, and
+ * back to whatever opened it once it closes. Unlike the picker, this panel's own content changes
+ * over time: first loading, then a question, then a result or an error. So the focus-trap query
+ * and the initial focus move both read the panel's current buttons, rather than a fixed list.
  */
 @Component({
   selector: 'app-quiz-panel',
@@ -204,9 +204,10 @@ export class QuizPanelComponent {
       void this.start();
     });
 
-    // Read before the effect above renders anything of this panel's own, so it names whatever
-    // the learner had focused a moment ago — ordinarily the button that opened this panel. Not
-    // read from `document` directly: `this.host`'s own document is what a test's fixture uses.
+    // Read before the effect above renders anything of this panel's own. It therefore names
+    // whatever the learner had focused a moment ago, ordinarily the button that opened this
+    // panel. Read from `this.host`'s own document, and not from `document` directly, because a
+    // test's fixture uses that document.
     const trigger = this.host.nativeElement.ownerDocument?.activeElement;
     this.destroyRef.onDestroy(() => {
       if (trigger instanceof HTMLElement && trigger !== trigger.ownerDocument.body) trigger.focus();

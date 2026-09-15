@@ -207,9 +207,9 @@ object TestFixtures {
      * [SessionStack] already built, so a test can create a session, read its explanations, and then
      * ask for a quiz over them without a second store disagreeing with the first about what exists.
      *
-     * [config] defaults to the production [QuizConfig]. A test overrides it to shrink a knob —
-     * `examMaxSources`, say — down to a size cheap to exercise directly, rather than building a
-     * session with dozens of nodes to reach the real default.
+     * [config] defaults to the production [QuizConfig]. A test can override it to shrink a knob,
+     * `examMaxSources` for instance, down to a size cheap to exercise directly. Otherwise it
+     * would have to build a session with dozens of nodes to reach the real default.
      */
     fun quizApp(stack: SessionStack, config: QuizConfig = QuizConfig()): QuizStack {
         val repository = QuizRepository(stack.database)
