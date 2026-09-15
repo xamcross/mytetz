@@ -216,6 +216,34 @@ test('nothing overflows the page sideways at any width, with every real category
   }
 });
 
+test('the introduction, the filter row and the first tile all fit at 412px', async ({ page }) => {
+  // Issue #38: the catalogue gained an introduction paragraph above the filter row. This checks
+  // that the addition does not push the filter row or the first tile off a common phone width.
+  await stubCatalogueAndSession(page);
+  await page.setViewportSize({ width: 412, height: 915 });
+  await page.goto('/');
+  await page.locator('.topic__button').first().waitFor();
+
+  await expect(page.locator('.catalog__intro')).toBeVisible();
+
+  const boxes = {
+    'the introduction': await page.locator('.catalog__intro').boundingBox(),
+    'the filter row': await page.locator('.catalog__filter').boundingBox(),
+    'the first tile': await page.locator('.topic__button').first().boundingBox(),
+  };
+  for (const [name, box] of Object.entries(boxes)) {
+    expect(box, `${name} is on screen`).toBeTruthy();
+    expect(box!.x, `${name} starts inside the 412px viewport`).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width, `${name} fits inside the 412px viewport`).toBeLessThanOrEqual(412);
+  }
+
+  const doc = await page.evaluate(() => ({
+    scroll: document.documentElement.scrollWidth,
+    client: document.documentElement.clientWidth,
+  }));
+  expect(doc.scroll, 'the page does not scroll sideways at 412px').toBeLessThanOrEqual(doc.client);
+});
+
 test('the search field stays readable at every width, with every real category', async ({
   page,
 }) => {

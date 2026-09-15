@@ -47,6 +47,29 @@ describe('CatalogPageComponent', () => {
 
   afterEach(() => http.verify());
 
+  it('shows a 100-to-150-word introduction between the header and the filter row', async () => {
+    const fixture = TestBed.createComponent(CatalogPageComponent);
+    fixture.detectChanges();
+    http.expectOne('/api/catalog/topics').flush([quantumPhysics]);
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const intro = fixture.nativeElement.querySelector('.catalog__intro') as HTMLElement | null;
+    expect(intro, 'the introduction paragraph exists').toBeTruthy();
+    expect(intro!.previousElementSibling, 'the paragraph sits right after the header').toBe(
+      fixture.nativeElement.querySelector('.catalog__header'),
+    );
+    expect(intro!.nextElementSibling, 'the paragraph sits right before the filter row').toBe(
+      fixture.nativeElement.querySelector('.catalog__filter'),
+    );
+
+    const wordCount = (intro!.textContent ?? '').trim().split(/\s+/).length;
+    expect(wordCount, 'the word count stays inside the acceptance range').toBeGreaterThanOrEqual(
+      100,
+    );
+    expect(wordCount, 'the word count stays inside the acceptance range').toBeLessThanOrEqual(150);
+  });
+
   it('lists topics returned by the API', async () => {
     const fixture = TestBed.createComponent(CatalogPageComponent);
     fixture.detectChanges();
