@@ -69,8 +69,10 @@ class QuizAttemptNotFoundException(val attemptId: String) : Exception("no such q
  * One learner's attempt at one QuizTemplate.
  *
  * The fields score and submittedAtEpochMillis are null until QuizService.score records answers.
- * A re-submission overwrites both fields.
- * This design is deliberate and simple: no scoring calls the model, so nothing can spend money twice.
+ * `QuizRoutes.kt` refuses a second submission once submittedAtEpochMillis is set. It answers
+ * 409 ALREADY_ANSWERED, and it does not call QuizService.score again. This class itself still
+ * lets a caller overwrite both fields, because this class enforces no rule of its own; the route
+ * is where the rule lives.
  */
 @Serializable
 data class QuizAttempt(

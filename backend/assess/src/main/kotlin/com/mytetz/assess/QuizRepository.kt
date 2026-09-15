@@ -30,6 +30,15 @@ open class QuizRepository(database: MongoDatabase) {
     private val templates = database.getCollection<QuizTemplate>("quizTemplates")
     private val attempts = database.getCollection<QuizAttempt>("quizAttempts")
 
+    /**
+     * `principal_recent` serves "my attempts, most recent first"; `by_session` serves per-session
+     * lookups. Neither is a TTL index and nothing here expires.
+     *
+     * A quiz attempt is the learner's own record of how they did, the same way
+     * `com.mytetz.session.SessionRepository` treats a session as the learner's own record of what
+     * they read. Dropping either is a product decision nobody has made, so `quizAttempts` grows
+     * with no ceiling here, on purpose, and not by oversight.
+     */
     suspend fun ensureIndexes() {
         attempts.createIndex(
             Indexes.compoundIndex(Indexes.ascending("principalId"), Indexes.descending("createdAtEpochMillis")),

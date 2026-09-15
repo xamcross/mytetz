@@ -53,6 +53,10 @@ class QuizService(
     fun keyFor(scopeKeys: List<String>, kind: QuizKind): String =
         QuizContentKey.derive(scopeKeys, kind, config.promptVersion, llm.modelFamily)
 
+    /** How many of a session's most recent nodes an exam may cover. `QuizRoutes.kt`'s `scopeFor`
+     * reads this, so the route and this class agree on the one number that bounds an exam prompt. */
+    val examMaxSources: Int get() = config.examMaxSources
+
     /** True when a template for [key] already exists. This check calls no model. */
     suspend fun isCached(key: String): Boolean = repository.findByKey(key) != null
 
@@ -205,6 +209,10 @@ class QuizService(
      * A question with no matching answer counts as wrong. This method does not exclude it.
      * [attempt.total] is fixed at creation time to the size of [template.questions]. A partial
      * submission cannot raise a learner's own denominator by answering fewer questions.
+     *
+     * [answers] is filtered to the question ids [template.questions] actually has, before scoring
+     * and before it is stored on the returned attempt. A caller can send any `questionId` it
+     * likes, so an unfiltered list would let a caller store an arbitrary id against this attempt.
      */
     fun score(
         attempt: QuizAttempt,
@@ -212,10 +220,12 @@ class QuizService(
         answers: List<AnsweredQuestion>,
         clock: () -> Long = System::currentTimeMillis,
     ): QuizAttempt {
-        val chosenByQuestion = answers.associateBy { it.questionId }
+        val validQuestionIds = template.questions.mapTo(HashSet()) { it.questionId }
+        val filteredAnswers = answers.filter { it.questionId in validQuestionIds }
+        val chosenByQuestion = filteredAnswers.associateBy { it.questionId }
         val correct = template.questions.count { question ->
             chosenByQuestion[question.questionId]?.chosenIndex == question.correctIndex
         }
-        return attempt.copy(answers = answers, score = correct, submittedAtEpochMillis = clock())
+        return attempt.copy(answers = filteredAnswers, score = correct, submittedAtEpochMillis = clock())
     }
 }
