@@ -28,10 +28,9 @@ class QuizRepositoryTest {
         createdAtEpochMillis = 0,
     )
 
-    // The test class shares one Mongo database across every test method, per
-    // `MongoTestSupport`'s own contract. Drop both collections before each
-    // test, the same way `ExplanationRepositoryTest` does, so one test's
-    // documents never leak into the next test.
+    // MongoTestSupport gives every test method the same Mongo database. Drop
+    // both collections before each test, the same way ExplanationRepositoryTest
+    // does. This stops one test's documents from leaking into the next test.
     @BeforeTest
     fun reset(): Unit = runBlocking {
         database.getCollection<QuizTemplate>("quizTemplates").drop()
@@ -55,8 +54,8 @@ class QuizRepositoryTest {
     fun `insertIfAbsent on a duplicate key returns the existing winner rather than throwing`(): Unit = runBlocking {
         repository.insertIfAbsent(template())
         val second = repository.insertIfAbsent(template().copy(costMicros = 999))
-        // The stored document is the FIRST insert's, not the caller's own — same contract as
-        // ExplanationRepository.insertIfAbsent.
+        // The stored document is the first insert's document, not the caller's own copy. This is
+        // the same contract as ExplanationRepository.insertIfAbsent.
         assertEquals(100, second.costMicros)
     }
 

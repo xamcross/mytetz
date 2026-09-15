@@ -11,19 +11,19 @@ import kotlinx.coroutines.flow.firstOrNull
 private const val DUPLICATE_KEY = 11000
 
 /**
- * Mongo access for two collections: `quizTemplates` and `quizAttempts`.
+ * This class gives Mongo access to two collections: `quizTemplates` and `quizAttempts`.
  *
- * A quiz template is content addressed and immutable. One document in
- * `quizAttempts` holds one learner's attempt at one template. This class
- * mirrors `com.mytetz.graph.ExplanationRepository` exactly, including the
- * duplicate-key handling in [insertIfAbsent]. On a race, the loser's own
- * copy is discarded. The winner's document is returned. This wastes one
- * insert, but the result is never wrong.
+ * A quiz template is content-addressed. A quiz template is immutable. One document in
+ * `quizAttempts` holds one learner's attempt at one template.
  *
- * The class is `open`, and [findByKey] with it, for the same reason as
- * `ExplanationRepository`. A test can make a key appear between two reads.
- * This lets a test create, on demand, a race that would otherwise need two
- * callers landing on either side of one insert by chance.
+ * This class copies the shape of `com.mytetz.graph.ExplanationRepository`. It also copies the
+ * duplicate-key handling in [insertIfAbsent]. When two writers race for the same key, the class
+ * drops the loser's own copy. The class returns the document that the winner stored. This wastes
+ * one insert. The result is still always correct.
+ *
+ * The class is `open`. The method [findByKey] is `open` too, for the same reason as
+ * `ExplanationRepository`. A test can use this to insert a key between two reads. This gives the
+ * test a race on demand. Two real callers would otherwise create that race only by chance.
  */
 open class QuizRepository(database: MongoDatabase) {
 
@@ -45,8 +45,8 @@ open class QuizRepository(database: MongoDatabase) {
      * Inserts the template only if its key is free.
      *
      * On a duplicate-key race, this method discards the caller's own copy.
-     * It returns the document that is already stored. This is wasteful, but
-     * it is never wrong.
+     * It returns the document that already exists. This wastes an insert.
+     * The result is still always correct.
      */
     suspend fun insertIfAbsent(template: QuizTemplate): QuizTemplate =
         try {
