@@ -234,6 +234,21 @@ describe('FocusCardComponent', () => {
     expect(rootTextMatchesBody(bodyEl(), BODY)).toBe(true);
   });
 
+  it('emits testMeRequested when the Test me control is pressed, and never touches the body text', () => {
+    const spy = vi.fn();
+    fixture.componentInstance.testMeRequested.subscribe(spy);
+    const button: HTMLButtonElement =
+      fixture.nativeElement.querySelector('[data-testid="test-me"]');
+
+    button.click();
+
+    expect(spy).toHaveBeenCalled();
+    // The button is a sibling of the paragraph, not a child of it. A button inside
+    // `.focus__body` would add its own text to the string the offsets index.
+    expect(bodyEl().textContent).toBe(BODY);
+    expect(rootTextMatchesBody(bodyEl(), BODY)).toBe(true);
+  });
+
   it('closes the picker when a stream starts', async () => {
     select(4, 11);
     expect(pickerLive()).toBe(true);

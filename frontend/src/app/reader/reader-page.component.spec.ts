@@ -546,6 +546,63 @@ describe('ReaderPageComponent', () => {
     }
   });
 
+  it('opens the quiz panel for Test me on the node in focus', async () => {
+    const component = await open();
+
+    component.testMe();
+
+    expect(component.quizKind()).toBe('TEST_ME');
+    expect(component.quizNodeId()).toBe(component.store.currentNodeId());
+  });
+
+  it('opens the quiz panel for Exam with no node scoping', async () => {
+    const component = await open();
+
+    component.exam();
+
+    expect(component.quizKind()).toBe('EXAM');
+    expect(component.quizNodeId()).toBeNull();
+  });
+
+  it('closes the quiz panel', async () => {
+    const component = await open();
+
+    component.testMe();
+    component.closeQuiz();
+
+    expect(component.quizKind()).toBeNull();
+    expect(component.quizNodeId()).toBeNull();
+  });
+
+  it('shows the quiz panel in the template once a quiz is open', async () => {
+    // `QuizPanelComponent` starts a quiz itself, from its own constructor effect, the moment it is
+    // created — stubbed here the same way `AccountStore.load` and `authConfig` are stubbed above,
+    // so this test stays about the reader wiring the panel in, and not about the panel's own load.
+    vi.spyOn(TestBed.inject(ApiService), 'startQuiz').mockResolvedValue({
+      attemptId: 'a1',
+      kind: 'TEST_ME',
+      questions: [],
+    });
+    await open();
+
+    harness.routeNativeElement
+      ?.querySelector<HTMLButtonElement>('[data-testid="test-me"]')
+      ?.click();
+    harness.detectChanges();
+
+    expect(harness.routeNativeElement?.querySelector('app-quiz-panel')).toBeTruthy();
+  });
+
+  it('shows an Exam control once a session exists', async () => {
+    await open();
+
+    const examButton = Array.from(
+      harness.routeNativeElement?.querySelectorAll<HTMLButtonElement>('button') ?? [],
+    ).find((button) => button.textContent?.trim() === 'Exam');
+
+    expect(examButton).toBeTruthy();
+  });
+
   it('SIGN_IN_REQUIRED still opens the sign-in panel and not the subscribe panel', async () => {
     // A regression guard on the existing branch: adding the two subscribe codes to
     // `subscribeRequired` must not pull SIGN_IN_REQUIRED along with them.
