@@ -161,4 +161,38 @@ describe('ApiService', () => {
       url: 'https://checkout.freemius.com/product/1/plan/2/?user_email=a%40b.com',
     });
   });
+
+  it('starts a quiz for one node and posts its kind and nodeId', async () => {
+    const promise = service.startQuiz('s1', 'TEST_ME', 'n1');
+    const req = http.expectOne('/api/sessions/s1/quizzes');
+    expect(req.request.method).toBe('POST');
+    expect(req.request.body).toEqual({ kind: 'TEST_ME', nodeId: 'n1' });
+    req.flush({ attemptId: 'a1', kind: 'TEST_ME', questions: [] });
+
+    await expect(promise).resolves.toEqual({ attemptId: 'a1', kind: 'TEST_ME', questions: [] });
+  });
+
+  it('omits nodeId when it starts an exam, which covers the whole session', async () => {
+    const promise = service.startQuiz('s1', 'EXAM');
+    const req = http.expectOne('/api/sessions/s1/quizzes');
+    expect(req.request.body).toEqual({ kind: 'EXAM' });
+    req.flush({ attemptId: 'a1', kind: 'EXAM', questions: [] });
+
+    await promise;
+  });
+
+  it('submits every answer of one attempt in a single request', async () => {
+    const promise = service.submitQuizAnswers('s1', 'a1', [{ questionId: 'q1', chosenIndex: 2 }]);
+    const req = http.expectOne('/api/sessions/s1/quizzes/a1/answers');
+    expect(req.request.method).toBe('POST');
+    expect(req.request.body).toEqual({ answers: [{ questionId: 'q1', chosenIndex: 2 }] });
+    req.flush({ score: 1, total: 1, correctIndices: {}, rationales: {} });
+
+    await expect(promise).resolves.toEqual({
+      score: 1,
+      total: 1,
+      correctIndices: {},
+      rationales: {},
+    });
+  });
 });
