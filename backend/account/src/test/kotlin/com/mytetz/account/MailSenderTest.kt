@@ -65,6 +65,19 @@ class MailSenderTest {
     }
 
     @Test
+    fun `a rejected mail mode names the variable before the bad value in its own message`() {
+        // `com.mytetz.api.ConfigGate.buildConfiguredOrNull` reads this exact message across a
+        // module boundary, by a regex that takes the first variable-shaped name it finds. It
+        // never sees this test, or this class. This test is the guard on its side of that
+        // boundary: it pins the one property that regex depends on, so a future edit to this
+        // message that moved `raw` ahead of `MODE_ENV` fails here, before it can leak a
+        // deployment's own bad value into a production `CONFIG_MISSING` log line.
+        val message = assertFailsWith<IllegalStateException> { MailConfig.resolveMode("garbage") }.message.orEmpty()
+
+        assertTrue(message.startsWith(MailConfig.MODE_ENV), "the variable name must lead the message: $message")
+    }
+
+    @Test
     fun `resend and log are accepted in any case`() {
         assertEquals("resend", MailConfig.resolveMode("resend"))
         assertEquals("resend", MailConfig.resolveMode("RESEND"))

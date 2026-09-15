@@ -7,10 +7,12 @@ import { map } from 'rxjs';
  * `/auth` — where the browser lands after a magic-link or Google sign-in attempt that did not
  * complete.
  *
- * The `auth` query parameter names one of the two reasons a sign-in attempt can fail. Any other
- * value, or none at all — which is the shape of a successful sign-in — has nothing to report
- * here, so this route sends the visitor on to the catalogue instead of showing a page about
- * nothing.
+ * The `auth` query parameter names one of the three reasons a sign-in attempt can fail. `expired`
+ * and `failed` come from a completed attempt. `unavailable` comes from `GET /api/auth/google`
+ * itself, before an attempt starts, when this deployment's Google configuration is missing. Any
+ * other value, or none at all — which is the shape of a successful sign-in — has nothing to
+ * report here, so this route sends the visitor on to the catalogue instead of showing a page
+ * about nothing.
  */
 @Component({
   selector: 'app-auth-landing',
@@ -61,6 +63,8 @@ export class AuthLandingComponent {
         return 'That link has expired or was already used.';
       case 'failed':
         return 'Sign-in did not complete.';
+      case 'unavailable':
+        return 'Google sign-in is not available right now. Use email instead.';
       default:
         return null;
     }

@@ -1,5 +1,8 @@
 package com.mytetz.api
 
+import ch.qos.logback.classic.Level
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
 import com.mytetz.account.AccountRepository
 import com.mytetz.account.AccountService
 import com.mytetz.account.GoogleConfig
@@ -34,6 +37,7 @@ import io.ktor.server.routing.routing
 import io.ktor.server.testing.testApplication
 import kotlinx.serialization.json.Json
 import org.bson.Document
+import org.slf4j.LoggerFactory
 import java.net.InetSocketAddress
 import java.util.Base64
 import java.util.UUID
@@ -862,5 +866,79 @@ class AuthRoutesTest {
 
         assertFalse(text.contains("super-secret-turnstile-value"))
         assertFalse(text.contains("super-secret-google-value"))
+    }
+
+    // ------------------------------------------------------------------ a missing sign-in configuration
+
+    @Test
+    fun `a magic link request answers SIGN_IN_UNAVAILABLE when the mail configuration is missing`() = authApp(
+        magicLinkFactory = { error("MYTETZ_MAIL_MODE is not set") },
+    ) {
+        val response = client.post("/api/auth/magic-link") {
+            contentType(ContentType.Application.Json)
+            setBody("""{"email":"learner@example.com"}""")
+        }
+
+        assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
+        assertEquals("SIGN_IN_UNAVAILABLE", wireJson.decodeFromString<ApiError>(response.bodyAsText()).code)
+    }
+
+    @Test
+    fun `the SIGN_IN_UNAVAILABLE body names no variable`() = authApp(
+        magicLinkFactory = { error("MYTETZ_MAIL_MODE=super-secret-value is not set") },
+    ) {
+        val response = client.post("/api/auth/magic-link") {
+            contentType(ContentType.Application.Json)
+            setBody("""{"email":"learner@example.com"}""")
+        }
+
+        assertFalse(response.bodyAsText().contains("MYTETZ_MAIL_MODE"))
+        assertFalse(response.bodyAsText().contains("super-secret-value"))
+    }
+
+    @Test
+    fun `google sign-in redirects to the unavailable landing when its configuration is missing`() = authApp(
+        googleOAuthFactory = { error("GOOGLE_CLIENT_SECRET is not set") },
+    ) {
+        val response = client.get("/api/auth/google")
+
+        assertEquals(HttpStatusCode.Found, response.status)
+        assertEquals("/auth?auth=unavailable", response.headers[HttpHeaders.Location])
+    }
+
+    @Test
+    fun `CONFIG_MISSING is logged once across repeated requests, naming the variable and no value`() {
+        val appender = attachConfigGateAppender()
+        try {
+            authApp(
+                magicLinkFactory = { error("MYTETZ_MAIL_MODE=super-secret-value is not set") },
+            ) {
+                repeat(3) {
+                    client.post("/api/auth/magic-link") {
+                        contentType(ContentType.Application.Json)
+                        setBody("""{"email":"learner@example.com"}""")
+                    }
+                }
+            }
+        } finally {
+            detachConfigGateAppender(appender)
+        }
+
+        val errors = appender.list.filter { it.level == Level.ERROR }
+        assertEquals(1, errors.size, "expected one CONFIG_MISSING line: ${errors.map { it.formattedMessage }}")
+        val message = errors.single().formattedMessage
+        assertTrue(message.contains("CONFIG_MISSING"))
+        assertTrue(message.contains("MYTETZ_MAIL_MODE"))
+        assertFalse(message.contains("super-secret-value"), "the log line must never carry a value: $message")
+    }
+
+    private fun attachConfigGateAppender(): ListAppender<ILoggingEvent> {
+        val appender = ListAppender<ILoggingEvent>().apply { start() }
+        (LoggerFactory.getLogger(CONFIG_GATE_LOGGER) as ch.qos.logback.classic.Logger).addAppender(appender)
+        return appender
+    }
+
+    private fun detachConfigGateAppender(appender: ListAppender<ILoggingEvent>) {
+        (LoggerFactory.getLogger(CONFIG_GATE_LOGGER) as ch.qos.logback.classic.Logger).detachAppender(appender)
     }
 }

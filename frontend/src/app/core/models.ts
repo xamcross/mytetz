@@ -63,9 +63,9 @@ export interface AccountView {
 /**
  * The body of `GET /api/auth/config`. It mirrors the backend's `AuthConfigView`, field for field.
  *
- * Nothing reads `googleEnabled` or `magicLinkEnabled` today. A later task hides the matching
- * sign-in control when its method is not configured. `SignInPanelComponent` reads only
- * `turnstileSiteKey`, to decide whether to load the Turnstile widget at all.
+ * `SignInPanelComponent` reads `turnstileSiteKey` to decide whether to load the Turnstile widget.
+ * It reads `googleEnabled` and `magicLinkEnabled` to hide the matching control when its method is
+ * not configured.
  */
 export interface AuthConfig {
   turnstileSiteKey: string | null;

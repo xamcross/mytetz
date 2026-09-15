@@ -159,6 +159,52 @@ describe('SignInPanelComponent', () => {
     expect(link.getAttribute('href')).toBe('/api/auth/google');
   });
 
+  // ------------------------------------------------------------------ a disabled sign-in method
+
+  it('hides the email form when the config reports magic-link sign-in as off', async () => {
+    vi.spyOn(api, 'authConfig').mockResolvedValue({ ...NO_TURNSTILE, magicLinkEnabled: false });
+    const fixture = create();
+    await settle(fixture);
+
+    expect(fixture.nativeElement.querySelector('#sign-in-email')).toBeNull();
+    expect(fixture.nativeElement.querySelector('a')).not.toBeNull();
+  });
+
+  it('hides the google button when the config reports google sign-in as off', async () => {
+    vi.spyOn(api, 'authConfig').mockResolvedValue({ ...NO_TURNSTILE, googleEnabled: false });
+    const fixture = create();
+    await settle(fixture);
+
+    expect(fixture.nativeElement.querySelector('a')).toBeNull();
+    expect(fixture.nativeElement.querySelector('#sign-in-email')).not.toBeNull();
+  });
+
+  it('shows the email form and the google button before the config answers', () => {
+    const fixture = create();
+
+    expect(fixture.nativeElement.querySelector('#sign-in-email')).not.toBeNull();
+    expect(fixture.nativeElement.querySelector('a')).not.toBeNull();
+  });
+
+  it('names google as the alternative when email sign-in is unavailable at submit time', async () => {
+    vi.spyOn(api, 'requestMagicLink').mockRejectedValue(
+      new HttpErrorResponse({
+        status: 503,
+        error: {
+          code: 'SIGN_IN_UNAVAILABLE',
+          message: 'email sign-in is not available right now',
+        },
+      }),
+    );
+    const fixture = create();
+
+    await submitWith(fixture, 'learner@example.com');
+
+    expect(fixture.nativeElement.textContent).toContain(
+      'Email sign-in is not available right now. Use Google.',
+    );
+  });
+
   // ------------------------------------------------------------------ the turnstile widget
 
   it('renders no widget container and requests no script when the config carries a null site key', async () => {

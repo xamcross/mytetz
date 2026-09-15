@@ -173,6 +173,10 @@ fun Route.authRoutes(
         limit = MAGIC_LINK_PER_ADDRESS,
         windowMillis = MAGIC_LINK_WINDOW_MILLIS,
     ),
+    // See `newConfigMissingLog`'s own KDoc. `buildConfiguredOrNull` reads and writes this set to
+    // keep its own `CONFIG_MISSING` line to one per variable, however many requests reach a
+    // missing credential.
+    configMissingLogged: MutableSet<String> = newConfigMissingLog(),
 ) {
 
     /**
@@ -216,6 +220,15 @@ fun Route.authRoutes(
     post("/api/auth/magic-link") {
         if (!call.authBodyIsSmallEnough()) return@post
 
+        val mailService = buildConfiguredOrNull(configMissingLogged, magicLink)
+        if (mailService == null) {
+            call.respond(
+                HttpStatusCode.ServiceUnavailable,
+                ApiError("SIGN_IN_UNAVAILABLE", "email sign-in is not available right now"),
+            )
+            return@post
+        }
+
         val caller = ClientAddress.of(call, clientAddresses)
         val request = call.receive<MagicLinkRequest>()
 
@@ -249,7 +262,7 @@ fun Route.authRoutes(
 
         // Always 204, for a known address and an unknown one. `MagicLinkService.request` already
         // holds this guarantee; this route adds nothing that could tell the two apart.
-        magicLink().request(request.email)
+        mailService.request(request.email)
         call.respond(HttpStatusCode.NoContent)
     }
 
@@ -267,6 +280,12 @@ fun Route.authRoutes(
     }
 
     get("/api/auth/google") {
+        val oauth = buildConfiguredOrNull(configMissingLogged, google)
+        if (oauth == null) {
+            call.respondRedirect("/auth?auth=unavailable")
+            return@get
+        }
+
         val caller = ClientAddress.of(call, clientAddresses)
         if (!turnstile.verify(call.request.queryParameters["turnstileToken"], caller)) {
             log.info("google sign-in refused a failed Turnstile check")
@@ -279,7 +298,7 @@ fun Route.authRoutes(
         val challenge = pkceChallenge(verifier)
         call.response.cookies.append(signedOauthCookie(GOOGLE_STATE_COOKIE, state, cookies))
         call.response.cookies.append(signedOauthCookie(GOOGLE_VERIFIER_COOKIE, verifier, cookies))
-        call.respondRedirect(google().authorizationUrl(state, challenge))
+        call.respondRedirect(oauth.authorizationUrl(state, challenge))
     }
 
     get("/api/auth/google/callback") {

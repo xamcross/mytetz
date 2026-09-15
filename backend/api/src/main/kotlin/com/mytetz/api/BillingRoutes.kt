@@ -84,6 +84,8 @@ fun Route.billingRoutes(
     billing: BillingService,
     freemiusConfig: () -> FreemiusConfig,
     cookies: PrincipalCookieConfig,
+    // See `newConfigMissingLog`'s own KDoc.
+    configMissingLogged: MutableSet<String> = newConfigMissingLog(),
 ) {
 
     post("/api/billing/checkout") {
@@ -93,7 +95,14 @@ fun Route.billingRoutes(
             return@post
         }
 
-        val config = freemiusConfig()
+        val config = buildConfiguredOrNull(configMissingLogged, freemiusConfig)
+        if (config == null) {
+            call.respond(
+                HttpStatusCode.ServiceUnavailable,
+                ApiError("BILLING_UNAVAILABLE", "billing is not available right now"),
+            )
+            return@post
+        }
         // Falls back to the stored address on the rare row a normalisation refuses — an account
         // created before this rule existed, for instance — rather than answering an error for a
         // learner who is trying to pay.
@@ -108,9 +117,17 @@ fun Route.billingRoutes(
     post("/api/billing/webhook") {
         if (!call.webhookBodyIsSmallEnough()) return@post
 
+        val config = buildConfiguredOrNull(configMissingLogged, freemiusConfig)
+        if (config == null) {
+            call.respond(
+                HttpStatusCode.ServiceUnavailable,
+                ApiError("BILLING_UNAVAILABLE", "billing is not available right now"),
+            )
+            return@post
+        }
+
         val rawBody = call.receiveChannel().toByteArray()
         val signature = call.request.headers[SIGNATURE_HEADER]
-        val config = freemiusConfig()
 
         if (!FreemiusWebhook.verify(rawBody, signature, config.secretKey)) {
             // Never the header, the body or the key: a signature that fails to verify is not

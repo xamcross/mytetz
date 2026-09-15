@@ -41,6 +41,15 @@ describe('AuthLandingComponent', () => {
     expect(harness.routeNativeElement?.textContent).toContain('Sign-in did not complete.');
   });
 
+  it('the landing shows the unavailable reason', async () => {
+    await harness.navigateByUrl('/auth?auth=unavailable', AuthLandingComponent);
+    harness.detectChanges();
+
+    expect(harness.routeNativeElement?.textContent).toContain(
+      'Google sign-in is not available right now. Use email instead.',
+    );
+  });
+
   it('the landing redirects when the reason is absent', async () => {
     await harness.navigateByUrl('/auth', AuthLandingComponent);
     harness.detectChanges();
