@@ -77,6 +77,7 @@ fun Application.module(components: Components = Components()) {
     // is what uptime monitors send at a health endpoint.
     install(AutoHeadResponse)
     installErrorMapping()
+    installNoIndex()
 
     // Which source the rate limiters key on, said once, at startup. It is a security setting and
     // not a tuning one: a name that no request carries puts every visitor in one bucket. Nothing
