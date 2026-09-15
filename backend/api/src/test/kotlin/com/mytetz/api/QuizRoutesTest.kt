@@ -208,6 +208,66 @@ class QuizRoutesTest {
         assertTrue("TRIAL_EXHAUSTED" in response.bodyAsText())
     }
 
+    // A pool of 3: the seed generation spends one, the one explain call spends the second, and the
+    // first quiz request below spends the third and exhausts the pool. The EXAM request that
+    // follows is a cache MISS for a different scope, so it proves the pool really is exhausted —
+    // it is refused the same way the exhaustion test above is. The final, identical TEST_ME
+    // request is a cache HIT: `isCached` answers true for it, so the `if (!cached)` branch — the
+    // only place the quota gate runs — never executes, and it must still succeed.
+    // `stack.llm.structuredCalls` proves no request past the first ever reaches the model — quiz
+    // generation calls `structured()`, not `stream()`, so it is this list and not
+    // `stack.generations` that must stay at 1 throughout.
+    @Test
+    fun `a cache hit skips the quota gate, even once the allowance is fully spent`() = app(trialGenerations = 3) {
+        val sessionId = newSessionWithOneChild()
+        val session = client.get("/api/sessions/$sessionId")
+        val sessionBody = Json.parseToJsonElement(session.bodyAsText()).jsonObject
+        val rootNodeId = sessionBody.getValue("rootNodeId").jsonPrimitive.content
+        val rootExplanationKey = sessionBody.getValue("nodes").jsonArray
+            .first { it.jsonObject.getValue("nodeId").jsonPrimitive.content == rootNodeId }
+            .jsonObject.getValue("explanationKey").jsonPrimitive.content
+        stack.llm.nextStructuredJson = validQuizJson(rootExplanationKey)
+
+        val first = client.post("/api/sessions/$sessionId/quizzes") {
+            contentType(ContentType.Application.Json)
+            setBody("""{"kind":"TEST_ME","nodeId":"$rootNodeId"}""")
+        }
+        assertEquals(HttpStatusCode.OK, first.status)
+        assertEquals(1, stack.llm.structuredCalls.size, "the first request must reach the model once")
+
+        val exam = client.post("/api/sessions/$sessionId/quizzes") {
+            contentType(ContentType.Application.Json)
+            setBody("""{"kind":"EXAM"}""")
+        }
+        assertEquals(HttpStatusCode.Forbidden, exam.status, "a cache miss must now be refused: the pool is spent")
+        assertTrue("TRIAL_EXHAUSTED" in exam.bodyAsText())
+
+        val second = client.post("/api/sessions/$sessionId/quizzes") {
+            contentType(ContentType.Application.Json)
+            setBody("""{"kind":"TEST_ME","nodeId":"$rootNodeId"}""")
+        }
+        assertEquals(HttpStatusCode.OK, second.status)
+        assertEquals(1, stack.llm.structuredCalls.size, "a cache hit must not call the model again")
+    }
+
+    // The fake answers every prompt with no questions, so neither the initial attempt nor the
+    // nudge retry `getOrGenerate` sends after it ever validates.
+    @Test
+    fun `no valid question from either attempt answers 502 QUIZ_UNAVAILABLE`() = app {
+        val sessionId = newSessionWithOneChild()
+        val session = client.get("/api/sessions/$sessionId")
+        val rootNodeId = Json.parseToJsonElement(session.bodyAsText()).jsonObject.getValue("rootNodeId").jsonPrimitive.content
+        stack.llm.nextStructuredJson = """{"questions":[]}"""
+
+        val response = client.post("/api/sessions/$sessionId/quizzes") {
+            contentType(ContentType.Application.Json)
+            setBody("""{"kind":"TEST_ME","nodeId":"$rootNodeId"}""")
+        }
+
+        assertEquals(HttpStatusCode.BadGateway, response.status)
+        assertTrue("QUIZ_UNAVAILABLE" in response.bodyAsText())
+    }
+
     @Test
     fun `taking a quiz end to end returns the score and the rationales`() = app {
         val sessionId = newSessionWithOneChild()
@@ -239,6 +299,42 @@ class QuizRoutesTest {
         assertTrue(result.containsKey("total"))
         assertTrue(result.containsKey("rationales"))
         assertTrue(result.containsKey("correctIndices"))
+    }
+
+    @Test
+    fun `a second submission for the same attempt is refused, not re-scored`() = app {
+        val sessionId = newSessionWithOneChild()
+        val session = client.get("/api/sessions/$sessionId")
+        val sessionBody = Json.parseToJsonElement(session.bodyAsText()).jsonObject
+        val rootNodeId = sessionBody.getValue("rootNodeId").jsonPrimitive.content
+        val rootExplanationKey = sessionBody.getValue("nodes").jsonArray
+            .first { it.jsonObject.getValue("nodeId").jsonPrimitive.content == rootNodeId }
+            .jsonObject.getValue("explanationKey").jsonPrimitive.content
+        stack.llm.nextStructuredJson = validQuizJson(rootExplanationKey)
+
+        val started = client.post("/api/sessions/$sessionId/quizzes") {
+            contentType(ContentType.Application.Json)
+            setBody("""{"kind":"TEST_ME","nodeId":"$rootNodeId"}""")
+        }
+        val startedBody = Json.parseToJsonElement(started.bodyAsText()).jsonObject
+        val attemptId = startedBody.getValue("attemptId").jsonPrimitive.content
+        val questionId = startedBody.getValue("questions").jsonArray.first()
+            .jsonObject.getValue("questionId").jsonPrimitive.content
+
+        val firstAnswer = client.post("/api/sessions/$sessionId/quizzes/$attemptId/answers") {
+            contentType(ContentType.Application.Json)
+            setBody("""{"answers":[{"questionId":"$questionId","chosenIndex":0}]}""")
+        }
+        assertEquals(HttpStatusCode.OK, firstAnswer.status)
+
+        // A second submission must not read the answer key a second time.
+        val secondAnswer = client.post("/api/sessions/$sessionId/quizzes/$attemptId/answers") {
+            contentType(ContentType.Application.Json)
+            setBody("""{"answers":[{"questionId":"$questionId","chosenIndex":1}]}""")
+        }
+
+        assertEquals(HttpStatusCode.Conflict, secondAnswer.status)
+        assertTrue("ALREADY_ANSWERED" in secondAnswer.bodyAsText())
     }
 
     @Test
