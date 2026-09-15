@@ -63,6 +63,7 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
         <p class="visually-hidden" role="status">Loading your session…</p>
         <div class="reader__grid">
           <div class="reader__rail rail-skeleton" aria-hidden="true">
+            <span class="mt-pill mt-pill--ghost rail-skeleton__exam">Exam</span>
             <span class="mt-eyebrow rail-skeleton__head">Your trail</span>
             <span class="mt-pill mt-pill--ghost rail-skeleton__toggle">Show trail</span>
           </div>
@@ -261,11 +262,13 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
       .banner__back {
         text-decoration: none;
       }
-      /* The rail placeholder mirrors the loaded rail, state for state: an eyebrow at 768px and
-         above, a ghost pill below it. Below 768px the rail stacks over the card, so a placeholder
-         of a different height moves the card down when the session lands. The height comes from
-         .mt-pill, which is where the real toggle's height comes from too. A min-height here would
-         drift the moment the pill changes. */
+      /* The rail placeholder mirrors the loaded rail, state for state. It has an Exam ghost pill,
+         an eyebrow at 768px and above, and a toggle ghost pill below it. Below 768px the rail
+         stacks over the card. A placeholder of a different height moves the card down when the
+         session lands. The Exam ghost pill carries no media query. The real Exam button shows at
+         every width, so its placeholder must too. The height comes from .mt-pill, which is where
+         the real buttons' height comes from too. A min-height here would drift the moment a pill
+         changes. */
       .rail-skeleton {
         display: flex;
         flex-direction: column;
