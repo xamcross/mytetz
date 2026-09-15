@@ -182,8 +182,9 @@ const val MAX_SESSION_BODY_BYTES: Long = 4_096
 /**
  * `POST /api/sessions`, `GET /api/sessions/{id}` and `POST /api/sessions/{id}/explain`.
  *
- * This is the only endpoint in the system that can spend money, so most of what follows is about the
- * three properties that have to hold at it.
+ * This was the only endpoint in the system that could spend money. `POST /api/sessions/{id}/quizzes`
+ * now spends money too. See `QuizRoutes.kt` for its own gate. Most of what follows is about the
+ * three properties that have to hold at every endpoint that spends.
  *
  * ## 1. A refused request must generate nothing
  *
@@ -934,8 +935,11 @@ internal suspend fun SessionService.requireOwnedBy(sessionId: String, principal:
     if (ownerOf(sessionId) != principal.value) throw SessionNotFoundException(sessionId)
 }
 
-/** False once a refusal has been sent. See [MAX_SESSION_BODY_BYTES]. */
-private suspend fun ApplicationCall.bodyIsSmallEnough(): Boolean {
+/** False once a refusal has been sent. See [MAX_SESSION_BODY_BYTES].
+ *
+ * `internal`, not `private`: `QuizRoutes.kt` calls this too, on the same reasoning and the same
+ * ceiling. One gate for every session and quiz endpoint keeps the ceiling from drifting apart. */
+internal suspend fun ApplicationCall.bodyIsSmallEnough(): Boolean {
     val declared = request.contentLength()
     if (declared != null && declared <= MAX_SESSION_BODY_BYTES) return true
     respond(
