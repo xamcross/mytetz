@@ -2,10 +2,13 @@ package com.mytetz.llm
 
 import com.anthropic.client.AnthropicClient
 import com.anthropic.client.okhttp.AnthropicOkHttpClient
+import com.anthropic.core.JsonValue
 import com.anthropic.models.messages.CacheControlEphemeral
 import com.anthropic.models.messages.MessageCreateParams
 import com.anthropic.models.messages.OutputConfig
 import com.anthropic.models.messages.TextBlockParam
+import com.anthropic.models.messages.Tool
+import com.fasterxml.jackson.databind.JsonNode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -128,6 +131,85 @@ class AnthropicLlmClient(
         emit(LlmChunk.Done(usage, completedStopReason))
     }.flowOn(Dispatchers.IO)
 
+    /**
+     * One blocking call. It forces the model onto [StructuredRequest.toolName].
+     * The model can then answer only in the shape that [StructuredRequest.inputSchema] describes.
+     *
+     * This method does not stream. [stream] exists for prose. Prose is worth showing word by word.
+     * A quiz question is JSON. JSON is useless until every brace has arrived. Nothing is lost here
+     * by calling the blocking, non-streaming endpoint instead of the event loop that [stream] needs.
+     */
+    override suspend fun structured(request: StructuredRequest): StructuredResult {
+        val properties = Tool.InputSchema.Properties.builder().apply {
+            request.inputSchema.forEach { (name, schema) -> putAdditionalProperty(name, JsonValue.from(schema)) }
+        }.build()
+
+        val schema = Tool.InputSchema.builder().apply {
+            properties(properties)
+            request.requiredFields.forEach { addRequired(it) }
+        }.build()
+
+        val tool = Tool.builder()
+            .name(request.toolName)
+            .description(request.toolDescription)
+            .inputSchema(schema)
+            .build()
+
+        val params = MessageCreateParams.builder()
+            .model(modelId)
+            .maxTokens(request.maxTokens)
+            .systemOfTextBlockParams(
+                listOf(
+                    TextBlockParam.builder()
+                        .text(request.system)
+                        .cacheControl(CacheControlEphemeral.builder().build())
+                        .build()
+                )
+            )
+            .outputConfig(OutputConfig.builder().effort(effortOf(request.effort)).build())
+            .addTool(tool)
+            .toolToolChoice(request.toolName)
+            .addUserMessage(request.userPrompt)
+            .build()
+
+        val message = runInterruptible(Dispatchers.IO) { client.messages().create(params) }
+
+        val toolUse = message.content().firstOrNull { it.isToolUse() }?.asToolUse()
+            ?: throw LlmStructuredOutputMissingException(
+                "No tool_use block for '${request.toolName}' in the response. " +
+                    // stopReason() returns Optional<StopReason>. javap on the SDK jar confirms
+                    // this. A bare toString() on the Optional would print "Optional[tool_use]".
+                    "The stop reason was ${message.stopReason().map { it.toString() }.orElse("none")}."
+            )
+
+        // A tool_use block can exist and still be incomplete. The model stops writing it the
+        // instant maxTokens is reached, mid-argument, so a truncated call still passes the check
+        // above. The caller then gets a JSON blob no parser can read as a valid question, after
+        // paying for two calls: this one and the nudge retry it triggers. Caught here instead, with
+        // the real cause named, so the caller learns why nothing came back rather than just that
+        // nothing did.
+        val stopReason = message.stopReason().map { it.toString() }.orElse(null)
+        if (stopReason == STOP_REASON_MAX_TOKENS) {
+            throw LlmStructuredOutputMissingException(
+                "the response for '${request.toolName}' was truncated at max_tokens before the " +
+                    "tool call completed"
+            )
+        }
+
+        return StructuredResult(
+            // JsonValue's own toString() contract is unconfirmed. JsonNode.toString() is
+            // documented to produce valid JSON. The code converts the value through Jackson
+            // for that reason.
+            json = toolUse._input().convert(JsonNode::class.java).toString(),
+            usage = LlmUsage(
+                inputTokens = message.usage().inputTokens(),
+                outputTokens = message.usage().outputTokens(),
+                cacheReadInputTokens = message.usage().cacheReadInputTokens().orElse(0L),
+                cacheCreationInputTokens = message.usage().cacheCreationInputTokens().orElse(0L),
+            ),
+        )
+    }
+
     private fun effortOf(effort: LlmEffort): OutputConfig.Effort = when (effort) {
         LlmEffort.LOW -> OutputConfig.Effort.LOW
         LlmEffort.MEDIUM -> OutputConfig.Effort.MEDIUM
@@ -138,6 +220,9 @@ class AnthropicLlmClient(
 
         /** Ceiling on a single streamed request, and so on how long a stalled read holds a thread. */
         const val DEFAULT_TIMEOUT_SECONDS = 120L
+
+        /** The wire string Anthropic sends when maxTokens cut a response off mid-generation. */
+        internal const val STOP_REASON_MAX_TOKENS: String = "max_tokens"
 
         const val MODEL_ID_ENV: String = "MYTETZ_MODEL_ID"
         const val MODEL_FAMILY_ENV: String = "MYTETZ_MODEL_FAMILY"

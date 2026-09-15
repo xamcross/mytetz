@@ -1,7 +1,16 @@
 import { Injectable, inject } from '@angular/core';
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
-import { AccountView, AuthConfig, SessionView, TopicSummary } from './models';
+import {
+  AccountView,
+  AuthConfig,
+  QuizAnswerPayload,
+  QuizKind,
+  QuizResultView,
+  QuizTemplateView,
+  SessionView,
+  TopicSummary,
+} from './models';
 
 export interface Health {
   status: string;
@@ -112,5 +121,38 @@ export class ApiService {
    */
   deleteAccount(): Promise<void> {
     return firstValueFrom(this.http.post<void>('/api/account/delete', null));
+  }
+
+  /**
+   * Starts a new quiz attempt for the session.
+   *
+   * `nodeId` is present in the body only when it is given. An exam covers the whole session and
+   * takes no node. A Test Me quiz targets one node, so it sends the node's id.
+   */
+  startQuiz(sessionId: string, kind: QuizKind, nodeId?: string): Promise<QuizTemplateView> {
+    return firstValueFrom(
+      this.http.post<QuizTemplateView>(
+        `/api/sessions/${sessionId}/quizzes`,
+        nodeId === undefined ? { kind } : { kind, nodeId },
+      ),
+    );
+  }
+
+  /**
+   * Submits every answer of one quiz attempt in a single request, and reads back the score.
+   *
+   * The route scores the whole list at once. It has no route for one answer at a time, so a
+   * caller must collect every answer first and submit them together.
+   */
+  submitQuizAnswers(
+    sessionId: string,
+    attemptId: string,
+    answers: QuizAnswerPayload[],
+  ): Promise<QuizResultView> {
+    return firstValueFrom(
+      this.http.post<QuizResultView>(`/api/sessions/${sessionId}/quizzes/${attemptId}/answers`, {
+        answers,
+      }),
+    );
   }
 }

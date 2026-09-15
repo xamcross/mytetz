@@ -1,11 +1,12 @@
-import { Component, computed, effect, inject } from '@angular/core';
+import { Component, computed, effect, inject, signal } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { Title } from '@angular/platform-browser';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { map } from 'rxjs';
 import { WallCode, WallPanelComponent } from '../account/wall-panel.component';
+import { QuizPanelComponent } from '../assess/quiz-panel.component';
 import { SignInPanelComponent } from '../auth/sign-in-panel.component';
-import { SpanPayload, Verb } from '../core/models';
+import { QuizKind, SpanPayload, Verb } from '../core/models';
 import { BreadcrumbComponent } from './breadcrumb.component';
 import { FocusCardComponent } from './focus-card.component';
 import { SessionStore } from './session.store';
@@ -54,6 +55,7 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
     RouterLink,
     SignInPanelComponent,
     WallPanelComponent,
+    QuizPanelComponent,
   ],
   providers: [SessionStore],
   template: `
@@ -62,6 +64,7 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
         <p class="visually-hidden" role="status">Loading your session…</p>
         <div class="reader__grid">
           <div class="reader__rail rail-skeleton" aria-hidden="true">
+            <span class="mt-pill mt-pill--ghost rail-skeleton__exam">Exam</span>
             <span class="mt-eyebrow rail-skeleton__head">Your trail</span>
             <span class="mt-pill mt-pill--ghost rail-skeleton__toggle">Show trail</span>
           </div>
@@ -98,15 +101,26 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
             </div>
           </div>
         </div>
-      } @else if (store.session()) {
+      } @else if (store.session(); as session) {
         <div class="reader__grid">
-          <app-trail-rail
-            class="reader__rail"
-            [nodes]="store.tree()"
-            [currentNodeId]="store.currentNodeId()"
-            [topicLabel]="topicLabel()"
-            (navigate)="store.goTo($event)"
-          />
+          <div class="reader__rail">
+            <!-- TrailRailComponent draws its own "Your trail" heading; this control does not
+                 belong to that component's file, so it sits here, directly above the rail. -->
+            <button
+              type="button"
+              class="mt-pill mt-pill--ghost reader__exam"
+              data-testid="exam"
+              (click)="exam()"
+            >
+              Exam
+            </button>
+            <app-trail-rail
+              [nodes]="store.tree()"
+              [currentNodeId]="store.currentNodeId()"
+              [topicLabel]="topicLabel()"
+              (navigate)="store.goTo($event)"
+            />
+          </div>
 
           <div class="reader__main">
             @if (bannerError(); as failure) {
@@ -168,6 +182,16 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
                 [verbLabel]="verbLabel()"
                 [topicLabel]="topicLabel()"
                 (explainRequested)="explain($event)"
+                (testMeRequested)="testMe()"
+              />
+            }
+
+            @if (quizKind(); as kind) {
+              <app-quiz-panel
+                [sessionId]="session.sessionId"
+                [kind]="kind"
+                [nodeId]="quizNodeId()"
+                (close)="closeQuiz()"
               />
             }
           </div>
@@ -204,6 +228,14 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
       .reader__main {
         min-width: 0;
       }
+      .reader__rail {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .reader__exam {
+        align-self: flex-end;
+      }
       .reader__centre {
         max-width: 620px;
         margin: 48px auto 0;
@@ -235,11 +267,13 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
       .banner__back {
         text-decoration: none;
       }
-      /* The rail placeholder mirrors the loaded rail, state for state: an eyebrow at 768px and
-         above, a ghost pill below it. Below 768px the rail stacks over the card, so a placeholder
-         of a different height moves the card down when the session lands. The height comes from
-         .mt-pill, which is where the real toggle's height comes from too. A min-height here would
-         drift the moment the pill changes. */
+      /* The rail placeholder mirrors the loaded rail, state for state. It has an Exam ghost pill,
+         an eyebrow at 768px and above, and a toggle ghost pill below it. Below 768px the rail
+         stacks over the card. A placeholder of a different height moves the card down when the
+         session lands. The Exam ghost pill carries no media query. The real Exam button shows at
+         every width, so its placeholder must too. The height comes from .mt-pill, which is where
+         the real buttons' height comes from too. A min-height here would drift the moment a pill
+         changes. */
       .rail-skeleton {
         display: flex;
         flex-direction: column;
@@ -448,6 +482,31 @@ export class ReaderPageComponent {
 
   explain(request: { span: SpanPayload; verb: Verb }): void {
     void this.store.explain(request.span, request.verb);
+  }
+
+  /** Which quiz is open, or `null` when none is. Set by [testMe] and [exam], and cleared by
+   * [closeQuiz]. */
+  readonly quizKind = signal<QuizKind | null>(null);
+  /** The node a Test Me quiz is scoped to. Always `null` for an Exam, which draws from the whole
+   * session instead of one node. */
+  readonly quizNodeId = signal<string | null>(null);
+
+  /** Opens a quiz on the node the learner is reading right now. */
+  testMe(): void {
+    this.quizNodeId.set(this.store.currentNodeId());
+    this.quizKind.set('TEST_ME');
+  }
+
+  /** Opens an exam over the whole session, with no one node in scope. */
+  exam(): void {
+    this.quizNodeId.set(null);
+    this.quizKind.set('EXAM');
+  }
+
+  /** Closes the quiz panel and drops its scope, so the next quiz opened starts clean. */
+  closeQuiz(): void {
+    this.quizKind.set(null);
+    this.quizNodeId.set(null);
   }
 
   /**

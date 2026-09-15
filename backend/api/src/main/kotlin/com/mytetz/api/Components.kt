@@ -9,6 +9,9 @@ import com.mytetz.account.MagicLinkService
 import com.mytetz.account.MailConfig
 import com.mytetz.account.MailSender
 import com.mytetz.account.ResendMailSender
+import com.mytetz.assess.QuizRepository
+import com.mytetz.assess.QuizService
+import com.mytetz.assess.QuizValidator
 import com.mytetz.billing.BillingRepository
 import com.mytetz.billing.BillingService
 import com.mytetz.billing.FreemiusConfig
@@ -104,6 +107,7 @@ open class Components(
     private val topics = TopicRepository(mongo.database)
     private val explanations = ExplanationRepository(mongo.database)
     private val sessionRepository = SessionRepository(mongo.database)
+    private val quizRepository = QuizRepository(mongo.database)
 
     /** Public so `Application.kt` can pass it to `authRoutes`, which reads a counter for `GET /api/account`. */
     val quotaRepository = QuotaRepository(mongo.database)
@@ -208,6 +212,10 @@ open class Components(
         SessionService(sessionRepository, catalog, graph, explanations)
     }
 
+    val quizzes: QuizService by lazy {
+        QuizService(quizRepository, llm, QuizValidator())
+    }
+
     /**
      * Creates every index in the system and seeds the catalogue.
      *
@@ -232,6 +240,7 @@ open class Components(
         topicRequests.ensureIndexes()
         explanations.ensureIndexes()
         sessionRepository.ensureIndexes()
+        quizRepository.ensureIndexes()
         quotaRepository.ensureIndexes()
         billingRepository.ensureIndexes()
         accountRepository.ensureIndexes()

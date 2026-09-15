@@ -8,6 +8,8 @@ import com.mytetz.llm.LlmRequest
 import com.mytetz.llm.LlmStreamTruncatedException
 import com.mytetz.llm.LlmUsage
 import com.mytetz.llm.Pricing
+import com.mytetz.llm.StructuredRequest
+import com.mytetz.llm.StructuredResult
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
@@ -846,4 +848,8 @@ private class ProbeLlmClient(
             inFlight.decrementAndGet()
         }
     }
+
+    /** This probe exists to test [stream]'s concurrency. Nothing here calls [structured]. */
+    override suspend fun structured(request: StructuredRequest): StructuredResult =
+        throw NotImplementedError("ProbeLlmClient does not implement structured output")
 }

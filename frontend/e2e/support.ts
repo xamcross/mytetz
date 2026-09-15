@@ -1,5 +1,5 @@
 import { Page } from '@playwright/test';
-import type { SessionView } from '../src/app/core/models';
+import type { QuizResultView, QuizTemplateView, SessionView } from '../src/app/core/models';
 
 /** The seed body of the one stubbed topic every spec in this suite drills into. */
 export const SEED =
@@ -377,4 +377,27 @@ export async function mockExplainStream(page: Page, sessionId: string): Promise<
       );
     },
   };
+}
+
+/**
+ * Stubs both quiz endpoints `QuizPanelComponent` calls.
+ * `POST /api/sessions/{sessionId}/quizzes` returns `template`.
+ * `POST /api/sessions/{sessionId}/quizzes/{attemptId}/answers` returns `result`.
+ *
+ * Both routes answer with a plain JSON body through `route.fulfill`, the same pattern
+ * `stubCatalogueAndSession` uses above. Neither endpoint streams, so no `fetch` shim is needed
+ * here, unlike `mockExplainStream`.
+ */
+export async function mockQuiz(
+  page: Page,
+  sessionId: string,
+  template: QuizTemplateView,
+  result: QuizResultView,
+): Promise<void> {
+  await page.route(`**/api/sessions/${sessionId}/quizzes`, (route) =>
+    route.fulfill({ json: template }),
+  );
+  await page.route(`**/api/sessions/${sessionId}/quizzes/${template.attemptId}/answers`, (route) =>
+    route.fulfill({ json: result }),
+  );
 }

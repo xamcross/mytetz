@@ -72,3 +72,35 @@ export interface AuthConfig {
   googleEnabled: boolean;
   magicLinkEnabled: boolean;
 }
+
+/** A Test Me quiz covers one node. An exam covers the whole session. */
+export type QuizKind = 'TEST_ME' | 'EXAM';
+
+/** One question from `POST /api/sessions/{id}/quizzes`. It never carries the correct answer. */
+export interface QuizQuestionView {
+  questionId: string;
+  stem: string;
+  options: string[];
+}
+
+/** The body of `POST /api/sessions/{id}/quizzes`'s response. */
+export interface QuizTemplateView {
+  attemptId: string;
+  kind: QuizKind;
+  questions: QuizQuestionView[];
+}
+
+/** One learner answer, sent inside the `answers` array to
+ * `POST /api/sessions/{id}/quizzes/{attemptId}/answers`. */
+export interface QuizAnswerPayload {
+  questionId: string;
+  chosenIndex: number;
+}
+
+/** The body of `POST /api/sessions/{id}/quizzes/{attemptId}/answers`'s response. */
+export interface QuizResultView {
+  score: number;
+  total: number;
+  correctIndices: Record<string, number>;
+  rationales: Record<string, string>;
+}

@@ -120,6 +120,19 @@ fun Application.module(components: Components = Components()) {
             cookies = components.cookies,
             clientAddresses = components.clientAddresses,
         )
+        // A factory, not the service, for the same reason `sessions` above is one: `components.quizzes`
+        // is a lazy that ends at `AnthropicLlmClient()`, which demands ANTHROPIC_API_KEY in its
+        // constructor. Reading it here would build the model client while this module is still being
+        // configured.
+        quizRoutes(
+            sessions = { components.sessions },
+            quizzes = { components.quizzes },
+            quota = components.quota,
+            billing = components.billing,
+            account = components.account,
+            cookies = components.cookies,
+            clientAddresses = components.clientAddresses,
+        )
         authRoutes(
             account = components.account,
             sessions = { components.sessions },
