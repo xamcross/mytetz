@@ -259,10 +259,10 @@ class ComponentsTest {
 
         val response = client.get("/api/does-not-exist")
 
-        // `staticResources` with `default("index.html")` matches everything, so without a dedicated
-        // catch-all a withdrawn or mistyped endpoint answers with the SPA shell and **200 OK**: a
-        // client parsing ApiError gets a syntax error instead of a 404, and a monitor watching
-        // status codes sees a healthy API.
+        // `spaRoutes()` matches every path, so without a dedicated catch-all a withdrawn or
+        // mistyped endpoint answers with the SPA shell and **200 OK**: a client parsing ApiError
+        // gets a syntax error instead of a 404, and a monitor watching status codes sees a healthy
+        // API.
         assertEquals(HttpStatusCode.NotFound, response.status)
         assertTrue(response.bodyAsText().contains("NOT_FOUND"), "an /api path fell through to the SPA")
     }
@@ -301,8 +301,8 @@ class ComponentsTest {
     fun `the real module routes the session endpoints ahead of the api catch-all and the spa`() = testApplication {
         // Every SessionRoutesTest builds its own routing block, so nothing else establishes that
         // these paths survive contact with the rest of `module()`. Both things below them match
-        // broadly: `route("/api/{...}")` is a tailcard over every method, and `default("index.html")`
-        // makes the static handler match everything — and that catch-all exists precisely because
+        // broadly: `route("/api/{...}")` is a tailcard over every method, and `spaRoutes()` is a
+        // tailcard over every path — and the `/api` catch-all exists precisely because
         // "specificity will handle it" was wrong once already.
         //
         // A bespoke `Components` rather than the `components(name)` helper: the explain gate now

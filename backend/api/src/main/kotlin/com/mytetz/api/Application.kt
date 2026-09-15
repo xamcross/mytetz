@@ -7,8 +7,6 @@ import io.ktor.server.application.Application
 import io.ktor.server.application.install
 import io.ktor.server.application.log
 import io.ktor.server.engine.embeddedServer
-import io.ktor.server.http.content.default
-import io.ktor.server.http.content.staticResources
 import io.ktor.server.netty.Netty
 import io.ktor.server.plugins.autohead.AutoHeadResponse
 import io.ktor.server.plugins.calllogging.CallLogging
@@ -150,10 +148,10 @@ fun Application.module(components: Components = Components()) {
 
         // Every unmatched `/api/**` path, answered as JSON.
         //
-        // Without this the static handler below catches them, because `default("index.html")` makes
-        // it match everything — so a typo'd or withdrawn endpoint returns the SPA shell with
-        // **200 OK**. A client parsing that as `ApiError` gets a syntax error rather than a 404, and
-        // a monitor watching status codes sees a perfectly healthy API.
+        // `spaRoutes()` below matches every path too, as a tailcard. Without this route ahead of
+        // it, a typo'd or withdrawn endpoint would answer with the SPA shell. A client parsing that
+        // as `ApiError` gets a syntax error instead of a 404, and a monitor watching status codes
+        // sees a healthy API.
         route("/api/{...}") {
             handle {
                 call.respond(
@@ -163,9 +161,7 @@ fun Application.module(components: Components = Components()) {
             }
         }
 
-        staticResources("/", "static") {
-            default("index.html")
-        }
+        spaRoutes()
     }
 }
 
