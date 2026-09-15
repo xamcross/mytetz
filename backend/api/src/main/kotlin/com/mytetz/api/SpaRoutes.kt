@@ -1,8 +1,10 @@
 package com.mytetz.api
 
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.http.content.resolveResource
 import io.ktor.server.request.path
+import io.ktor.server.response.header
 import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
@@ -41,6 +43,23 @@ internal object SpaRoutes {
 
 private const val STATIC_PACKAGE = "static"
 
+/** A hashed bundle name from `outputHashing: "all"` in `frontend/angular.json`. */
+private val HASHED_BUNDLE = Regex("""(main|chunk)-.*\.js|styles-.*\.css""")
+
+/**
+ * The `Cache-Control` value for a static file named [fileName].
+ *
+ * A hashed bundle keeps one name for one content forever, so the browser and Cloudflare may keep
+ * it for a year. `index.html` names the current deploy, so a shared cache must ask again on every
+ * visit. Every other file — a font, an icon, `robots.txt`, `sitemap.xml`, `llms.txt` — is safe to
+ * keep for a day.
+ */
+internal fun cacheControlFor(fileName: String): String = when {
+    fileName == "index.html" -> "no-cache"
+    HASHED_BUNDLE.matches(fileName) -> "public, max-age=31536000, immutable"
+    else -> "public, max-age=86400"
+}
+
 /**
  * Serves the built Angular files, and gives a real 404 for a path that no route matches.
  *
@@ -60,6 +79,7 @@ fun Route.spaRoutes() {
 
         val asset = call.resolveResource(relativePath, STATIC_PACKAGE)
         if (asset != null) {
+            call.response.header(HttpHeaders.CacheControl, cacheControlFor(relativePath.substringAfterLast('/')))
             call.respond(asset)
             return@get
         }
@@ -72,6 +92,7 @@ fun Route.spaRoutes() {
 
         val status = if (SpaRoutes.matches(call.request.path())) HttpStatusCode.OK else HttpStatusCode.NotFound
         call.response.status(status)
+        call.response.header(HttpHeaders.CacheControl, cacheControlFor("index.html"))
         call.respond(shell)
     }
 }

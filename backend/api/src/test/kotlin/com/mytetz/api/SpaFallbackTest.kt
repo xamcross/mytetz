@@ -2,6 +2,7 @@ package com.mytetz.api
 
 import io.ktor.client.request.get
 import io.ktor.client.statement.bodyAsText
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.install
@@ -11,6 +12,7 @@ import io.ktor.server.routing.Route
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 import io.ktor.server.testing.testApplication
+import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -64,5 +66,53 @@ class SpaFallbackTest {
 
         assertEquals(HttpStatusCode.NotFound, response.status)
         assertTrue(response.bodyAsText().contains("NOT_FOUND"))
+    }
+
+    @Test
+    fun `a hashed bundle answers with a year of immutable caching`() = testApplication {
+        application {
+            install(ContentNegotiation) { json() }
+            routing { wireUp() }
+        }
+
+        // `angular.json` hashes every `main-*.js` name to its content, so the real name is not
+        // known ahead of time. `:backend:api:processResources` copies this same directory into
+        // the `static` classpath resources this route reads. See `build.gradle.kts`.
+        val browserDir = File("../../frontend/dist/frontend/browser")
+        val mainBundle = browserDir.listFiles { file -> file.name.startsWith("main-") && file.name.endsWith(".js") }
+            ?.firstOrNull()
+        assertTrue(mainBundle != null, "cannot find a main-*.js bundle under ${browserDir.absolutePath}")
+
+        val response = client.get("/${mainBundle.name}")
+
+        assertEquals(
+            "public, max-age=31536000, immutable",
+            response.headers[HttpHeaders.CacheControl],
+        )
+    }
+
+    @Test
+    fun `the shell answers with no-cache`() = testApplication {
+        application {
+            install(ContentNegotiation) { json() }
+            routing { wireUp() }
+        }
+
+        assertEquals("no-cache", client.get("/").headers[HttpHeaders.CacheControl])
+        // The 404 fallback answers the same shell content, so it must carry the same header.
+        assertEquals("no-cache", client.get("/no-such-page").headers[HttpHeaders.CacheControl])
+    }
+
+    @Test
+    fun `every other static file answers with a day of public caching`() = testApplication {
+        application {
+            install(ContentNegotiation) { json() }
+            routing { wireUp() }
+        }
+
+        assertEquals(
+            "public, max-age=86400",
+            client.get("/robots.txt").headers[HttpHeaders.CacheControl],
+        )
     }
 }
