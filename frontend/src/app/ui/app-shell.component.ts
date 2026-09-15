@@ -46,6 +46,11 @@ import { BackendState, StatusDotComponent } from './status-dot.component';
       </div>
     </header>
     <ng-content />
+    <footer class="foot">
+      <a class="foot__link" routerLink="/privacy">Privacy</a>
+      <a class="foot__link" routerLink="/terms">Terms</a>
+      <a class="foot__link" routerLink="/imprint">Imprint</a>
+    </footer>
   `,
   styles: [
     `
@@ -109,6 +114,22 @@ import { BackendState, StatusDotComponent } from './status-dot.component';
         .bar__nav {
           display: none;
         }
+      }
+      .foot {
+        display: flex;
+        justify-content: center;
+        gap: 20px;
+        padding: 24px 32px;
+        border-top: var(--mt-border-w) solid var(--mt-rule);
+      }
+      .foot__link {
+        font-size: 13px;
+        font-weight: 700;
+        color: var(--mt-muted);
+        text-decoration: none;
+      }
+      .foot__link:hover {
+        color: var(--mt-teal);
       }
     `,
   ],

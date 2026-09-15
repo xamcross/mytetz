@@ -1,6 +1,7 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { HttpErrorResponse, provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
+import { provideRouter } from '@angular/router';
 import { ApiService } from '../core/api.service';
 import { AuthConfig } from '../core/models';
 import { TURNSTILE_SCRIPT_URL, TurnstileApi } from './turnstile';
@@ -18,7 +19,7 @@ describe('SignInPanelComponent', () => {
   beforeEach(() => {
     TestBed.configureTestingModule({
       imports: [SignInPanelComponent],
-      providers: [provideHttpClient(), provideHttpClientTesting()],
+      providers: [provideHttpClient(), provideHttpClientTesting(), provideRouter([])],
     });
     api = TestBed.inject(ApiService);
     // Every existing test in this file predates `GET /api/auth/config`. Stubbed here, once, to a
@@ -155,8 +156,26 @@ describe('SignInPanelComponent', () => {
   it('the google button targets the google route', () => {
     const fixture = create();
 
-    const link = fixture.nativeElement.querySelector('a') as HTMLAnchorElement;
+    const link = fixture.nativeElement.querySelector(
+      'a.sign-in-panel__google',
+    ) as HTMLAnchorElement;
     expect(link.getAttribute('href')).toBe('/api/auth/google');
+  });
+
+  it('states above the controls that signing in accepts the terms and the privacy policy', () => {
+    const fixture = create();
+
+    const panel = fixture.nativeElement.querySelector('.sign-in-panel');
+    const consent = panel.querySelector('.sign-in-panel__consent') as HTMLElement;
+    expect(consent.textContent).toMatch(/terms/i);
+    expect(consent.textContent).toMatch(/privacy policy/i);
+    expect(consent.querySelector('a[href="/terms"]')).toBeTruthy();
+    expect(consent.querySelector('a[href="/privacy"]')).toBeTruthy();
+
+    // "Above the two controls" per the class doc comment: the consent sentence precedes both the
+    // email form and the google link in the DOM.
+    const form = panel.querySelector('form') as HTMLFormElement;
+    expect(consent.compareDocumentPosition(form) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   // ------------------------------------------------------------------ a disabled sign-in method
@@ -167,7 +186,7 @@ describe('SignInPanelComponent', () => {
     await settle(fixture);
 
     expect(fixture.nativeElement.querySelector('#sign-in-email')).toBeNull();
-    expect(fixture.nativeElement.querySelector('a')).not.toBeNull();
+    expect(fixture.nativeElement.querySelector('a.sign-in-panel__google')).not.toBeNull();
   });
 
   it('hides the google button when the config reports google sign-in as off', async () => {
@@ -175,7 +194,7 @@ describe('SignInPanelComponent', () => {
     const fixture = create();
     await settle(fixture);
 
-    expect(fixture.nativeElement.querySelector('a')).toBeNull();
+    expect(fixture.nativeElement.querySelector('a.sign-in-panel__google')).toBeNull();
     expect(fixture.nativeElement.querySelector('#sign-in-email')).not.toBeNull();
   });
 
@@ -183,7 +202,7 @@ describe('SignInPanelComponent', () => {
     const fixture = create();
 
     expect(fixture.nativeElement.querySelector('#sign-in-email')).not.toBeNull();
-    expect(fixture.nativeElement.querySelector('a')).not.toBeNull();
+    expect(fixture.nativeElement.querySelector('a.sign-in-panel__google')).not.toBeNull();
   });
 
   it('names google as the alternative when email sign-in is unavailable at submit time', async () => {
@@ -247,7 +266,9 @@ describe('SignInPanelComponent', () => {
 
     solve('a-solved-token');
 
-    const link = fixture.nativeElement.querySelector('a') as HTMLAnchorElement;
+    const link = fixture.nativeElement.querySelector(
+      'a.sign-in-panel__google',
+    ) as HTMLAnchorElement;
     expect(link.getAttribute('href')).toBe('/api/auth/google?turnstileToken=a-solved-token');
   });
 
@@ -271,7 +292,9 @@ describe('SignInPanelComponent', () => {
     );
     expect(turnstileApi.reset).toHaveBeenCalledWith('widget-1');
     // No fresh solve has replaced the token yet. The google link must not still carry it.
-    const link = fixture.nativeElement.querySelector('a') as HTMLAnchorElement;
+    const link = fixture.nativeElement.querySelector(
+      'a.sign-in-panel__google',
+    ) as HTMLAnchorElement;
     expect(link.getAttribute('href')).toBe('/api/auth/google');
   });
 });

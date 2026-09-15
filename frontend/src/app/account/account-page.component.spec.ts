@@ -5,6 +5,7 @@ import {
   TestRequest,
   provideHttpClientTesting,
 } from '@angular/common/http/testing';
+import { provideRouter } from '@angular/router';
 import { AccountPageComponent } from './account-page.component';
 import { AccountStore } from '../core/account.store';
 import { AccountView } from '../core/models';
@@ -36,7 +37,7 @@ describe('AccountPageComponent', () => {
   beforeEach(() => {
     TestBed.configureTestingModule({
       imports: [AccountPageComponent],
-      providers: [provideHttpClient(), provideHttpClientTesting()],
+      providers: [provideHttpClient(), provideHttpClientTesting(), provideRouter([])],
     });
     fixture = TestBed.createComponent(AccountPageComponent);
     store = TestBed.inject(AccountStore);
@@ -191,6 +192,18 @@ describe('AccountPageComponent', () => {
     manage.click();
 
     http.expectNone('/api/billing/checkout');
+  });
+
+  it('links to the terms next to the subscribe control', async () => {
+    await mount((req) => req.flush(active));
+
+    const actions = fixture.nativeElement.querySelector('.account-page__actions');
+    const manage = actions.querySelector('[data-action="manage-subscription"]');
+    const terms = actions.querySelector('a[href="/terms"]') as HTMLAnchorElement;
+
+    expect(terms).toBeTruthy();
+    expect(terms.textContent).toContain('Terms');
+    expect(manage.compareDocumentPosition(terms) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('delete account opens a confirmation panel instead of sending a request at once', async () => {

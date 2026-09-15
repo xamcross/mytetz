@@ -105,3 +105,27 @@ test('the panel renders no widget when the deployment holds no turnstile secret'
   await expect(page.getByTestId('turnstile-container')).toHaveCount(0);
   expect(scriptRequested).toBe(false);
 });
+
+test('the panel states above the controls that signing in accepts the terms, with a working link', async ({
+  page,
+}) => {
+  await openSignInWall(page);
+
+  // Scoped to the consent sentence: the footer also carries a "Terms" link, and a bare
+  // `getByRole('link', { name: 'terms' })` would match both.
+  const consent = page.locator('.sign-in-panel__consent');
+  await expect(consent).toHaveText('Signing in accepts the terms and the privacy policy.');
+
+  await consent.getByRole('link', { name: 'terms' }).click();
+  await expect(page).toHaveURL(/\/terms$/);
+});
+
+test('the panel states above the controls that signing in accepts the privacy policy, with a working link', async ({
+  page,
+}) => {
+  await openSignInWall(page);
+
+  const consent = page.locator('.sign-in-panel__consent');
+  await consent.getByRole('link', { name: 'privacy policy' }).click();
+  await expect(page).toHaveURL(/\/privacy$/);
+});
