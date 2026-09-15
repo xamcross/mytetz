@@ -8,6 +8,7 @@ import {
   viewChild,
 } from '@angular/core';
 import { HttpErrorResponse } from '@angular/common/http';
+import { RouterLink } from '@angular/router';
 import { ApiService } from '../core/api.service';
 import { TurnstileApi, loadTurnstileScript } from './turnstile';
 
@@ -55,7 +56,7 @@ import { TurnstileApi, loadTurnstileScript } from './turnstile';
  */
 @Component({
   selector: 'app-sign-in-panel',
-  imports: [],
+  imports: [RouterLink],
   template: `
     <div class="sign-in-panel mt-card mt-card--raised">
       @if (sent()) {
@@ -64,6 +65,10 @@ import { TurnstileApi, loadTurnstileScript } from './turnstile';
         </p>
       } @else {
         <p class="sign-in-panel__lead">Sign in to keep going.</p>
+        <p class="sign-in-panel__consent">
+          Signing in accepts the <a routerLink="/terms">terms</a> and the
+          <a routerLink="/privacy">privacy policy</a>.
+        </p>
 
         @if (magicLinkEnabled()) {
           <form class="sign-in-panel__form" (submit)="submit($event)">
@@ -117,6 +122,11 @@ import { TurnstileApi, loadTurnstileScript } from './turnstile';
         margin: 0;
         font-size: 20px;
         font-weight: 600;
+      }
+      .sign-in-panel__consent {
+        margin: 0;
+        font-size: 13px;
+        color: var(--mt-muted);
       }
       .sign-in-panel__form {
         display: flex;

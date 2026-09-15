@@ -60,4 +60,16 @@ describe('AppShellComponent', () => {
     expect(home.firstElementChild?.tagName.toLowerCase()).toBe('app-logo-mark');
     expect(home.textContent.trim()).toBe('mytetz');
   });
+
+  it('carries a footer with links to the privacy, terms and imprint pages', () => {
+    fixture.detectChanges();
+
+    const links = Array.from(
+      fixture.nativeElement.querySelectorAll('footer a'),
+    ) as HTMLAnchorElement[];
+    const hrefs = links.map((a) => a.getAttribute('href'));
+    expect(hrefs).toContain('/privacy');
+    expect(hrefs).toContain('/terms');
+    expect(hrefs).toContain('/imprint');
+  });
 });

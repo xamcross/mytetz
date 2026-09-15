@@ -18,4 +18,18 @@ export const routes: Routes = [
     loadComponent: () =>
       import('./reader/reader-page.component').then((m) => m.ReaderPageComponent),
   },
+  {
+    path: 'privacy',
+    loadComponent: () =>
+      import('./legal/privacy-page.component').then((m) => m.PrivacyPageComponent),
+  },
+  {
+    path: 'terms',
+    loadComponent: () => import('./legal/terms-page.component').then((m) => m.TermsPageComponent),
+  },
+  {
+    path: 'imprint',
+    loadComponent: () =>
+      import('./legal/imprint-page.component').then((m) => m.ImprintPageComponent),
+  },
 ];

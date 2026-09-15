@@ -1,5 +1,6 @@
 import { Component, OnInit, inject, signal } from '@angular/core';
 import { HttpErrorResponse } from '@angular/common/http';
+import { RouterLink } from '@angular/router';
 import { AllowanceMeterComponent } from './allowance-meter.component';
 import { AccountStore } from '../core/account.store';
 import { ApiService } from '../core/api.service';
@@ -28,7 +29,7 @@ import { ApiService } from '../core/api.service';
  */
 @Component({
   selector: 'app-account-page',
-  imports: [AllowanceMeterComponent],
+  imports: [AllowanceMeterComponent, RouterLink],
   template: `
     <main class="account-page">
       @if (loading() && view() === null) {
@@ -74,6 +75,7 @@ import { ApiService } from '../core/api.service';
             >
               Manage subscription
             </button>
+            <a class="mt-pill mt-pill--ghost" routerLink="/terms">Terms</a>
             <button
               type="button"
               class="mt-pill mt-pill--ghost"
