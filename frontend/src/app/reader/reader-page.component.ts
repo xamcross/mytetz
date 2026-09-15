@@ -1,5 +1,6 @@
 import { Component, computed, effect, inject } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
+import { Title } from '@angular/platform-browser';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { map } from 'rxjs';
 import { WallCode, WallPanelComponent } from '../account/wall-panel.component';
@@ -299,6 +300,7 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
 })
 export class ReaderPageComponent {
   private readonly route = inject(ActivatedRoute);
+  private readonly titleService = inject(Title);
   readonly store = inject(SessionStore);
 
   /**
@@ -432,6 +434,15 @@ export class ReaderPageComponent {
     effect(() => {
       const id = this.sessionId();
       if (id.length > 0) void this.store.load(id);
+    });
+
+    // `app.routes.ts` sets no static `title` for this route: the topic is not known until the
+    // session, and then the catalogue, answer. [topicLabel] is `''` for the one tick before the
+    // session resolves, and a bare "| mytetz" tab is worse than the generic title index.html sets,
+    // so this effect waits for a real label before it writes one.
+    effect(() => {
+      const label = this.topicLabel();
+      if (label.length > 0) this.titleService.setTitle(`${label} | mytetz`);
     });
   }
 
