@@ -16,6 +16,16 @@ class FakeLlmClient(
     /** Set per-prompt bodies to simulate context-dependent answers. */
     val bodyByPromptSubstring = linkedMapOf<String, String>()
 
+    var nextStructuredJson: String = """{"questions":[]}"""
+    var structuredFailWith: Throwable? = null
+    val structuredCalls = mutableListOf<StructuredRequest>()
+    var structuredUsage: LlmUsage = LlmUsage(inputTokens = 100, outputTokens = 50)
+
+    /** Set per-prompt JSON answers, exactly like [bodyByPromptSubstring] — a test that drives the
+     * one-retry-with-a-nudge path sets one answer for the first prompt and another for the nudged
+     * one, keyed on text each prompt alone contains. */
+    val structuredJsonByPromptSubstring = linkedMapOf<String, String>()
+
     /**
      * Runs once, after the first delta, so a test can change the world **while a generation is in
      * flight** — the store, the session document, anything.
@@ -54,5 +64,15 @@ class FakeLlmClient(
                 stopReason = nextStopReason,
             )
         )
+    }
+
+    override suspend fun structured(request: StructuredRequest): StructuredResult {
+        structuredCalls += request
+        structuredFailWith?.let { throw it }
+        val json = structuredJsonByPromptSubstring.entries
+            .firstOrNull { request.userPrompt.contains(it.key) }
+            ?.value
+            ?: nextStructuredJson
+        return StructuredResult(json, structuredUsage)
     }
 }

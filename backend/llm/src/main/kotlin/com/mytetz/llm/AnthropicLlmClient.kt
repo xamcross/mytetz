@@ -128,6 +128,10 @@ class AnthropicLlmClient(
         emit(LlmChunk.Done(usage, completedStopReason))
     }.flowOn(Dispatchers.IO)
 
+    override suspend fun structured(request: StructuredRequest): StructuredResult {
+        throw NotImplementedError("Structured output is not yet implemented; see Task 2 of the plan.")
+    }
+
     private fun effortOf(effort: LlmEffort): OutputConfig.Effort = when (effort) {
         LlmEffort.LOW -> OutputConfig.Effort.LOW
         LlmEffort.MEDIUM -> OutputConfig.Effort.MEDIUM
