@@ -382,6 +382,32 @@ class AnthropicLlmClientTest {
     }
 
     @Test
+    fun `structured raises when the tool call was truncated at max_tokens`(): Unit = runBlocking {
+        // A tool_use block is present, unlike the test below. It is what makes this case worth
+        // its own test: the block existing is not enough on its own to trust its JSON.
+        val body = """
+            {
+              "id": "msg_01", "type": "message", "role": "assistant", "model": "claude-sonnet-5",
+              "stop_reason": "max_tokens", "stop_sequence": null,
+              "usage": {"input_tokens": 500, "output_tokens": 2000},
+              "content": [
+                {"type": "tool_use", "id": "toolu_01", "name": "submit_quiz_questions", "input": {"questions": []}}
+              ]
+            }
+        """.trimIndent()
+        val server = jsonServer(body = body)
+
+        try {
+            val error = assertFailsWith<LlmStructuredOutputMissingException> {
+                withTimeout(30_000) { AnthropicLlmClient(clientFor(server)).structured(structuredRequest()) }
+            }
+            assertTrue("max_tokens" in error.message.orEmpty(), "the message should name the real cause")
+        } finally {
+            server.stop(0)
+        }
+    }
+
+    @Test
     fun `structured fails when the response carries no tool_use block`(): Unit = runBlocking {
         val body = """
             {
