@@ -32,4 +32,9 @@ export const routes: Routes = [
     loadComponent: () =>
       import('./legal/imprint-page.component').then((m) => m.ImprintPageComponent),
   },
+  {
+    path: '**',
+    loadComponent: () =>
+      import('./not-found/not-found-page.component').then((m) => m.NotFoundPageComponent),
+  },
 ];
