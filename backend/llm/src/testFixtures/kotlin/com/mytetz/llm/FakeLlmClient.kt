@@ -21,9 +21,7 @@ class FakeLlmClient(
     val structuredCalls = mutableListOf<StructuredRequest>()
     var structuredUsage: LlmUsage = LlmUsage(inputTokens = 100, outputTokens = 50)
 
-    /** Set per-prompt JSON answers, exactly like [bodyByPromptSubstring] — a test that drives the
-     * one-retry-with-a-nudge path sets one answer for the first prompt and another for the nudged
-     * one, keyed on text each prompt alone contains. */
+    /** Set per-prompt JSON answers. Use this exactly like [bodyByPromptSubstring]. A test can set one answer for the first prompt. A nudged retry can use a different answer. Each answer is keyed on text unique to that prompt. */
     val structuredJsonByPromptSubstring = linkedMapOf<String, String>()
 
     /**

@@ -36,8 +36,8 @@ class LlmStreamTruncatedException(message: String) : RuntimeException(message)
  *
  * Plain structures, not a vendor JSON type. [LlmClient] is a vendor-agnostic port and must not leak
  * the Anthropic SDK's `JsonValue` or `kotlinx.serialization`'s `JsonObject` into its own signature.
- * [AnthropicLlmClient] converts this map with `JsonValue.from`, which builds a JSON tree from plain
- * Kotlin/Java values recursively; a fake or a future adapter needs no JSON library at all.
+ * [AnthropicLlmClient] converts this map with `JsonValue.from`. This builds a JSON tree from plain
+ * Kotlin and Java values, recursively. A fake or a future adapter needs no JSON library.
  */
 data class StructuredRequest(
     val system: String,
@@ -71,9 +71,8 @@ interface LlmClient {
 
     /**
      * A single, non-streaming call that returns data shaped by [StructuredRequest.inputSchema]
-     * rather than prose. A quiz question is JSON; JSON does not render until it is structurally
-     * complete, so nothing is lost by not streaming it — see [PromptBuilder]'s own note on why
-     * [stream] is prose-only for the opposite reason.
+     * rather than prose. A quiz question is JSON. JSON does not render until it is structurally
+     * complete. Nothing is lost by not streaming it.
      */
     suspend fun structured(request: StructuredRequest): StructuredResult
 }
