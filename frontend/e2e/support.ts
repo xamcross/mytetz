@@ -380,9 +380,9 @@ export async function mockExplainStream(page: Page, sessionId: string): Promise<
 }
 
 /**
- * Stubs both quiz endpoints `QuizPanelComponent` calls: `POST /api/sessions/{sessionId}/quizzes`,
- * which returns `template`, and `POST /api/sessions/{sessionId}/quizzes/{attemptId}/answers`,
- * which returns `result`.
+ * Stubs both quiz endpoints `QuizPanelComponent` calls.
+ * `POST /api/sessions/{sessionId}/quizzes` returns `template`.
+ * `POST /api/sessions/{sessionId}/quizzes/{attemptId}/answers` returns `result`.
  *
  * Both routes answer with a plain JSON body through `route.fulfill`, the same pattern
  * `stubCatalogueAndSession` uses above. Neither endpoint streams, so no `fetch` shim is needed

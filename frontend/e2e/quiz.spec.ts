@@ -4,8 +4,8 @@ import { mockQuiz, openQuantumPhysicsSession, stubCatalogueAndSession } from './
 
 /**
  * The end-to-end guard on Task 13's own scenario: a learner opens a Test Me quiz, answers every
- * question, and sees a score. Every backend call is stubbed, the same way `learn.spec.ts` stubs
- * the catalogue and session endpoints — see `mockQuiz` in `./support.ts`.
+ * question, and sees a score. Every backend call is stubbed. `learn.spec.ts` stubs the catalogue
+ * and session endpoints the same way. See `mockQuiz` in `./support.ts`.
  *
  * The template on the wire carries three questions and no `correctIndex` on any option, which
  * matches `QuizQuestionView`'s real shape. `QuizPanelComponent` only learns which answers were
@@ -39,7 +39,7 @@ const TEMPLATE: QuizTemplateView = {
 };
 
 const RESULT: QuizResultView = {
-  score: 2,
+  score: 3,
   total: 3,
   correctIndices: { q1: 0, q2: 0, q3: 0 },
   rationales: {
@@ -56,9 +56,9 @@ test('takes a Test Me quiz across three questions and sees the score', async ({ 
   await openQuantumPhysicsSession(page);
   await page.getByTestId('test-me').click();
 
-  // `QuizPanelComponent`'s outer element carries `role="dialog"`, and no other dialog is open in
-  // this flow (the verb picker only opens on a text selection, which this test never makes), so
-  // this locator is unambiguous.
+  // `QuizPanelComponent`'s outer element carries `role="dialog"`. The verb picker also carries
+  // that role, but it only opens on a text selection. This test never selects text, so the verb
+  // picker never opens. Only one dialog is ever open here, so this locator is unambiguous.
   const quiz = page.locator('[role="dialog"]');
 
   for (const [index, question] of TEMPLATE.questions.entries()) {
