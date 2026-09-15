@@ -1093,6 +1093,31 @@ git commit -m "feat(assess): add the quiz prompt builder and its config"
 **Interfaces:**
 - Consumes: `QuizTemplate`, `QuizAttempt` (Task 3).
 - Produces: `QuizRepository(database: MongoDatabase)`, `.ensureIndexes()`, `.findByKey(key: String): QuizTemplate?` (open, for a test seam mirroring `ExplanationRepository.findByKey`), `.insertIfAbsent(template: QuizTemplate): QuizTemplate`, `.incrementRequestCount(key: String)`, `.insertAttempt(attempt: QuizAttempt)`, `.findAttempt(id: String): QuizAttempt?`, `.updateAttempt(attempt: QuizAttempt)`.
+- Also produces: `backend/assess/src/test/kotlin/com/mytetz/assess/MongoTestSupport.kt`, a single shared Testcontainers Mongo instance for the whole `:backend:assess` test source set. **Do not** let `QuizRepositoryTest` (this task) or `QuizServiceTest` (Task 7) each start their own `MongoDBContainer`. `backend/graph/src/test/kotlin/com/mytetz/graph/MongoTestSupport.kt` already exists and its own KDoc explains why: one container per test class is a documented anti-pattern in this project ("Testcontainers has failed here thirteen times"). Copy that file's shape exactly into the new package:
+
+  ```kotlin
+  package com.mytetz.assess
+
+  import com.mongodb.kotlin.client.coroutine.MongoClient
+  import com.mongodb.kotlin.client.coroutine.MongoDatabase
+  import org.testcontainers.containers.MongoDBContainer
+
+  object MongoTestSupport {
+      private val container = MongoDBContainer("mongo:7").apply { start() }
+      private val client = MongoClient.create(container.connectionString)
+
+      /** A fresh, isolated database per test class. Pass a name unique within this module — see
+       * `com.mytetz.graph.MongoTestSupport`'s own KDoc for the full argument. */
+      fun database(name: String): MongoDatabase = client.getDatabase("test_$name")
+  }
+  ```
+
+  Both `QuizRepositoryTest` and `QuizServiceTest` then read `MongoTestSupport.database("repository")` /
+  `MongoTestSupport.database("service")` (distinct names) instead of building a `MongoDBContainer`
+  and a `MongoClient` themselves. Every test snippet below that shows
+  `private val container = MongoDBContainer(...)` / `private val client = MongoClient.create(...)` is
+  written that way only for readability in this plan document — replace that pattern with a call to
+  `MongoTestSupport.database(...)` when you write the actual `.kt` file.
 
 - [ ] **Step 1: Read `backend/graph/build.gradle.kts` and copy its Mongo dependency lines into `backend/assess/build.gradle.kts`**
 
@@ -1298,6 +1323,12 @@ git commit -m "feat(assess): add quiz Mongo persistence"
 **Interfaces:**
 - Consumes: `QuizRepository` (Task 6), `QuizValidator`, `RawQuizQuestion`, `QuizValidationResult` (Task 4), `QuizConfig`, `QuizPromptBuilder` (Task 5), `QuizTemplate`, `QuizQuestion`, `QuizSource`, `QuizKind`, `QuizAttempt`, `AnsweredQuestion` (Task 3), `LlmClient`, `StructuredRequest`, `Pricing` (from `:backend:llm`), `FakeLlmClient` (from `:backend:llm`'s `testFixtures`, already a `testFixturesApi`/`testImplementation` dependency the same way `graph`'s own tests use it — confirm by checking `backend/graph/build.gradle.kts`'s test dependencies in Task 6 Step 1 and copying the same `llm` test-fixtures line if `assess` needs it added).
 - Produces: `QuizUnavailableException`, `QuizService(repository, llm, validator, config = QuizConfig())`, `.keyFor(scopeKeys: List<String>, kind: QuizKind): String`, `.getOrGenerate(scopeKeys: List<String>, kind: QuizKind, sources: List<QuizSource>, onSpend: suspend (Long) -> Unit): QuizTemplate`, `.startAttempt(principalId: String, sessionId: String, template: QuizTemplate, idFactory: () -> String = ..., clock: () -> Long = ...): QuizAttempt`, `.score(attempt: QuizAttempt, template: QuizTemplate, answers: List<AnsweredQuestion>, clock: () -> Long = ...): QuizAttempt`.
+- **Reuse `backend/assess/src/test/kotlin/com/mytetz/assess/MongoTestSupport.kt`, which Task 6 already
+  created.** Do not add a second `MongoDBContainer` in this test file — call
+  `QuizRepository(MongoTestSupport.database("service"))` (or another name distinct from Task 6's
+  `"repository"`) instead of the `companion object { container = MongoDBContainer(...) }` shape shown
+  in the test snippet below, which — like Task 6's — is written inline only for readability in this
+  plan document.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1691,9 +1722,17 @@ route removed by Task 9's edits — write both endpoints in this task's file dir
 but write and pass this task's tests before moving on, so a failure here is caught before Task 9
 adds more surface to the same file.
 
-- [ ] **Step 1: Widen four `private` declarations in `SessionRoutes.kt` to `internal`**
+- [ ] **Step 1: Widen five `private` declarations in `SessionRoutes.kt` to `internal`**
 
-Change exactly these four lines (do not change behaviour, only the visibility modifier):
+Change exactly these five lines (do not change behaviour, only the visibility modifier):
+
+```kotlin
+private suspend fun SessionService.requireOwnedBy(sessionId: String, principal: PrincipalId) {
+```
+→
+```kotlin
+internal suspend fun SessionService.requireOwnedBy(sessionId: String, principal: PrincipalId) {
+```
 
 ```kotlin
 private class Refusal(val status: HttpStatusCode, val error: ApiError)
