@@ -23,6 +23,17 @@ import { SessionView, TopicSummary } from '../core/models';
           <h1 class="catalog__title">What do you want to understand?</h1>
         </header>
 
+        <p class="catalog__intro">
+          mytetz is a reading tool for a hard topic. Pick a topic below, from astronomy to
+          psychology. Each topic opens with one short passage. Read the passage. Highlight a word or
+          phrase you do not understand. mytetz writes a short explanation for that phrase. The
+          explanation opens next to the passage. You can highlight a word inside the explanation
+          too. Each highlight opens a new explanation. You choose how many times you do this. The
+          catalogue holds twelve subject areas: astronomy, biology, chemistry, computer science,
+          earth science, economics, history, linguistics, mathematics, philosophy, physics, and
+          psychology. Use the search box or a category filter to find a topic fast.
+        </p>
+
         <div class="catalog__filter">
           <label class="catalog__label" for="topic-filter">Filter topics</label>
           <div class="catalog__row">
@@ -158,6 +169,15 @@ import { SessionView, TopicSummary } from '../core/models';
       .catalog__title {
         font-size: 34px;
         line-height: 1.15;
+      }
+      .catalog__intro {
+        margin: 0;
+        max-width: 62ch;
+        font-size: 16px;
+        line-height: 1.6;
+        font-weight: 500;
+        color: var(--mt-muted);
+        text-wrap: pretty;
       }
       .catalog__label {
         position: absolute;
