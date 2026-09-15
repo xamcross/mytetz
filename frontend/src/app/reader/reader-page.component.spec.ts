@@ -596,9 +596,7 @@ describe('ReaderPageComponent', () => {
   it('shows an Exam control once a session exists', async () => {
     await open();
 
-    const examButton = Array.from(
-      harness.routeNativeElement?.querySelectorAll<HTMLButtonElement>('button') ?? [],
-    ).find((button) => button.textContent?.trim() === 'Exam');
+    const examButton = harness.routeNativeElement?.querySelector('[data-testid="exam"]');
 
     expect(examButton).toBeTruthy();
   });

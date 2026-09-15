@@ -71,18 +71,6 @@ type QuizPhase = 'loading' | 'question' | 'result';
                 }
               </p>
               <p class="quiz-panel__rationale">{{ result()?.rationales?.[question.questionId] }}</p>
-              @if (
-                !isCorrect(question.questionId) && sourceNodeIds()[question.questionId];
-                as nodeId
-              ) {
-                <button
-                  type="button"
-                  class="mt-pill mt-pill--ghost"
-                  (click)="openNode.emit(nodeId)"
-                >
-                  Reopen this step
-                </button>
-              }
             </li>
           }
         </ul>
@@ -162,12 +150,7 @@ export class QuizPanelComponent {
   readonly sessionId = input.required<string>();
   readonly kind = input.required<QuizKind>();
   readonly nodeId = input<string | null>(null);
-  /** Maps a question id to the node that first showed the material it tests. The result screen
-   * uses this to offer "reopen this step" next to a wrong answer. A caller that cannot supply the
-   * mapping for a given question simply leaves it out — the button is absent for that one. */
-  readonly sourceNodeIds = input<Record<string, string>>({});
   readonly close = output<void>();
-  readonly openNode = output<string>();
 
   readonly phase = signal<QuizPhase>('loading');
   readonly error = signal<string | null>(null);

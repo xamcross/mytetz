@@ -151,27 +151,6 @@ describe('QuizPanelComponent', () => {
     expect(text).toContain('Correct');
   });
 
-  it('offers to reopen the source step only for a wrong answer with a mapped node', async () => {
-    fixture.componentRef.setInput('sourceNodeIds', { q2: 'node-2' });
-    const opened: string[] = [];
-    component.openNode.subscribe((id: string) => opened.push(id));
-
-    await fixture.whenStable();
-    component.choose(0); // q1 chosen correctly (correctIndices.q1 === 0)
-    await component.next();
-    component.choose(0); // q2 chosen wrongly (correctIndices.q2 === 1)
-    await component.next();
-    fixture.detectChanges();
-
-    const reopenButtons = fixture.nativeElement.querySelectorAll(
-      '.quiz-panel__review button',
-    ) as NodeListOf<HTMLButtonElement>;
-    expect(reopenButtons.length).toBe(1);
-
-    reopenButtons[0].click();
-    expect(opened).toEqual(['node-2']);
-  });
-
   it('emits close when Leave is pressed during a question', async () => {
     const closed: void[] = [];
     component.close.subscribe(() => closed.push(undefined));
@@ -194,8 +173,8 @@ describe('QuizPanelComponent', () => {
     await component.next();
     fixture.detectChanges();
 
-    // `>` on purpose: a reopen button in the review list also carries `.mt-pill--ghost`, so only a
-    // direct child of `.quiz-panel` names the one Close button on this screen.
+    // `>` on purpose: a direct child of `.quiz-panel` names the one Close button on this screen,
+    // and not some other ghost button a later change might add inside the review list.
     const close = fixture.nativeElement.querySelector(
       '.quiz-panel > button.mt-pill--ghost',
     ) as HTMLButtonElement;

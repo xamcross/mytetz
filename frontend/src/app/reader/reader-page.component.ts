@@ -105,7 +105,12 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
           <div class="reader__rail">
             <!-- TrailRailComponent draws its own "Your trail" heading; this control does not
                  belong to that component's file, so it sits here, directly above the rail. -->
-            <button type="button" class="mt-pill mt-pill--ghost reader__exam" (click)="exam()">
+            <button
+              type="button"
+              class="mt-pill mt-pill--ghost reader__exam"
+              data-testid="exam"
+              (click)="exam()"
+            >
               Exam
             </button>
             <app-trail-rail
@@ -186,7 +191,6 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
                 [kind]="kind"
                 [nodeId]="quizNodeId()"
                 (close)="closeQuiz()"
-                (openNode)="reopenFromQuiz($event)"
               />
             }
           </div>
@@ -492,13 +496,6 @@ export class ReaderPageComponent {
   closeQuiz(): void {
     this.quizKind.set(null);
     this.quizNodeId.set(null);
-  }
-
-  /** The learner chose "Reopen this step" on a wrong answer. The quiz closes and the reader jumps
-   * to the node that first showed the material the question tested. */
-  reopenFromQuiz(nodeId: string): void {
-    this.closeQuiz();
-    this.store.goTo(nodeId);
   }
 
   /**
