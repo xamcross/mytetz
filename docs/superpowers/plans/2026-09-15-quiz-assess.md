@@ -48,6 +48,13 @@ at the end.
   helpers kept internal, config values overridable from the environment with a safe fallback (never
   a startup crash) unless the project has already decided a value has no safe default (signing
   keys; this task adds none of those).
+- Every `@Test fun name() = runBlocking { ... }` must resolve to `Unit`. If the block's last
+  statement is `assertFailsWith<T> { ... }` (which evaluates to `T`, not `Unit`) or any other
+  non-Unit-returning call, annotate the function `fun name(): Unit = runBlocking { ... }` instead of
+  the bare `fun name() = runBlocking { ... }`. Task 2's implementer found this the hard way: Kotlin
+  infers a non-`Unit` return type in that shape, and the test then never runs — no failure, no
+  skipped entry, just silence. Check every test you write against this before committing it,
+  whichever task you are implementing.
 
 ---
 
@@ -369,7 +376,7 @@ streaming endpoint; add a second local server helper for a plain (non-SSE) JSON 
     }
 
     @Test
-    fun `structured fails when the response carries no tool_use block`() = runBlocking {
+    fun `structured fails when the response carries no tool_use block`(): Unit = runBlocking {
         val body = """
             {
               "id": "msg_01", "type": "message", "role": "assistant", "model": "claude-sonnet-5",
@@ -1412,7 +1419,7 @@ class QuizServiceTest {
     }
 
     @Test
-    fun `malformed json from the model is treated as no valid questions rather than a crash`() = runBlocking {
+    fun `malformed json from the model is treated as no valid questions rather than a crash`(): Unit = runBlocking {
         val llm = FakeLlmClient().apply { nextStructuredJson = "not json" }
         val service = QuizService(repository(), llm, QuizValidator())
 
