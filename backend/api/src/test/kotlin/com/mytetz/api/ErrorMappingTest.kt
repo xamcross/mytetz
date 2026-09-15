@@ -3,6 +3,7 @@ package com.mytetz.api
 import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.read.ListAppender
+import com.mytetz.assess.QuizAttemptNotFoundException
 import com.mytetz.assess.QuizUnavailableException
 import com.mytetz.graph.GenerationFailedException
 import com.mytetz.graph.Verb
@@ -381,7 +382,7 @@ class ErrorMappingTest {
      * How many `exception<...>` arms `installErrorMapping` registers, excluding the `Throwable`
      * catch-all. Hand written on purpose; see the test that reads it.
      */
-    private val REGISTERED_EXCEPTION_ARMS = 14
+    private val REGISTERED_EXCEPTION_ARMS = 15
 
     /**
      * Every type `installErrorMapping` registers an `exception<...>` arm for, read out of the source.
@@ -414,6 +415,7 @@ class ErrorMappingTest {
         SessionFullException("session s1 already holds 200 of 200 nodes"),
         VariantLimitException("variant 4 is outside the permitted range 0..3"),
         SessionNotFoundException("s-vanished"),
+        QuizAttemptNotFoundException("attempt-vanished"),
         ResourceNotFoundException("no topic with slug 'nope'"),
         NotFoundException("session s1 for principal anon:p not found"),
         CorruptSessionException("s-broken", "parent cycle through node n3"),

@@ -68,7 +68,7 @@ class QuizRepositoryTest {
     }
 
     @Test
-    fun `attempts round-trip through insert, find and update`(): Unit = runBlocking {
+    fun `attempts round-trip through upsert and find, both as a fresh insert and as an overwrite`(): Unit = runBlocking {
         val attempt = QuizAttempt(
             id = "a1",
             principalId = "user:1",
@@ -80,7 +80,7 @@ class QuizRepositoryTest {
             createdAtEpochMillis = 0,
             submittedAtEpochMillis = null,
         )
-        repository.insertAttempt(attempt)
+        repository.upsertAttempt(attempt)
         assertNotNull(repository.findAttempt("a1"))
 
         val scored = attempt.copy(
@@ -88,7 +88,7 @@ class QuizRepositoryTest {
             score = 1,
             submittedAtEpochMillis = 123,
         )
-        repository.updateAttempt(scored)
+        repository.upsertAttempt(scored)
         assertEquals(1, repository.findAttempt("a1")?.score)
     }
 }

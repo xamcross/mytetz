@@ -56,8 +56,15 @@ class QuizService(
     /** True when a template for [key] already exists. This check calls no model. */
     suspend fun isCached(key: String): Boolean = repository.findByKey(key) != null
 
-    /** Stores a fresh attempt. Call this once, right after [startAttempt] creates it. */
-    suspend fun saveAttempt(attempt: QuizAttempt) = repository.insertAttempt(attempt)
+    /** Stores an attempt. `QuizRoutes.kt` calls this both to create an attempt and to record its
+     * score, so the underlying write is an upsert, not a plain insert. */
+    suspend fun saveAttempt(attempt: QuizAttempt) = repository.upsertAttempt(attempt)
+
+    /** Reads one attempt by id, or null when no attempt has this id. */
+    suspend fun findAttempt(id: String): QuizAttempt? = repository.findAttempt(id)
+
+    /** Reads one quiz template by its content key, or null when no template has this key. */
+    suspend fun findTemplate(key: String): QuizTemplate? = repository.findByKey(key)
 
     /**
      * A cache hit costs nothing and calls no model.

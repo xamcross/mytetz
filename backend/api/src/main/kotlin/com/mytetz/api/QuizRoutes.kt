@@ -1,6 +1,8 @@
 package com.mytetz.api
 
 import com.mytetz.account.AccountService
+import com.mytetz.assess.AnsweredQuestion
+import com.mytetz.assess.QuizAttemptNotFoundException
 import com.mytetz.assess.QuizKind
 import com.mytetz.assess.QuizService
 import com.mytetz.assess.QuizSource
@@ -26,6 +28,25 @@ data class QuizQuestionView(val questionId: String, val stem: String, val option
 
 @Serializable
 data class QuizTemplateView(val attemptId: String, val kind: QuizKind, val questions: List<QuizQuestionView>)
+
+/** The wire shape of one learner answer: which question, and which option they chose. */
+@Serializable
+data class AnsweredQuestionPayload(val questionId: String, val chosenIndex: Int)
+
+@Serializable
+data class QuizAnswersRequest(val answers: List<AnsweredQuestionPayload>)
+
+/** The score for a submitted attempt, plus the answer key.
+ *
+ * The server sends this view only after the learner submits answers. Unlike [QuizQuestionView],
+ * this view may safely carry [correctIndices] and [rationales]. */
+@Serializable
+data class QuizResultView(
+    val score: Int,
+    val total: Int,
+    val correctIndices: Map<String, Int>,
+    val rationales: Map<String, String>,
+)
 
 /**
  * `POST /api/sessions/{id}/quizzes` and `POST /api/sessions/{id}/quizzes/{attemptId}/answers`.
@@ -100,6 +121,47 @@ fun Route.quizRoutes(
                 attemptId = attempt.id,
                 kind = template.kind,
                 questions = template.questions.map { QuizQuestionView(it.questionId, it.stem, it.options) },
+            ),
+        )
+    }
+
+    post("/api/sessions/{id}/quizzes/{attemptId}/answers") {
+        val signedInUser = Principals.readSessionId(call, cookies)?.let { account.resolveSession(it) }
+        if (signedInUser == null) {
+            call.respond(HttpStatusCode.Unauthorized, ApiError("SIGN_IN_REQUIRED", "sign in to answer a quiz"))
+            return@post
+        }
+        val principal = PrincipalId.user(signedInUser.id)
+        val sessionId = call.parameters["id"].orEmpty()
+        val attemptId = call.parameters["attemptId"].orEmpty()
+
+        sessions().requireOwnedBy(sessionId, principal)
+
+        val quizService = quizzes()
+        val attempt = quizService.findAttempt(attemptId)
+        if (attempt == null || attempt.sessionId != sessionId || attempt.principalId != principal.value) {
+            // One exception covers both "no such id" and "someone else's id". A guessed attempt
+            // id must not reveal which attempts exist. See the exception's own KDoc.
+            throw QuizAttemptNotFoundException(attemptId)
+        }
+
+        val template = quizService.findTemplate(attempt.templateId)
+            ?: throw QuizAttemptNotFoundException(attemptId)
+
+        val request = call.receive<QuizAnswersRequest>()
+        val scored = quizService.score(
+            attempt,
+            template,
+            answers = request.answers.map { AnsweredQuestion(it.questionId, it.chosenIndex) },
+        )
+        quizService.saveAttempt(scored)
+
+        call.respond(
+            QuizResultView(
+                score = scored.score ?: 0,
+                total = scored.total,
+                correctIndices = template.questions.associate { it.questionId to it.correctIndex },
+                rationales = template.questions.associate { it.questionId to it.rationale },
             ),
         )
     }

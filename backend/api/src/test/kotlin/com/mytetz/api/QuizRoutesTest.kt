@@ -20,6 +20,7 @@ import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.install
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.routing.routing
+import io.ktor.server.testing.ApplicationTestBuilder
 import io.ktor.server.testing.testApplication
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
@@ -52,6 +53,7 @@ class QuizRoutesTest {
     """.trimIndent()
 
     private class Scope(
+        private val builder: ApplicationTestBuilder,
         val client: HttpClient,
         val mailSender: CapturingMailSender,
         val stack: TestFixtures.SessionStack,
@@ -64,6 +66,15 @@ class QuizRoutesTest {
             }
             http.get("/api/auth/magic-link/${mailSender.tokenFor(email)}")
             return email
+        }
+
+        /** A second learner. It gets its own cookie jar, its own principal, and its own signed-in
+         * session. A test uses this to prove ownership isolation with a genuinely different
+         * caller, not with a second request from the same client. */
+        suspend fun anotherLearner(): HttpClient {
+            val http = builder.createClient { install(HttpCookies) }
+            signIn(http)
+            return http
         }
     }
 
@@ -100,7 +111,7 @@ class QuizRoutesTest {
         }
 
         val http = createClient { install(HttpCookies) }
-        runBlocking { Scope(http, mailSender, stack).block() }
+        runBlocking { Scope(this@testApplication, http, mailSender, stack).block() }
     }
 
     /** Creates a signed-in session with one EXPLAIN child node beyond the seed, so TEST_ME on the
@@ -192,5 +203,67 @@ class QuizRoutesTest {
 
         assertEquals(HttpStatusCode.Forbidden, response.status)
         assertTrue("TRIAL_EXHAUSTED" in response.bodyAsText())
+    }
+
+    @Test
+    fun `taking a quiz end to end returns the score and the rationales`() = app {
+        val sessionId = newSessionWithOneChild()
+        val session = client.get("/api/sessions/$sessionId")
+        val rootNodeId = Json.parseToJsonElement(session.bodyAsText()).jsonObject.getValue("rootNodeId").jsonPrimitive.content
+        val rootExplanationKey = Json.parseToJsonElement(session.bodyAsText()).jsonObject
+            .getValue("nodes").jsonArray
+            .first { it.jsonObject.getValue("nodeId").jsonPrimitive.content == rootNodeId }
+            .jsonObject.getValue("explanationKey").jsonPrimitive.content
+        stack.llm.nextStructuredJson = validQuizJson(rootExplanationKey)
+
+        val started = client.post("/api/sessions/$sessionId/quizzes") {
+            contentType(ContentType.Application.Json)
+            setBody("""{"kind":"TEST_ME","nodeId":"$rootNodeId"}""")
+        }
+        val startedBody = Json.parseToJsonElement(started.bodyAsText()).jsonObject
+        val attemptId = startedBody.getValue("attemptId").jsonPrimitive.content
+        val questionId = startedBody.getValue("questions").jsonArray.first()
+            .jsonObject.getValue("questionId").jsonPrimitive.content
+
+        val answered = client.post("/api/sessions/$sessionId/quizzes/$attemptId/answers") {
+            contentType(ContentType.Application.Json)
+            setBody("""{"answers":[{"questionId":"$questionId","chosenIndex":0}]}""")
+        }
+
+        assertEquals(HttpStatusCode.OK, answered.status)
+        val result = Json.parseToJsonElement(answered.bodyAsText()).jsonObject
+        assertTrue(result.containsKey("score"))
+        assertTrue(result.containsKey("total"))
+        assertTrue(result.containsKey("rationales"))
+        assertTrue(result.containsKey("correctIndices"))
+    }
+
+    @Test
+    fun `answering someone else's attempt is refused as not found`() = app {
+        val sessionId = newSessionWithOneChild()
+        val session = client.get("/api/sessions/$sessionId")
+        val sessionBody = Json.parseToJsonElement(session.bodyAsText()).jsonObject
+        val rootNodeId = sessionBody.getValue("rootNodeId").jsonPrimitive.content
+        val rootExplanationKey = sessionBody.getValue("nodes").jsonArray
+            .first { it.jsonObject.getValue("nodeId").jsonPrimitive.content == rootNodeId }
+            .jsonObject.getValue("explanationKey").jsonPrimitive.content
+        stack.llm.nextStructuredJson = validQuizJson(rootExplanationKey)
+
+        val started = client.post("/api/sessions/$sessionId/quizzes") {
+            contentType(ContentType.Application.Json)
+            setBody("""{"kind":"TEST_ME","nodeId":"$rootNodeId"}""")
+        }
+        val attemptId = Json.parseToJsonElement(started.bodyAsText()).jsonObject.getValue("attemptId").jsonPrimitive.content
+
+        // A second, independently signed-in learner, with its own cookie jar and its own
+        // principal. This proves ownership isolation. A second request on the same client would
+        // only prove that a repeated request is refused.
+        val otherLearner = anotherLearner()
+        val response = otherLearner.post("/api/sessions/$sessionId/quizzes/$attemptId/answers") {
+            contentType(ContentType.Application.Json)
+            setBody("""{"answers":[]}""")
+        }
+
+        assertEquals(HttpStatusCode.NotFound, response.status)
     }
 }

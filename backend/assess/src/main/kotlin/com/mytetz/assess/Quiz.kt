@@ -58,6 +58,14 @@ data class QuizTemplate(
 data class AnsweredQuestion(val questionId: String, val chosenIndex: Int)
 
 /**
+ * No attempt exists with this id. Or an attempt exists, but a different principal owns it.
+ *
+ * This class gives one answer for both cases. `com.mytetz.session.SessionNotFoundException` uses
+ * the same reasoning. A guessed id must not become a way to find out which ids are real.
+ */
+class QuizAttemptNotFoundException(val attemptId: String) : Exception("no such quiz attempt: $attemptId")
+
+/**
  * One learner's attempt at one QuizTemplate.
  *
  * The fields score and submittedAtEpochMillis are null until QuizService.score records answers.

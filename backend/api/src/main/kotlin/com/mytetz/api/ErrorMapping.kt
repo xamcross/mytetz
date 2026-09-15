@@ -1,5 +1,6 @@
 package com.mytetz.api
 
+import com.mytetz.assess.QuizAttemptNotFoundException
 import com.mytetz.assess.QuizUnavailableException
 import com.mytetz.graph.GenerationFailedException
 import com.mytetz.session.CorruptSessionException
@@ -198,6 +199,13 @@ fun Application.installErrorMapping() {
             call.respond(HttpStatusCode.NotFound, ApiError("NOT_FOUND", "no such session"))
         }
 
+        exception<QuizAttemptNotFoundException> { call, cause ->
+            // SessionNotFoundException, just above, uses the same reasoning. A guessed attempt id
+            // must not reveal which ids are real. It must not reveal who owns an id either.
+            log.info("quiz attempt {} was requested and does not exist or is not the caller's", cause.attemptId)
+            call.respond(HttpStatusCode.NotFound, ApiError("NOT_FOUND", "no such quiz attempt"))
+        }
+
         // Ours, so the message is echoed: we wrote it, and it names only what the client sent.
         exception<ResourceNotFoundException> { call, cause ->
             call.respond(HttpStatusCode.NotFound, ApiError("NOT_FOUND", cause.message.orEmpty()))
@@ -313,6 +321,15 @@ internal fun sseErrorFor(cause: Throwable): ApiError = when (cause) {
     is SessionNotFoundException -> {
         log.info("session {} vanished while it was being streamed to", cause.sessionId)
         ApiError("NOT_FOUND", "no such session")
+    }
+
+    // This exception is not raisable from inside a stream today. The answers route is a plain
+    // JSON endpoint and never opens a stream. This arm exists anyway. The coverage test below
+    // requires every status-mapping arm to have a streaming counterpart. See
+    // [QuizUnavailableException]'s own arm for the same argument.
+    is QuizAttemptNotFoundException -> {
+        log.info("quiz attempt {} was requested mid-stream and does not exist or is not the caller's", cause.attemptId)
+        ApiError("NOT_FOUND", "no such quiz attempt")
     }
 
     // Ours, so the message is echoed; Ktor's, so it is not. Neither is raisable from inside a stream

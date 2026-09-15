@@ -61,14 +61,21 @@ open class QuizRepository(database: MongoDatabase) {
         templates.updateOne(Filters.eq("_id", key), Updates.inc("requestCount", 1L))
     }
 
-    suspend fun insertAttempt(attempt: QuizAttempt) {
-        attempts.insertOne(attempt)
+    /**
+     * Inserts a new attempt, or overwrites an existing one with the same id.
+     *
+     * One method covers both cases. `QuizRoutes.kt` calls this to create an attempt, and again
+     * later to record its score. A single method removes the need to pick the right one at each
+     * call site.
+     */
+    suspend fun upsertAttempt(attempt: QuizAttempt) {
+        attempts.replaceOne(
+            Filters.eq("_id", attempt.id),
+            attempt,
+            com.mongodb.client.model.ReplaceOptions().upsert(true),
+        )
     }
 
     suspend fun findAttempt(id: String): QuizAttempt? =
         attempts.find(Filters.eq("_id", id)).firstOrNull()
-
-    suspend fun updateAttempt(attempt: QuizAttempt) {
-        attempts.replaceOne(Filters.eq("_id", attempt.id), attempt)
-    }
 }
