@@ -728,9 +728,9 @@ internal fun eventFor(chunk: GraphChunk): ServerSentEvent? = when (chunk) {
  * `Retry-After` is a response *header* as well as a field, because that is what a proxy, a client
  * library and a well-behaved crawler all read.
  */
-private class Refusal(val status: HttpStatusCode, val error: ApiError)
+internal class Refusal(val status: HttpStatusCode, val error: ApiError)
 
-private suspend fun ApplicationCall.respondRefusal(refusal: Refusal) {
+internal suspend fun ApplicationCall.respondRefusal(refusal: Refusal) {
     refusal.error.retryAfter?.let { response.headers.append(HttpHeaders.RetryAfter, it.toString()) }
     respond(refusal.status, refusal.error)
 }
@@ -770,7 +770,7 @@ private suspend fun ApplicationCall.respondRefusal(refusal: Refusal) {
  * `POST /api/sessions` for a signed-in caller with a subscription, and
  * `POST /api/sessions/{id}/explain` always.
  */
-private suspend fun QuotaService.refusalFor(
+internal suspend fun QuotaService.refusalFor(
     principal: PrincipalId,
     allowance: Allowance? = null,
     status: SubscriptionStatus? = null,
@@ -840,7 +840,7 @@ private suspend fun QuotaService.refusalFor(
  * takes `costMicros` second and `allowance` third, both arguments below are given by name for that
  * reason, so the two cannot be swapped silently.
  */
-private suspend fun QuotaService.recordSpend(principal: PrincipalId, spentMicros: Long, allowance: Allowance? = null) {
+internal suspend fun QuotaService.recordSpend(principal: PrincipalId, spentMicros: Long, allowance: Allowance? = null) {
     if (spentMicros <= 0) return
     try {
         if (allowance != null) {
@@ -930,7 +930,7 @@ private suspend fun BillingService.createEntitlement(user: User?): Pair<Allowanc
  * The same 404 for "no such session" and "not yours", raised from one place so neither route can
  * answer them differently. See "Ownership is enforced here".
  */
-private suspend fun SessionService.requireOwnedBy(sessionId: String, principal: PrincipalId) {
+internal suspend fun SessionService.requireOwnedBy(sessionId: String, principal: PrincipalId) {
     if (ownerOf(sessionId) != principal.value) throw SessionNotFoundException(sessionId)
 }
 
