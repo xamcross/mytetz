@@ -128,6 +128,10 @@ class ComponentsTest {
         assertContains(indexNames(database, "magicLinkTokens"), "token_ttl")
         assertContains(indexNames(database, "authSessions"), "session_ttl")
         assertContains(indexNames(database, "authSessions"), "by_user")
+        // QuizRepository, added by this task. It creates no index on `quizTemplates` beyond the
+        // default `_id` index, so this test asserts nothing about that collection.
+        assertContains(indexNames(database, "quizAttempts"), "principal_recent")
+        assertContains(indexNames(database, "quizAttempts"), "by_session")
     }
 
     @Test
