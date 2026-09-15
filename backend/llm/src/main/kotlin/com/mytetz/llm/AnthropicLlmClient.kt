@@ -2,10 +2,13 @@ package com.mytetz.llm
 
 import com.anthropic.client.AnthropicClient
 import com.anthropic.client.okhttp.AnthropicOkHttpClient
+import com.anthropic.core.JsonValue
 import com.anthropic.models.messages.CacheControlEphemeral
 import com.anthropic.models.messages.MessageCreateParams
 import com.anthropic.models.messages.OutputConfig
 import com.anthropic.models.messages.TextBlockParam
+import com.anthropic.models.messages.Tool
+import com.fasterxml.jackson.databind.JsonNode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -128,8 +131,69 @@ class AnthropicLlmClient(
         emit(LlmChunk.Done(usage, completedStopReason))
     }.flowOn(Dispatchers.IO)
 
+    /**
+     * One blocking call. It forces the model onto [StructuredRequest.toolName].
+     * The model can then answer only in the shape that [StructuredRequest.inputSchema] describes.
+     *
+     * This method does not stream. [stream] exists for prose. Prose is worth showing word by word.
+     * A quiz question is JSON. JSON is useless until every brace has arrived. Nothing is lost here
+     * by calling the blocking, non-streaming endpoint instead of the event loop that [stream] needs.
+     */
     override suspend fun structured(request: StructuredRequest): StructuredResult {
-        throw NotImplementedError("Structured output is not yet implemented; see Task 2 of the plan.")
+        val properties = Tool.InputSchema.Properties.builder().apply {
+            request.inputSchema.forEach { (name, schema) -> putAdditionalProperty(name, JsonValue.from(schema)) }
+        }.build()
+
+        val schema = Tool.InputSchema.builder().apply {
+            properties(properties)
+            request.requiredFields.forEach { addRequired(it) }
+        }.build()
+
+        val tool = Tool.builder()
+            .name(request.toolName)
+            .description(request.toolDescription)
+            .inputSchema(schema)
+            .build()
+
+        val params = MessageCreateParams.builder()
+            .model(modelId)
+            .maxTokens(request.maxTokens)
+            .systemOfTextBlockParams(
+                listOf(
+                    TextBlockParam.builder()
+                        .text(request.system)
+                        .cacheControl(CacheControlEphemeral.builder().build())
+                        .build()
+                )
+            )
+            .outputConfig(OutputConfig.builder().effort(effortOf(request.effort)).build())
+            .addTool(tool)
+            .toolToolChoice(request.toolName)
+            .addUserMessage(request.userPrompt)
+            .build()
+
+        val message = runInterruptible(Dispatchers.IO) { client.messages().create(params) }
+
+        val toolUse = message.content().firstOrNull { it.isToolUse() }?.asToolUse()
+            ?: throw LlmStructuredOutputMissingException(
+                "No tool_use block for '${request.toolName}' in the response. " +
+                    // stopReason() returns Optional<StopReason>. javap on the SDK jar confirms
+                    // this. A bare toString() on the Optional would print "Optional[tool_use]".
+                    "The stop reason was ${message.stopReason().map { it.toString() }.orElse("none")}."
+            )
+
+        return StructuredResult(
+            // JsonValue's own toString() contract is unconfirmed. JsonNode.toString() is
+            // documented to produce valid JSON. The code converts the value through Jackson
+            // for that reason.
+            json = toolUse._input().convert(JsonNode::class.java).toString(),
+            usage = LlmUsage(
+                inputTokens = message.usage().inputTokens(),
+                outputTokens = message.usage().outputTokens(),
+                cacheReadInputTokens = message.usage().cacheReadInputTokens().orElse(0L),
+                cacheCreationInputTokens = message.usage().cacheCreationInputTokens().orElse(0L),
+            ),
+        )
     }
 
     private fun effortOf(effort: LlmEffort): OutputConfig.Effort = when (effort) {

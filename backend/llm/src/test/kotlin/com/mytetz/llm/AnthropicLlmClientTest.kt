@@ -297,4 +297,108 @@ class AnthropicLlmClientTest {
             "the default model must bill at Sonnet 5's published output rate of \$15 for each 1M tokens",
         )
     }
+
+    // ------------------------------------------------------------------ structured
+
+    /**
+     * Starts a plain JSON endpoint on a free loopback port. [structured] does not stream.
+     * This helper writes one full response body instead of the SSE frames [sseServer] writes.
+     */
+    private fun jsonServer(
+        onRequest: (String) -> Unit = {},
+        body: String,
+    ): HttpServer =
+        HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
+            createContext("/v1/messages") { exchange ->
+                onRequest(exchange.requestBody.use { it.readBytes() }.decodeToString())
+                exchange.responseHeaders.add("Content-Type", "application/json")
+                val bytes = body.toByteArray()
+                exchange.sendResponseHeaders(200, bytes.size.toLong())
+                exchange.responseBody.use { it.write(bytes) }
+            }
+            start()
+        }
+
+    private fun toolUseMessage(inputJson: String, inputTokens: Int = 500, outputTokens: Int = 40): String = """
+        {
+          "id": "msg_01", "type": "message", "role": "assistant", "model": "claude-sonnet-5",
+          "stop_reason": "tool_use", "stop_sequence": null,
+          "usage": {"input_tokens": $inputTokens, "output_tokens": $outputTokens},
+          "content": [
+            {"type": "tool_use", "id": "toolu_01", "name": "submit_quiz_questions", "input": $inputJson}
+          ]
+        }
+    """.trimIndent()
+
+    private fun structuredRequest(userPrompt: String = "prompt") = StructuredRequest(
+        system = "system",
+        userPrompt = userPrompt,
+        toolName = "submit_quiz_questions",
+        toolDescription = "Submit the generated quiz questions.",
+        inputSchema = mapOf(
+            "questions" to mapOf(
+                "type" to "array",
+                "items" to mapOf("type" to "object"),
+            )
+        ),
+        requiredFields = listOf("questions"),
+    )
+
+    @Test
+    fun `structured returns the tool call's input and the message's usage`() = runBlocking {
+        val body = toolUseMessage("""{"questions":[{"stem":"x","options":["a","b","c","d"],"correctIndex":0,"sourceKey":"k","rationale":"r"}]}""")
+        val server = jsonServer(body = body)
+
+        try {
+            val result = withTimeout(30_000) {
+                AnthropicLlmClient(clientFor(server)).structured(structuredRequest())
+            }
+
+            assertTrue("\"stem\":\"x\"" in result.json, "expected the tool input's JSON, got: ${result.json}")
+            assertEquals(500, result.usage.inputTokens)
+            assertEquals(40, result.usage.outputTokens)
+        } finally {
+            server.stop(0)
+        }
+    }
+
+    @Test
+    fun `structured forces the named tool and sends no stop sequences`() = runBlocking {
+        val captured = CompletableDeferred<String>()
+        val server = jsonServer(onRequest = { captured.complete(it) }, body = toolUseMessage("""{"questions":[]}"""))
+
+        try {
+            withTimeout(30_000) {
+                AnthropicLlmClient(clientFor(server)).structured(structuredRequest(userPrompt = "USERPROMPT-SENTINEL"))
+            }
+            val request = withTimeout(5_000) { captured.await() }
+
+            assertTrue("USERPROMPT-SENTINEL" in request)
+            assertTrue("\"name\":\"submit_quiz_questions\"" in request, "tool choice should force the named tool: $request")
+            assertFalse(request.contains("stop_sequence", ignoreCase = true))
+        } finally {
+            server.stop(0)
+        }
+    }
+
+    @Test
+    fun `structured fails when the response carries no tool_use block`(): Unit = runBlocking {
+        val body = """
+            {
+              "id": "msg_01", "type": "message", "role": "assistant", "model": "claude-sonnet-5",
+              "stop_reason": "end_turn", "stop_sequence": null,
+              "usage": {"input_tokens": 10, "output_tokens": 5},
+              "content": [{"type": "text", "text": "I would rather not."}]
+            }
+        """.trimIndent()
+        val server = jsonServer(body = body)
+
+        try {
+            assertFailsWith<LlmStructuredOutputMissingException> {
+                withTimeout(30_000) { AnthropicLlmClient(clientFor(server)).structured(structuredRequest()) }
+            }
+        } finally {
+            server.stop(0)
+        }
+    }
 }
