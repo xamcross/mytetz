@@ -182,6 +182,20 @@ class AnthropicLlmClient(
                     "The stop reason was ${message.stopReason().map { it.toString() }.orElse("none")}."
             )
 
+        // A tool_use block can exist and still be incomplete. The model stops writing it the
+        // instant maxTokens is reached, mid-argument, so a truncated call still passes the check
+        // above. The caller then gets a JSON blob no parser can read as a valid question, after
+        // paying for two calls: this one and the nudge retry it triggers. Caught here instead, with
+        // the real cause named, so the caller learns why nothing came back rather than just that
+        // nothing did.
+        val stopReason = message.stopReason().map { it.toString() }.orElse(null)
+        if (stopReason == STOP_REASON_MAX_TOKENS) {
+            throw LlmStructuredOutputMissingException(
+                "the response for '${request.toolName}' was truncated at max_tokens before the " +
+                    "tool call completed"
+            )
+        }
+
         return StructuredResult(
             // JsonValue's own toString() contract is unconfirmed. JsonNode.toString() is
             // documented to produce valid JSON. The code converts the value through Jackson
@@ -206,6 +220,9 @@ class AnthropicLlmClient(
 
         /** Ceiling on a single streamed request, and so on how long a stalled read holds a thread. */
         const val DEFAULT_TIMEOUT_SECONDS = 120L
+
+        /** The wire string Anthropic sends when maxTokens cut a response off mid-generation. */
+        internal const val STOP_REASON_MAX_TOKENS: String = "max_tokens"
 
         const val MODEL_ID_ENV: String = "MYTETZ_MODEL_ID"
         const val MODEL_FAMILY_ENV: String = "MYTETZ_MODEL_FAMILY"
