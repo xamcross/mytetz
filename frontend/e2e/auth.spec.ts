@@ -129,3 +129,13 @@ test('the panel states above the controls that signing in accepts the privacy po
   await consent.getByRole('link', { name: 'privacy policy' }).click();
   await expect(page).toHaveURL(/\/privacy$/);
 });
+
+test('the header Sign in link opens the sign-in panel', async ({ page }) => {
+  await stubCatalogueAndSession(page);
+
+  await page.goto('/');
+  await page.getByRole('link', { name: 'Sign in' }).click();
+
+  await expect(page).toHaveURL(/\/auth$/);
+  await expect(page.getByText('Sign in to keep going.')).toBeVisible();
+});

@@ -1,5 +1,7 @@
 import { Component } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
+import { provideHttpClient } from '@angular/common/http';
+import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { provideRouter, Router } from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
 import { AuthLandingComponent } from './auth-landing.component';
@@ -15,6 +17,8 @@ describe('AuthLandingComponent', () => {
   beforeEach(async () => {
     TestBed.configureTestingModule({
       providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
         provideRouter([
           { path: '', component: DummyRootComponent },
           { path: 'auth', component: AuthLandingComponent },
@@ -50,12 +54,13 @@ describe('AuthLandingComponent', () => {
     );
   });
 
-  it('the landing redirects when the reason is absent', async () => {
+  it('the landing shows the sign-in panel when the reason is absent', async () => {
     await harness.navigateByUrl('/auth', AuthLandingComponent);
     harness.detectChanges();
     await harness.fixture.whenStable();
 
-    expect(router.url).toBe('/');
+    expect(router.url).toBe('/auth');
+    expect(harness.routeNativeElement?.querySelector('app-sign-in-panel')).toBeTruthy();
   });
 
   it('the landing redirects for a reason it does not recognise', async () => {

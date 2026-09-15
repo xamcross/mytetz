@@ -1,6 +1,7 @@
-import { Component, input } from '@angular/core';
+import { Component, inject, input } from '@angular/core';
 import { RouterLink, RouterLinkActive } from '@angular/router';
 import { AllowanceMeterComponent } from '../account/allowance-meter.component';
+import { AccountStore } from '../core/account.store';
 import { LogoMarkComponent } from './logo-mark.component';
 import { BackendState, StatusDotComponent } from './status-dot.component';
 
@@ -12,6 +13,10 @@ import { BackendState, StatusDotComponent } from './status-dot.component';
  * The spec's §12 lists what each one needs.
  *
  * Below 768px the nav item goes. The wordmark already routes to the catalog.
+ *
+ * Issue #31 adds one link before the meter: `Sign in`, to `/auth`, while `AccountStore.view` is
+ * `null`, and `Account`, to `/account`, once a sign-in fills that view. Every page shares this
+ * shell, so the link reaches a visitor on every page, and not only the reader's own wall.
  */
 @Component({
   selector: 'app-shell',
@@ -41,6 +46,11 @@ import { BackendState, StatusDotComponent } from './status-dot.component';
         </nav>
       </div>
       <div class="bar__right">
+        @if (account.view()) {
+          <a class="bar__link bar__account" routerLink="/account">Account</a>
+        } @else {
+          <a class="bar__link bar__account" routerLink="/auth">Sign in</a>
+        }
         <app-allowance-meter />
         <app-status-dot [state]="backend()" />
       </div>
@@ -107,6 +117,9 @@ import { BackendState, StatusDotComponent } from './status-dot.component';
         color: var(--mt-teal);
         border-bottom-color: var(--mt-teal);
       }
+      .bar__account {
+        white-space: nowrap;
+      }
       @media (max-width: 767px) {
         .bar {
           padding: 0 20px;
@@ -136,4 +149,5 @@ import { BackendState, StatusDotComponent } from './status-dot.component';
 })
 export class AppShellComponent {
   readonly backend = input.required<BackendState>();
+  protected readonly account = inject(AccountStore);
 }
