@@ -5,6 +5,7 @@ import com.mytetz.account.AccountService
 import com.mytetz.account.MagicLinkService
 import com.mytetz.account.MailSender
 import com.mytetz.assess.QuizAttempt
+import com.mytetz.assess.QuizConfig
 import com.mytetz.assess.QuizRepository
 import com.mytetz.billing.BillingConfig
 import com.mytetz.billing.BillingRepository
@@ -81,9 +82,13 @@ class QuizRoutesTest {
         }
     }
 
-    private fun app(trialGenerations: Int = 40, block: suspend Scope.() -> Unit) = testApplication {
+    private fun app(
+        trialGenerations: Int = 40,
+        quizConfig: QuizConfig = QuizConfig(),
+        block: suspend Scope.() -> Unit,
+    ) = testApplication {
         val stack = TestFixtures.sessionApp()
-        val quiz = TestFixtures.quizApp(stack)
+        val quiz = TestFixtures.quizApp(stack, quizConfig)
         val accountRepository = AccountRepository(stack.database)
         val account = AccountService(accountRepository)
         val mailSender = CapturingMailSender()
@@ -187,6 +192,33 @@ class QuizRoutesTest {
 
         assertEquals(HttpStatusCode.OK, response.status)
     }
+
+    // `newSessionWithOneChild` gives a session with two nodes: the seed (root) and one explain
+    // child. examMaxSources capped to 1 keeps only the most recent node — the child — so the
+    // root's own explanation key falls out of scope. The fake cites the root's key, so if the cap
+    // is honoured that question is dropped as out of scope on both attempts, and nothing else
+    // gets generated. If the cap were not honoured, the root's key would stay in scope and this
+    // would be a normal 200 — the same shape "exam scopes over every node" above already covers.
+    @Test
+    fun `exam takes only the most recent examMaxSources nodes`() =
+        app(quizConfig = QuizConfig(examMaxSources = 1)) {
+            val sessionId = newSessionWithOneChild()
+            val session = client.get("/api/sessions/$sessionId")
+            val sessionBody = Json.parseToJsonElement(session.bodyAsText()).jsonObject
+            val rootNodeId = sessionBody.getValue("rootNodeId").jsonPrimitive.content
+            val rootExplanationKey = sessionBody.getValue("nodes").jsonArray
+                .first { it.jsonObject.getValue("nodeId").jsonPrimitive.content == rootNodeId }
+                .jsonObject.getValue("explanationKey").jsonPrimitive.content
+            stack.llm.nextStructuredJson = validQuizJson(rootExplanationKey)
+
+            val response = client.post("/api/sessions/$sessionId/quizzes") {
+                contentType(ContentType.Application.Json)
+                setBody("""{"kind":"EXAM"}""")
+            }
+
+            assertEquals(HttpStatusCode.BadGateway, response.status)
+            assertTrue("QUIZ_UNAVAILABLE" in response.bodyAsText())
+        }
 
     // `newSessionWithOneChild` spends a pool of 2 in full. The seed generation spends one. The one
     // explain call spends the other. The trial pool counts every generation this principal makes.

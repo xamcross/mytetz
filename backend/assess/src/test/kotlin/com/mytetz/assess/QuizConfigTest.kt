@@ -26,4 +26,11 @@ class QuizConfigTest {
         assertEquals(LlmEffort.HIGH, QuizConfig.resolveEffort("high"))
         assertEquals(7, QuizConfig.resolvePositiveInt("7", 3))
     }
+
+    @Test
+    fun `examMaxSources defaults to 20, and an override replaces it`() {
+        assertEquals(20, QuizConfig.DEFAULT_EXAM_MAX_SOURCES)
+        assertEquals(20, QuizConfig().examMaxSources)
+        assertEquals(5, QuizConfig(examMaxSources = 5).examMaxSources)
+    }
 }

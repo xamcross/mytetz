@@ -140,4 +140,35 @@ class QuizServiceTest {
 
         assertEquals(0, scored.score)
     }
+
+    @Test
+    fun `an answer for a question id outside the template is dropped, not scored or stored`() = runBlocking {
+        val service = QuizService(repository(), FakeLlmClient(), QuizValidator())
+        val template = QuizTemplate(
+            key = "k1", kind = QuizKind.TEST_ME, scopeKeys = listOf("key-1"),
+            questions = listOf(QuizQuestion("q1", "stem1", listOf("a", "b", "c", "d"), correctIndex = 0, sourceKey = "key-1", rationale = "r1")),
+            promptVersion = "v1", modelFamily = "f", modelId = "m",
+            inputTokens = 0, outputTokens = 0, costMicros = 0, requestCount = 0, createdAtEpochMillis = 0,
+        )
+        val attempt = QuizAttempt(
+            id = "a1", principalId = "user:1", sessionId = "s1", templateId = "k1",
+            answers = emptyList(), score = null, total = 1, createdAtEpochMillis = 0, submittedAtEpochMillis = null,
+        )
+
+        val scored = service.score(
+            attempt,
+            template,
+            answers = listOf(
+                AnsweredQuestion("q1", chosenIndex = 0),
+                AnsweredQuestion("not-a-real-question-id", chosenIndex = 3),
+            ),
+        )
+
+        assertEquals(1, scored.score, "q1 is still scored correctly")
+        assertEquals(
+            listOf(AnsweredQuestion("q1", chosenIndex = 0)),
+            scored.answers,
+            "the answer for the invented question id must not be stored",
+        )
+    }
 }
