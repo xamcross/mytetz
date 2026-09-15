@@ -61,6 +61,33 @@ describe('AppShellComponent', () => {
     expect(home.textContent.trim()).toBe('mytetz');
   });
 
+  it('shows a Sign in link to /auth while no account is signed in', () => {
+    fixture.detectChanges();
+
+    const link = fixture.nativeElement.querySelector('a.bar__account') as HTMLAnchorElement;
+    expect(link.textContent?.trim()).toBe('Sign in');
+    expect(link.getAttribute('href')).toBe('/auth');
+  });
+
+  it('shows an Account link to /account once a sign-in fills the account view', () => {
+    const view: AccountView = {
+      email: 'learner@example.com',
+      status: 'ACTIVE',
+      trialEndsAtEpochMillis: null,
+      currentPeriodEndsAtEpochMillis: null,
+      allowance: 25,
+      remaining: 20,
+      resetsAtEpochMillis: null,
+    };
+    TestBed.inject(AccountStore).view.set(view);
+
+    fixture.detectChanges();
+
+    const link = fixture.nativeElement.querySelector('a.bar__account') as HTMLAnchorElement;
+    expect(link.textContent?.trim()).toBe('Account');
+    expect(link.getAttribute('href')).toBe('/account');
+  });
+
   it('carries a footer with links to the privacy, terms and imprint pages', () => {
     fixture.detectChanges();
 

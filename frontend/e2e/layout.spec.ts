@@ -558,6 +558,26 @@ test('every font comes from this origin, and none from a Google Fonts host', asy
   );
 });
 
+test('the header fits on one line at 400px, with the Sign in link, the meter and the dot', async ({
+  page,
+}) => {
+  await stubCatalogueAndSession(page);
+  await page.setViewportSize({ width: 400, height: 900 });
+  await page.goto('/');
+  await page.locator('.topic__button').first().waitFor();
+
+  await expect(page.getByRole('link', { name: 'Sign in' })).toBeVisible();
+
+  const bar = await page.locator('.bar').boundingBox();
+  expect(bar!.height, 'the bar stays 64px tall, not wrapped to a second line').toBe(64);
+
+  const doc = await page.evaluate(() => ({
+    scroll: document.documentElement.scrollWidth,
+    client: document.documentElement.clientWidth,
+  }));
+  expect(doc.scroll, 'the page does not scroll sideways at 400px').toBeLessThanOrEqual(doc.client);
+});
+
 test('the mark draws at 28px, left of the wordmark', async ({ page }) => {
   await stubCatalogueAndSession(page);
   await page.setViewportSize(WIDTHS.wide);
