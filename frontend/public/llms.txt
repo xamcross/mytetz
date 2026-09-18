@@ -10,3 +10,15 @@ The catalogue lists topics by title, category, and summary. A reader can search 
 - [Privacy policy](https://mytetz.com/privacy)
 - [Terms of service](https://mytetz.com/terms)
 - [Imprint](https://mytetz.com/imprint)
+
+## Guides
+
+Editorial pages about self-study. Every claim names a primary source, with the year and the sample size.
+
+- [Study guides](https://mytetz.com/guides): the index of the six guides below.
+- [How to study on your own](https://mytetz.com/guides/how-to-study-on-your-own): a six-step loop, built on practice testing and distributed practice.
+- [What to use instead of a highlighter](https://mytetz.com/guides/what-to-use-instead-of-a-highlighter): why a 2013 review rated highlighting as low utility, and four replacements.
+- [How to test yourself while you read](https://mytetz.com/guides/how-to-test-yourself-while-you-read): active recall with no flashcard deck.
+- [When to review what you read](https://mytetz.com/guides/when-to-review-what-you-read): the forgetting curve, and a spaced review schedule.
+- [How students study now](https://mytetz.com/guides/how-students-study-now): the 2026 survey data on study and AI, with each sample size.
+- [Why a person stops an online course](https://mytetz.com/guides/why-a-person-stops-an-online-course): what the 2013-2018 completion data counts.

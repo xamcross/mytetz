@@ -57,6 +57,13 @@ import { BackendState, StatusDotComponent } from './status-dot.component';
     </header>
     <ng-content />
     <footer class="foot">
+      <!--
+        A plain href, and not a routerLink. /guides is a static HTML file under
+        frontend/public/guides, and app.routes.ts has no 'guides' path, so a routerLink would
+        reach the '**' route and open NotFoundPageComponent. The href forces a full document
+        load, which is what a static page needs.
+      -->
+      <a class="foot__link" href="/guides">Guides</a>
       <a class="foot__link" routerLink="/privacy">Privacy</a>
       <a class="foot__link" routerLink="/terms">Terms</a>
       <a class="foot__link" routerLink="/imprint">Imprint</a>
