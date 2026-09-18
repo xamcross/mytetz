@@ -95,6 +95,15 @@ import { rootTextMatchesBody, selectionToSpan } from './selection';
 
       <p class="focus__hint" [class.focus__hint--warning]="!bodyMatches()">{{ hint() }}</p>
 
+      <button
+        type="button"
+        class="mt-pill mt-pill--ghost"
+        data-testid="test-me"
+        (click)="testMeRequested.emit()"
+      >
+        Test me
+      </button>
+
       @if (pickerSpan(); as chosenSpan) {
         <app-verb-picker
           [span]="chosenSpan"
@@ -249,6 +258,10 @@ export class FocusCardComponent {
    * the request needs both. A bare `spanSelected` output would leave the page holding one half of a
    * request whose other half lives on buttons it does not own. */
   readonly explainRequested = output<{ span: SpanPayload; verb: Verb }>();
+
+  /** The learner wants a quiz on the node in focus. This never depends on a selection, so the
+   * button stays available whenever the card itself shows a body. */
+  readonly testMeRequested = output<void>();
 
   // `#bodyEl`, not `#body`: a template reference variable shadows the component's own members
   // inside the template, so `#body` would make `{{ body() }}` resolve to the HTMLParagraphElement
