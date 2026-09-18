@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>When to review what you read | mytetz</title>
+    <meta
+      name="description"
+      content="The forgetting curve, what Ebbinghaus actually measured, and a review schedule that fits a normal week. With the 2015 replication and its limits."
+    />
+    <link rel="canonical" href="https://mytetz.com/guides/when-to-review-what-you-read" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="stylesheet" href="/guides/guides.css" />
+
+    <meta property="og:type" content="article" />
+    <meta property="og:site_name" content="mytetz" />
+    <meta property="og:url" content="https://mytetz.com/guides/when-to-review-what-you-read" />
+    <meta property="og:title" content="When to review what you read" />
+    <meta
+      property="og:description"
+      content="The forgetting curve, what Ebbinghaus actually measured, and a review schedule that fits a normal week."
+    />
+    <meta property="og:image" content="https://mytetz.com/og-image.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": ["Article", "LearningResource"],
+            "@id": "https://mytetz.com/guides/when-to-review-what-you-read#article",
+            "url": "https://mytetz.com/guides/when-to-review-what-you-read",
+            "headline": "When to review what you read",
+            "description": "The forgetting curve, what Ebbinghaus actually measured, and a review schedule that fits a normal week.",
+            "inLanguage": "en",
+            "datePublished": "2026-09-18",
+            "dateModified": "2026-09-18",
+            "learningResourceType": "Guide",
+            "educationalLevel": "Beginner",
+            "teaches": ["Distributed practice", "Spaced review", "The forgetting curve"],
+            "publisher": { "@id": "https://mytetz.com/#organization" },
+            "isPartOf": { "@id": "https://mytetz.com/guides#page" },
+            "citation": [
+              "https://doi.org/10.1037/0033-2909.132.3.354",
+              "https://doi.org/10.1371/journal.pone.0120644",
+              "https://doi.org/10.1177/1529100612453266"
+            ]
+          },
+          {
+            "@type": "BreadcrumbList",
+            "itemListElement": [
+              { "@type": "ListItem", "position": 1, "name": "mytetz", "item": "https://mytetz.com/" },
+              { "@type": "ListItem", "position": 2, "name": "Study guides", "item": "https://mytetz.com/guides" },
+              {
+                "@type": "ListItem",
+                "position": 3,
+                "name": "When to review what you read",
+                "item": "https://mytetz.com/guides/when-to-review-what-you-read"
+              }
+            ]
+          },
+          {
+            "@type": "Organization",
+            "@id": "https://mytetz.com/#organization",
+            "name": "mytetz",
+            "url": "https://mytetz.com/",
+            "logo": "https://mytetz.com/icon.svg",
+            "sameAs": ["https://github.com/xamcross/mytetz"]
+          }
+        ]
+      }
+    </script>
+  </head>
+  <body>
+    <header class="bar">
+      <a class="bar__mark" href="/">mytetz</a>
+      <nav class="bar__nav" aria-label="Main">
+        <a href="/">Catalogue</a>
+        <a href="/guides">Guides</a>
+        <a class="bar__cta" href="/">Start a topic</a>
+      </nav>
+    </header>
+
+    <main class="wrap">
+      <p class="crumb">
+        <a href="/">mytetz</a> &rsaquo; <a href="/guides">Study guides</a> &rsaquo; When to review
+        what you read
+      </p>
+
+      <h1>When to review what you read</h1>
+
+      <p class="answer">
+        Put a gap between your reviews, and make each gap longer than the last. A practical
+        schedule is one day, one week, then one month. A gap beats a repetition in the same
+        sitting: across 254 studies, spaced study gave 47.3% correct recall and massed study gave
+        36.7%.
+      </p>
+
+      <div class="card card--amber">
+        <p class="card__title">Key points</p>
+        <ul>
+          <li>A gap between two reviews beats two reviews together.</li>
+          <li>The best gap grows as the delay to your test grows. One fixed schedule fits nobody.</li>
+          <li>
+            Ebbinghaus measured savings in relearn time, and not recall. One person produced the
+            data.
+          </li>
+          <li>Review only what you failed to recall. Do not re-read the whole section.</li>
+        </ul>
+      </div>
+
+      <nav class="card card--sunk toc" aria-label="On this page">
+        <p class="card__title">On this page</p>
+        <ol>
+          <li><a href="#the-curve">What is the forgetting curve, and what did Ebbinghaus measure?</a></li>
+          <li><a href="#replication">Does the curve replicate?</a></li>
+          <li><a href="#schedule">What schedule do you use?</a></li>
+          <li><a href="#what-to-review">What do you review, and what do you skip?</a></li>
+          <li><a href="#research">What does the research show?</a></li>
+          <li><a href="#questions">Common questions</a></li>
+        </ol>
+      </nav>
+
+      <h2 id="the-curve">What is the forgetting curve, and what did Ebbinghaus measure?</h2>
+
+      <div class="card">
+        <dl class="define">
+          <dt>The forgetting curve</dt>
+          <dd>
+            A plot of memory against time after study. The loss is fast in the first hours. The
+            curve then flattens.
+          </dd>
+        </dl>
+      </div>
+
+      <p>
+        Hermann Ebbinghaus collected the original data on himself in 1879 and 1880, and published
+        it in 1885. Two details matter, and most articles get them wrong.
+      </p>
+
+      <ul>
+        <li>
+          <strong>He measured savings, not recall.</strong> He learnt a list of nonsense syllables,
+          waited, then learnt the same list again. The savings score is the share of time that the
+          second learning saved.
+        </li>
+        <li>
+          <strong>One person produced the data.</strong> The subject was Ebbinghaus himself. The
+          material was nonsense syllables, and not prose.
+        </li>
+      </ul>
+
+      <p>
+        His savings score fell from 58% after 19 minutes to 34% after one day. It then fell slowly,
+        and reached 21% after 31 days. The shape is the useful part: the steep loss happens early,
+        so the first review belongs early.
+      </p>
+
+      <h2 id="replication">Does the curve replicate?</h2>
+
+      <p>
+        Yes, in shape. Murre and Dros repeated the experiment and published the result in
+        <em>PLOS ONE</em> in 2015. Their subject spent about 70 hours on the task. The authors call
+        the resemblance between the curves remarkable.
+      </p>
+
+      <div class="tablewrap">
+        <table>
+          <caption>
+            Savings scores. Murre &amp; Dros (2015), Table 3. Each column is one subject.
+          </caption>
+          <thead>
+            <tr>
+              <th scope="col">Delay</th>
+              <th scope="col">Ebbinghaus (1880)</th>
+              <th scope="col">Dros (2015)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>20 minutes</td><td>0.582</td><td>0.472</td></tr>
+            <tr><td>1 hour</td><td>0.442</td><td>0.373</td></tr>
+            <tr><td>9 hours</td><td>0.358</td><td>0.276</td></tr>
+            <tr><td>1 day</td><td>0.337</td><td>0.317</td></tr>
+            <tr><td>2 days</td><td>0.278</td><td>0.230</td></tr>
+            <tr><td>6 days</td><td>0.254</td><td>0.168</td></tr>
+            <tr><td>31 days</td><td>0.211</td><td>0.041</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>
+        Read the table with the same care. The 2015 replication also used one subject. Two earlier
+        replications, by Mack and by Seitz, each used one subject too. The 31-day value of 0.041
+        sits far below the other three studies, and the authors give no explanation for it.
+      </p>
+
+      <p>
+        The authors also report one deviation from a smooth curve: an upward jump that starts near
+        the 24-hour point. They link it to sleep, and they state that this link remains to be
+        established.
+      </p>
+
+      <h2 id="schedule">What schedule do you use?</h2>
+
+      <p>
+        No paper gives one correct schedule. Cepeda and colleagues found that the best gap grows as
+        the delay to the test grows. So match the gap to your goal, and make each gap longer than
+        the last.
+      </p>
+
+      <div class="tablewrap">
+        <table>
+          <caption>A practical starting schedule. Adjust it to your own deadline.</caption>
+          <thead>
+            <tr>
+              <th scope="col">Goal</th>
+              <th scope="col">First review</th>
+              <th scope="col">Second</th>
+              <th scope="col">Third</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>A test next week</td>
+              <td>Same day, in the evening</td>
+              <td>After 2 days</td>
+              <td>After 5 days</td>
+            </tr>
+            <tr>
+              <td>A test next month</td>
+              <td>After 1 day</td>
+              <td>After 1 week</td>
+              <td>After 3 weeks</td>
+            </tr>
+            <tr>
+              <td>Knowledge that you keep</td>
+              <td>After 1 day</td>
+              <td>After 1 week</td>
+              <td>After 1 month, then every few months</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>
+        A review is a test, and not a re-read. Cover the material. Produce the answer. Then check.
+        The guide on
+        <a href="/guides/how-to-test-yourself-while-you-read">how to test yourself while you read</a>
+        gives the method.
+      </p>
+
+      <h2 id="what-to-review">What do you review, and what do you skip?</h2>
+
+      <ol>
+        <li>Open your marks from the last session. These are the points that you failed to recall.</li>
+        <li>Answer each one from memory, before you open the source.</li>
+        <li>Keep a mark on any point that you fail again. Remove a mark after two clean recalls.</li>
+        <li>Skip every point that you recalled correctly twice. Time on those points buys little.</li>
+      </ol>
+
+      <h2 id="research">What does the research show?</h2>
+
+      <h3>Spaced study against massed study</h3>
+
+      <p>
+        Cepeda, Pashler, Vul, Wixted and Rohrer combined 254 studies with 14,811 participants in
+        2006. Spaced study produced 47.3% correct recall. Massed study produced 36.7%. That is a
+        difference of about ten percentage points, from the same total study time.
+      </p>
+
+      <p>
+        The same review gives the limit that most articles drop: the optimal gap is not fixed. It
+        grows with the interval between study and test. A gap that suits an examination in one week
+        is too short for knowledge that you want in one year.
+      </p>
+
+      <h3>Why a gap is rated so highly</h3>
+
+      <p>
+        In 2013 a review of ten study techniques placed distributed practice in the top group, with
+        practice testing. The two work well together: a spaced schedule decides <em>when</em>, and a
+        retrieval decides <em>what you do</em> at each point.
+      </p>
+
+      <div class="card card--sunk">
+        <p class="card__title">Sources</p>
+        <ul class="sources">
+          <li>
+            Cepeda, N. J., Pashler, H., Vul, E., Wixted, J. T., &amp; Rohrer, D. (2006).
+            Distributed practice in verbal recall tasks: A review and quantitative synthesis.
+            <em>Psychological Bulletin</em>, 132(3), 354&ndash;380.
+            <a href="https://doi.org/10.1037/0033-2909.132.3.354" rel="nofollow"
+              >doi:10.1037/0033-2909.132.3.354</a
+            >
+          </li>
+          <li>
+            Murre, J. M. J., &amp; Dros, J. (2015). Replication and Analysis of Ebbinghaus'
+            Forgetting Curve. <em>PLOS ONE</em>, 10(7): e0120644.
+            <a href="https://doi.org/10.1371/journal.pone.0120644" rel="nofollow"
+              >doi:10.1371/journal.pone.0120644</a
+            >
+          </li>
+          <li>
+            Ebbinghaus, H. (1885). <em>&Uuml;ber das Ged&auml;chtnis</em>. Leipzig: Duncker &amp;
+            Humblot. English translation: Ruger &amp; Bussenius (1913), <em>Memory</em>.
+          </li>
+          <li>
+            Dunlosky, J., Rawson, K. A., Marsh, E. J., Nathan, M. J., &amp; Willingham, D. T.
+            (2013). <em>Psychological Science in the Public Interest</em>, 14(1), 4&ndash;58.
+            <a href="https://doi.org/10.1177/1529100612453266" rel="nofollow"
+              >doi:10.1177/1529100612453266</a
+            >
+          </li>
+        </ul>
+      </div>
+
+      <h2 id="questions">Common questions</h2>
+
+      <div class="qa">
+        <h3>Is the forgetting curve a solid group result?</h3>
+        <p>
+          No. One person produced the original data, and the 2015 replication also used one person.
+          The shape repeats across those studies, so use the shape. Do not quote a percentage as a
+          general human average.
+        </p>
+      </div>
+
+      <div class="qa">
+        <h3>Do I need a spaced-repetition application?</h3>
+        <p>
+          No. Software schedules the reviews for you, which helps with hundreds of items. A
+          calendar entry and a list of your marked gaps do the same work for a few topics.
+        </p>
+      </div>
+
+      <div class="qa">
+        <h3>Is a longer gap always better?</h3>
+        <p>
+          No. A gap that is too long leaves you with nothing to retrieve. Set the gap so that
+          recall feels difficult but possible.
+        </p>
+      </div>
+
+      <div class="qa">
+        <h3>Can I review by reading my notes again?</h3>
+        <p>
+          That is a re-read, and the 2013 review rated it in the lowest group. Cover the notes and
+          produce the answer first. Read them afterwards, to check.
+        </p>
+      </div>
+
+      <h2 id="next">Where do you go next?</h2>
+      <ul>
+        <li>
+          <a href="/guides/how-to-test-yourself-while-you-read">How to test yourself while you read</a>
+          &mdash; what you do at each review.
+        </li>
+        <li>
+          <a href="/guides/how-to-study-on-your-own">How to study on your own</a> &mdash; the loop
+          that this schedule completes.
+        </li>
+      </ul>
+
+      <section class="start">
+        <h2>Start with a topic</h2>
+        <p>
+          The memory research is itself a topic in the catalogue. Read it, then apply the schedule
+          to it.
+        </p>
+        <!-- These three links point at the catalogue until issue #45 publishes a page for
+             each topic at /topics/<slug>. Swap the href values then, and link Human Memory
+             to /topics/human-memory. -->
+        <ul class="start__list">
+          <li>
+            <a href="/">Human Memory<span>How the brain keeps a fact, and why it drops one.</span></a>
+          </li>
+          <li>
+            <a href="/">Neuroscience<span>How electrical signals become sensation and thought.</span></a>
+          </li>
+          <li>
+            <a href="/">Probability<span>How to reason when you cannot know the outcome.</span></a>
+          </li>
+        </ul>
+        <a class="start__cta" href="/">Open the catalogue</a>
+      </section>
+    </main>
+
+    <footer class="foot">
+      <div class="foot__inner">
+        <p class="foot__meta">Last reviewed 2026-09-18. Published by mytetz.</p>
+        <nav class="foot__links" aria-label="Footer">
+          <a href="/">Catalogue</a>
+          <a href="/guides">Guides</a>
+          <a href="/privacy">Privacy</a>
+          <a href="/terms">Terms</a>
+          <a href="/imprint">Imprint</a>
+        </nav>
+      </div>
+    </footer>
+  </body>
+</html>

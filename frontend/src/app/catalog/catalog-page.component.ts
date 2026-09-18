@@ -62,6 +62,19 @@ import { SessionView, TopicSummary } from '../core/models';
           </div>
         </div>
 
+        <!--
+          This link sits after the filter row, and not before it. catalog-page.component.spec.ts
+          asserts that .catalog__intro is the immediate sibling of .catalog__filter, which is an
+          acceptance criterion of the introduction issue.
+
+          A plain href, and not a routerLink: /guides is a static HTML file under
+          frontend/public/guides, and app.routes.ts has no 'guides' path, so a routerLink would
+          reach the wildcard route and open NotFoundPageComponent.
+        -->
+        <p class="catalog__guides">
+          Do you want a method first? Read the <a href="/guides">study guides</a>.
+        </p>
+
         @if (sessionError(); as err) {
           <div class="mt-card mt-card--error banner banner--error" role="alert">
             <p class="banner__message">{{ err.message }}</p>
@@ -178,6 +191,13 @@ import { SessionView, TopicSummary } from '../core/models';
         font-weight: 500;
         color: var(--mt-muted);
         text-wrap: pretty;
+      }
+      .catalog__guides {
+        margin: 0;
+        font-size: 16px;
+        line-height: 1.6;
+        font-weight: 500;
+        color: var(--mt-muted);
       }
       .catalog__label {
         position: absolute;

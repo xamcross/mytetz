@@ -16,6 +16,14 @@ import {
 
 const ROUTES = ['/privacy', '/terms', '/imprint'];
 
+/**
+ * Every href the footer carries, in order. Issue #63 added the guide hub, which is a static HTML
+ * file and not a legal route, so it stays out of ROUTES: that constant drives the legal-page
+ * checks below. The assertions stay an exact match, and not a subset, so that a legal link cannot
+ * disappear without a failure here.
+ */
+const FOOTER_LINKS = ['/guides', ...ROUTES];
+
 /** Issue #35's own acceptance criteria: the tab names the page, not the generic title
  * `index.html` sets for every route. */
 const TITLES: Record<string, string> = {
@@ -75,25 +83,25 @@ async function stubActiveAccount(page: Page): Promise<void> {
   );
 }
 
-test('the footer carries the three legal links on the catalogue, the reader, the auth page and the account page', async ({
+test('the footer carries the legal links on the catalogue, the reader, the auth page and the account page', async ({
   page,
 }) => {
   await stubCatalogueAndSession(page);
   await page.goto('/');
   await page.locator('.topic__button').first().waitFor();
-  expect(await footerLinks(page)).toEqual(['/privacy', '/terms', '/imprint']);
+  expect(await footerLinks(page)).toEqual(FOOTER_LINKS);
 
   await openReaderWall(page);
-  expect(await footerLinks(page)).toEqual(['/privacy', '/terms', '/imprint']);
+  expect(await footerLinks(page)).toEqual(FOOTER_LINKS);
 
   await page.goto('/auth?auth=failed');
   await expect(page.getByText('Sign-in did not complete.')).toBeVisible();
-  expect(await footerLinks(page)).toEqual(['/privacy', '/terms', '/imprint']);
+  expect(await footerLinks(page)).toEqual(FOOTER_LINKS);
 
   await stubActiveAccount(page);
   await page.goto('/account');
   await page.getByText('learner@example.com').waitFor();
-  expect(await footerLinks(page)).toEqual(['/privacy', '/terms', '/imprint']);
+  expect(await footerLinks(page)).toEqual(FOOTER_LINKS);
 });
 
 test('the account and auth tabs carry their own title', async ({ page }) => {

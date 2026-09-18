@@ -23,7 +23,7 @@ test('robots.txt is a plain-text file that allows every crawler and names the si
   expect(body).not.toContain('Disallow: /api');
 });
 
-test('sitemap.xml lists the home page only, in a valid urlset', async ({ request }) => {
+test('sitemap.xml lists the home page and every guide, in a valid urlset', async ({ request }) => {
   const response = await request.get('/sitemap.xml');
   expect(response.status()).toBe(200);
   expect(response.headers()['content-type']).toContain('xml');
@@ -31,6 +31,19 @@ test('sitemap.xml lists the home page only, in a valid urlset', async ({ request
   const body = await response.text();
   expect(body).toContain('<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">');
   expect(body).toContain('<loc>https://mytetz.com/</loc>');
+  // Issue #63 adds the guide pages. Issue #46 replaces this static file with a Ktor route, and
+  // that route must keep every URL below — see step 6 of #46.
+  for (const slug of [
+    '/guides',
+    '/guides/how-to-study-on-your-own',
+    '/guides/what-to-use-instead-of-a-highlighter',
+    '/guides/how-to-test-yourself-while-you-read',
+    '/guides/when-to-review-what-you-read',
+    '/guides/how-students-study-now',
+    '/guides/why-a-person-stops-an-online-course',
+  ]) {
+    expect(body).toContain(`<loc>https://mytetz.com${slug}</loc>`);
+  }
   // The reader, the account page and the auth page all sit behind the sign-in wall or the
   // magic-link flow — see issue #32, implementation step 2 — so none of them belongs here.
   for (const path of ['/learn/', '/account', '/auth']) {
