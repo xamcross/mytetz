@@ -27,15 +27,45 @@ transcript. A token with that scope must not stay in a transcript.
    - Zone → DNS → Edit
    - Zone → Zone Settings → Edit
    - Zone → Cache Purge → Purge
-   - Zone → Rate Limit → Edit
+   - Zone → Zone WAF → Edit
 4. Set **Zone Resources** to `Include → Specific zone → mytetz.com`. Do not use `All zones`.
 5. Store the new value in a password manager. Do not put it in a chat, a file, or a commit.
 
 **How to know it worked.** Run a read command with the new token. The command must succeed for
 `mytetz.com` and fail for another zone in the account.
 
-> The `Zone → Rate Limit → Edit` permission is new. The old token did not have it. Step 4.2 needs
-> it.
+```bash
+# Is the token live? An ACCOUNT-owned token verifies here, not at /user/tokens/verify.
+curl -s "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/tokens/verify" \
+  -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN"
+
+# Which zones does it reach? The answer must hold mytetz.com and nothing else.
+curl -s "https://api.cloudflare.com/client/v4/zones" \
+  -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN"
+```
+
+> **Check the prefix of the token before you verify it.** The prefix decides the endpoint.
+>
+> | Prefix | Kind | Verify at |
+> |---|---|---|
+> | `cfut_` | User API token | `/user/tokens/verify` |
+> | `cfat_` | Account API token | `/accounts/{account_id}/tokens/verify` |
+>
+> The wrong endpoint answers `401 {"code":1000,"message":"Invalid API Token"}` for a good token.
+> That answer looks the same as a dead token, and it wasted time on 2026-09-19. The token this
+> project uses is `cfat_`, so it verifies at the account endpoint.
+>
+> Send the whole value, with the prefix and the checksum. Cloudflare rejects a value that has the
+> prefix stripped. See
+> [token formats](https://developers.cloudflare.com/fundamentals/api/get-started/token-formats/).
+
+> The `Zone → Zone WAF → Edit` permission is new. The old token did not have it. Step 4.2 needs it.
+>
+> Cloudflare has no permission named `Rate Limit`. It moved rate limiting into the WAF. `Zone WAF`
+> is the permission that grants write access to a rate limiting rule. Its API name is
+> `Zone WAF Write`. See
+> [the permission list](https://developers.cloudflare.com/fundamentals/api/reference/permissions/)
+> and [create a rate limiting rule via API](https://developers.cloudflare.com/waf/rate-limiting-rules/create-api/).
 
 ---
 
@@ -212,7 +242,7 @@ nothing says why.
    - Rate: 300 requests in 1 minute for each IP address
    - Action: Managed challenge
 
-This step needs the `Zone → Rate Limit → Edit` permission from step 1.1.
+This step needs the `Zone → Zone WAF → Edit` permission from step 1.1.
 
 ### Step 4.3 — Turn on Bot Fight Mode
 
