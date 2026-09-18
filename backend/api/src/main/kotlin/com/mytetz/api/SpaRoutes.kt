@@ -47,16 +47,27 @@ private const val STATIC_PACKAGE = "static"
 private val HASHED_BUNDLE = Regex("""(main|chunk)-.*\.js|styles-.*\.css""")
 
 /**
- * The `Cache-Control` value for a static file named [fileName].
+ * The `Cache-Control` value for the static resource at [resourcePath].
  *
- * A hashed bundle keeps one name for one content forever, so the browser and Cloudflare may keep
- * it for a year. `index.html` names the current deploy, so a shared cache must ask again on every
- * visit. Every other file — a font, an icon, `robots.txt`, `sitemap.xml`, `llms.txt` — is safe to
- * keep for a day.
+ * The value keys on the **resolved** path, and never on the URL a visitor typed. One file
+ * therefore answers with one header, whether a request reads `/guides`, `/guides/` or
+ * `/guides/index.html`.
+ *
+ * - The root `index.html` names the current deploy, so a shared cache must ask again on every
+ *   visit.
+ * - A hashed bundle keeps one name for one content forever, so a cache may keep it for a year.
+ * - Any other `index.html` is a static content page, for example a guide under `/guides`. It
+ *   carries no hashed name, so an edit reaches a visitor only when the cache expires. One hour
+ *   keeps the page fresh without a request on every visit.
+ * - Every other file — a font, an icon, `robots.txt`, `sitemap.xml`, `llms.txt` — is safe to keep
+ *   for a day. One caveat: `guides.css` carries no hash either, so a change to it can reach a
+ *   visitor up to a day after a change to the page that links it. Rename the file when a change
+ *   to it must arrive with the page.
  */
-internal fun cacheControlFor(fileName: String): String = when {
-    fileName == "index.html" -> "no-cache"
-    HASHED_BUNDLE.matches(fileName) -> "public, max-age=31536000, immutable"
+internal fun cacheControlFor(resourcePath: String): String = when {
+    resourcePath == "index.html" -> "no-cache"
+    resourcePath.endsWith("/index.html") -> "public, max-age=3600"
+    HASHED_BUNDLE.matches(resourcePath.substringAfterLast('/')) -> "public, max-age=31536000, immutable"
     else -> "public, max-age=86400"
 }
 
@@ -72,14 +83,30 @@ internal fun cacheControlFor(fileName: String): String = when {
  */
 fun Route.spaRoutes() {
     get("{spaFallbackPath...}") {
-        val relativePath = call.parameters.getAll("spaFallbackPath")
+        // `trim('/')` folds `/guides/` onto `/guides`. The tailcard keeps the empty last segment
+        // of a path that ends in a slash, and `resolveResource` rejects such a path outright.
+        // Both URLs then answer one file, and each page's own canonical tag names the one URL a
+        // search engine should keep.
+        val requestedPath = call.parameters.getAll("spaFallbackPath")
             ?.joinToString("/")
             .orEmpty()
+            .trim('/')
             .ifEmpty { "index.html" }
 
-        val asset = call.resolveResource(relativePath, STATIC_PACKAGE)
-        if (asset != null) {
-            call.response.header(HttpHeaders.CacheControl, cacheControlFor(relativePath.substringAfterLast('/')))
+        // Ktor 3.1.2's `resolveResource` returns null for a path that names a folder: it tests
+        // `isFile` for the `file` protocol and for the `jar` protocol, and it never appends
+        // `index.html`. A clean URL such as `/guides/how-to-study-on-your-own` therefore needs the
+        // second lookup. `staticResources(index = "index.html")` would do this, but 3.1.2 gives it
+        // no `fallback` hook, so an unknown path under it would lose the shell — see this file's
+        // own doc comment.
+        val resolved = listOf(requestedPath, "$requestedPath/index.html")
+            .firstNotNullOfOrNull { path ->
+                call.resolveResource(path, STATIC_PACKAGE)?.let { path to it }
+            }
+
+        if (resolved != null) {
+            val (resolvedPath, asset) = resolved
+            call.response.header(HttpHeaders.CacheControl, cacheControlFor(resolvedPath))
             call.respond(asset)
             return@get
         }
