@@ -59,7 +59,7 @@ Do these before the site carries real traffic.
    - `unrecognised stop reason` — the model returned a stop reason that the validator does not
      know. The validator rejects the answer.
    Today a person sees these only if that person runs `fly logs` at the moment of the event.
-3. **Apply Cloudflare rate limiting.** The Cloudflare token did not have the `Zone → Rate Limit →
+3. **Apply Cloudflare rate limiting.** The Cloudflare token did not have the `Zone → Zone WAF →
    Edit` permission, so nobody applied the rule. This rule is the second bound on the explain
    endpoint. See section 5.
 4. **Run the acceptance checks.** Section 6 lists them. They need a live deployment and credit.
