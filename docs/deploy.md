@@ -286,8 +286,29 @@ dashboard / API and are not automated by this repo.**
 4. **Cache rule: bypass cache for `/api/*`.** Not optional. Without it Cloudflare
    buffers and caches `text/event-stream` responses and the SSE reader silently
    stops streaming — the single most likely cause of "explanations never arrive".
-5. **Rate limiting rule:** `/api/*`, 60 requests per minute per IP.
-6. **Bot Fight Mode: on.**
+5. **Rate limiting rule: one rule, on the explain path.** Named `session-explain`.
+   Match: `http.request.uri.path contains "/api/sessions/" and ends_with(http.request.uri.path, "/explain")`.
+   Rate: **10 requests per 10 seconds**, per IP per datacenter. Action: block for
+   10 seconds. A blocked caller gets `429` with Cloudflare error `1015`.
+
+   **The zone is on the Free plan, and that decides the shape of this rule.**
+   Free allows one rule, a counting period of 10 s only, a mitigation timeout of
+   10 s only, and the IP characteristic only. So a one-minute window, a ten-minute
+   block, and a second rule for all of `/api/*` are all impossible here. Pro raises
+   the limits to two rules, a one-minute period and a one-hour timeout. The owner
+   chose to stay on Free on 2026-09-19. See
+   [rate limiting rules](https://developers.cloudflare.com/waf/rate-limiting-rules/).
+
+   **What this rule bounds.** It brakes bursts, and it survives a restart of the
+   app, which the in-process limiter does not. It is not a daily cap: 10 per 10 s
+   is 60 per minute. `EXPLAINS_PER_CALLER` (30 per 10 minutes, in
+   `SessionRoutes.kt`) is the tighter bound for a caller that comes through
+   `mytetz.com`. **It bounds nothing for a caller that goes straight to
+   `mytetz.fly.dev`,** because that host never reaches Cloudflare. Issue #68
+   tracks that hole.
+6. **Bot Fight Mode: on.** Security > Bots. The API token in `.env` cannot read or
+   set this — `GET /zones/{zone}/bot_management` answers `403`. It is a dashboard
+   step unless the token gains `Zone → Bot Management → Edit`.
 7. **Redirect Rule: `www` to apex.** Rules > Redirect Rules > "Redirect www to
    apex (301)". Condition: `http.host eq "www.mytetz.com"`. Action: a dynamic
    redirect to `concat("https://mytetz.com", http.request.uri.path)`, status
@@ -300,7 +321,17 @@ Verify end to end:
 curl -s https://mytetz.com/api/health         # {"status":"ok","mongo":true,"ready":true}
 curl -sI https://mytetz.com/api/health | grep -i cf-cache-status   # expect BYPASS/DYNAMIC
 curl -sS -o /dev/null -w "%{http_code} %{redirect_url}\n" "https://www.mytetz.com/privacy?x=1"   # expect 301 https://mytetz.com/privacy?x=1
+
+# The rate limiting rule. Fourteen POSTs on one connection stay inside the 10 s window.
+# Expect the app's 401 for the first ten or so, then 429 with "error code: 1015" from Cloudflare.
+# The boundary moves by one either way: the counter is distributed and approximate.
+U="https://mytetz.com/api/sessions/x/explain"
+curl -s -o /dev/null -w '%{http_code} ' -X POST -H "content-type: application/json" \
+  --data '{"verb":"EXPLAIN"}' $U $U $U $U $U $U $U $U $U $U $U $U $U $U; echo
 ```
+
+The session id `x` does not exist, so the app answers `401` before it generates
+anything. The check costs no money.
 
 If `https://mytetz.fly.dev/api/health` is healthy but `https://mytetz.com/api/health`
 is not, the fault is in Cloudflare (DNS record, proxy status, SSL mode, or a rule),
