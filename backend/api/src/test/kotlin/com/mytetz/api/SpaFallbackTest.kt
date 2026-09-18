@@ -115,4 +115,81 @@ class SpaFallbackTest {
             client.get("/robots.txt").headers[HttpHeaders.CacheControl],
         )
     }
+
+    @Test
+    fun `a folder that holds an index html answers that page, and not the shell`() = testApplication {
+        application {
+            install(ContentNegotiation) { json() }
+            routing { wireUp() }
+        }
+
+        val response = client.get("/guides")
+
+        assertEquals(HttpStatusCode.OK, response.status)
+        assertTrue(
+            response.bodyAsText().contains("<h1>Study guides</h1>"),
+            "/guides must answer the guide hub, and not the Angular shell",
+        )
+    }
+
+    @Test
+    fun `a folder path with a trailing slash answers the same page`() = testApplication {
+        application {
+            install(ContentNegotiation) { json() }
+            routing { wireUp() }
+        }
+
+        val withoutSlash = client.get("/guides")
+        val withSlash = client.get("/guides/")
+
+        assertEquals(HttpStatusCode.OK, withSlash.status)
+        assertEquals(withoutSlash.bodyAsText(), withSlash.bodyAsText())
+    }
+
+    /**
+     * Pins one real guide URL, which is an acceptance criterion of #63. A rename of the folder
+     * fails here. So does a change of case: the runtime serves these files from inside `api.jar`,
+     * and `JarFileContent` is case-sensitive, so `/Guides/...` would answer 200 on a Windows
+     * developer machine and 404 in production.
+     */
+    @Test
+    fun `a nested index html answers with an hour of public caching`() = testApplication {
+        application {
+            install(ContentNegotiation) { json() }
+            routing { wireUp() }
+        }
+
+        val response = client.get("/guides/how-to-study-on-your-own")
+
+        assertEquals(HttpStatusCode.OK, response.status)
+        assertEquals("public, max-age=3600", response.headers[HttpHeaders.CacheControl])
+    }
+
+    @Test
+    fun `the header does not depend on the URL a visitor typed`() = testApplication {
+        application {
+            install(ContentNegotiation) { json() }
+            routing { wireUp() }
+        }
+
+        // Three URLs, one file. Before this route resolved a folder index, `/guides` took the
+        // 86400 branch on the name `guides`, and `/guides/index.html` took the `no-cache` branch
+        // that belongs to the shell alone.
+        val expected = "public, max-age=3600"
+        assertEquals(expected, client.get("/guides").headers[HttpHeaders.CacheControl])
+        assertEquals(expected, client.get("/guides/").headers[HttpHeaders.CacheControl])
+        assertEquals(expected, client.get("/guides/index.html").headers[HttpHeaders.CacheControl])
+    }
+
+    @Test
+    fun `a folder with no index html still answers 404`() = testApplication {
+        application {
+            install(ContentNegotiation) { json() }
+            routing { wireUp() }
+        }
+
+        // `static/fonts` holds the four woff2 files and no `index.html`.
+        assertEquals(HttpStatusCode.NotFound, client.get("/fonts").status)
+        assertEquals(HttpStatusCode.NotFound, client.get("/fonts/").status)
+    }
 }
