@@ -123,6 +123,14 @@ open class Components(
     /** The two settings [evictExplanations] reads: how quiet, and how old, a document must be. */
     private val evictionConfig = EvictionConfig()
 
+    /**
+     * Where the last call to [evictExplanations] stopped reading, or `null` when the next call
+     * must start from the single oldest candidate — either because no call has run yet, or
+     * because the last call read all the way to the end of the candidate set. See
+     * [evictExplanations]'s own KDoc for why this lives here, in memory, and nowhere else.
+     */
+    private var evictionCursor: Explanation? = null
+
     /** Public so `Application.kt` can pass it to `authRoutes`, which reads a counter for `GET /api/account`. */
     val quotaRepository = QuotaRepository(mongo.database)
 
@@ -408,30 +416,43 @@ open class Components(
      * two-step rule lives here: read one page of candidates, remove the keys a session still
      * points at, and delete the rest.
      *
-     * ## Why one page is not enough, and the bound this run keeps instead
+     * ## The bound of one run
      *
      * A session belonging to a signed-in learner is not deleted until account deletion, so the
      * oldest candidates are, in practice, disproportionately the ones a session still references.
      * A single page ordered oldest-first can therefore be entirely referenced, while an
-     * unreferenced document waits just behind it — and a job that reads one page and stops would
-     * then remove nothing, on this run or any later one, because every run reads the same oldest
-     * page again. This method instead walks forward with [pageSize]-sized pages, using
-     * [ExplanationRepository.findEvictionCandidates]'s `after` cursor, until one of three things
-     * stops it: a page comes back short (there is nothing left to read), or it has read
-     * [EVICTION_MAX_PAGES_PER_RUN] pages, or — implicitly — the process runs out of daily calls,
-     * because nothing here waits between pages. **[EVICTION_MAX_PAGES_PER_RUN] pages of
-     * [pageSize] each is the fixed bound for one run**; it is not a full sweep of the collection.
+     * unreferenced document waits just behind it. This method walks forward with [pageSize]-sized
+     * pages, using [ExplanationRepository.findEvictionCandidates]'s `after` cursor, until one page
+     * comes back short — meaning there is nothing left to read — or it has read [maxPagesPerRun]
+     * pages, whichever comes first. **[maxPagesPerRun] pages of [pageSize] each is the fixed bound
+     * for one run**; it is not a full sweep of the collection, and one page is one `find`, one
+     * `distinct` and at most one `deleteMany`, so one run is a small, predictable number of
+     * database round trips.
      *
-     * A run's own cursor lives only in this method's local variables. It is not persisted, and it
-     * is not carried into the next call: **a run that hits its page bound with referenced
-     * candidates still ahead of it makes no note of where it stopped, and the next run — the next
-     * day, or the next boot — starts again from the single oldest candidate.** A collection that
-     * holds more than [EVICTION_MAX_PAGES_PER_RUN] × [pageSize] contiguous, still-referenced old
-     * candidates therefore delays reaching what lies behind them until enough of those candidates
-     * stop being referenced, or until an operator raises the bound. That is a slower recovery than
-     * a persisted cursor would give, and it is deliberate: this method already reasons about failing
-     * mid-run (see the try/catch in [bootstrap]), and a stored cursor would have to be reasoned
-     * about failing too, for a rule this codebase has not needed anywhere else in this class.
+     * ## The position carries over, so every candidate gets a turn
+     *
+     * A single run's bound is not, on its own, enough: a collection can hold far more than
+     * [maxPagesPerRun] × [pageSize] contiguous referenced candidates ahead of the next removable
+     * one, and a job that started over from the oldest candidate on every call would then never
+     * reach anything behind them, on any later call either. So [evictionCursor] remembers, across
+     * calls, the last candidate a run actually read. The next call resumes strictly past it — see
+     * [ExplanationRepository.findEvictionCandidates]'s own KDoc on the `after` parameter — rather
+     * than reading the same oldest page again. When a run's last page comes back short, the scan
+     * has reached the end of the whole candidate set, and [evictionCursor] is cleared, so the next
+     * call wraps around and starts again from the single oldest candidate — the same as if no call
+     * had ever run.
+     *
+     * [evictionCursor] lives in memory only, on this instance, and needs no persistence and no new
+     * failure handling: a position that names a document another run already deleted is not a
+     * fault, because [ExplanationRepository.findEvictionCandidates]'s cursor filter compares
+     * `createdAtEpochMillis` and `_id` values and needs no document to exist at them. A process
+     * restart clears it, which is correct — the position is a resume point for an unfinished
+     * sweep, not a record that must survive one.
+     *
+     * A full pass of a collection of `N` candidates therefore takes
+     * `ceil(N / (maxPagesPerRun × pageSize))` calls to this method — with the daily loop in
+     * `Application.kt`, that many days — after which every candidate that was ever unreferenced
+     * and stayed that way has had its turn, however many referenced candidates sit ahead of it.
      *
      * ## The check-then-delete race, and how far the delete closes it
      *
@@ -443,17 +464,21 @@ open class Components(
      * window no longer matches, and it survives. This closes most of the window. It does not
      * close every case; `SessionService.hydrate`'s own KDoc names the residual one.
      *
-     * `open` only so a test can shrink [pageSize], or replace this method outright to prove a
-     * caller survives its failure — see [bootstrap] and the daily loop in `Application.kt`. There
-     * is no production subclass.
+     * `open` only so a test can shrink [pageSize] and [maxPagesPerRun], or replace this method
+     * outright to prove a caller survives its failure — see [bootstrap] and the daily loop in
+     * `Application.kt`. There is no production subclass.
      */
-    open suspend fun evictExplanations(pageSize: Int = EVICTION_PAGE_SIZE) {
+    open suspend fun evictExplanations(
+        pageSize: Int = EVICTION_PAGE_SIZE,
+        maxPagesPerRun: Int = EVICTION_MAX_PAGES_PER_RUN,
+    ) {
         var removed = 0L
         var scanned = 0
-        var cursor: Explanation? = null
+        var cursor: Explanation? = evictionCursor
         var pagesRead = 0
+        var reachedEnd = false
 
-        while (pagesRead < EVICTION_MAX_PAGES_PER_RUN) {
+        while (pagesRead < maxPagesPerRun) {
             val page = explanations.findEvictionCandidates(
                 maxRequestCount = evictionConfig.maxRequestCount,
                 olderThanEpochMillis = System.currentTimeMillis() - evictionConfig.maxAgeDays * DAY_MILLIS,
@@ -461,7 +486,10 @@ open class Components(
                 after = cursor,
             )
             pagesRead++
-            if (page.isEmpty()) break
+            if (page.isEmpty()) {
+                reachedEnd = true
+                break
+            }
 
             scanned += page.size
             val keys = page.map { it.key }
@@ -472,8 +500,15 @@ open class Components(
             }
 
             cursor = page.last()
-            if (page.size < pageSize) break // a short page: nothing is left behind it
+            if (page.size < pageSize) {
+                reachedEnd = true // a short page: nothing is left behind it
+                break
+            }
         }
+
+        // A run that reached the end wraps around; a run that only hit its page bound resumes
+        // from here next time, so the candidates behind it still get their turn.
+        evictionCursor = if (reachedEnd) null else cursor
 
         log.info("EVICTION removed={} scanned={}", removed, scanned)
     }
@@ -489,18 +524,24 @@ open class Components(
         const val RECONCILE_LIMIT: Int = 500
 
         /** The default page size [evictExplanations] reads with, absent an override. */
-        const val EVICTION_PAGE_SIZE: Int = 100
+        const val EVICTION_PAGE_SIZE: Int = 250
 
         /**
          * How many pages [evictExplanations] reads in one run, at most.
          *
          * [EVICTION_PAGE_SIZE] × [EVICTION_MAX_PAGES_PER_RUN] is therefore the most documents one
-         * run scans — 500 by default, the same reasoning [RECONCILE_LIMIT] states: a bound keeps
-         * one run predictable, rather than scanning the whole collection in one sweep. Reading
-         * that bound in pages, rather than in one query, is what lets a run walk past a page that
-         * held nothing removable — see [evictExplanations]'s own KDoc for why that matters.
+         * run scans — 5,000 by default, the same reasoning [RECONCILE_LIMIT] states: a bound
+         * keeps one run predictable, rather than scanning the whole collection in one sweep. Each
+         * page costs one `find`, one `distinct` and at most one `deleteMany`, so a full run of
+         * twenty pages is at most sixty small database round trips — cheap enough that this bound
+         * is about predictability, not about protecting the database from one run.
+         *
+         * Reading that bound in pages, rather than in one query, is what lets a run walk past a
+         * page that held nothing removable. `evictionCursor` is what lets the *next* run resume
+         * where this one stopped, rather than reading the same oldest page again — see
+         * [evictExplanations]'s own KDoc for both.
          */
-        const val EVICTION_MAX_PAGES_PER_RUN: Int = 5
+        const val EVICTION_MAX_PAGES_PER_RUN: Int = 20
 
         const val MIGRATE_ON_BOOT_ENV: String = "MYTETZ_MIGRATE_ON_BOOT"
         const val PUBLIC_BASE_URL_ENV: String = "MYTETZ_PUBLIC_BASE_URL"

@@ -723,6 +723,53 @@ class ComponentsTest {
         }
 
     @Test
+    fun `evictExplanations carries its position across calls, so a later run reaches what an earlier one could not`() =
+        runTest {
+            val components = components("evict_carries_position")
+            val explanations = ExplanationRepository(components.mongo.database)
+            val sessions = SessionRepository(components.mongo.database)
+
+            // Six old, unread, REFERENCED documents — more than one run of pageSize = 2 and
+            // maxPagesPerRun = 2 can read (four documents) in a single call.
+            val referencedKeys = (0 until 6).map { "ref-$it" }
+            referencedKeys.forEachIndexed { i, key ->
+                explanations.insertIfAbsent(oldExplanation(key, createdAtEpochMillis = daysAgo(100) + i))
+            }
+            sessions.insert(
+                LearningSession(
+                    id = "s1",
+                    principalId = "anon:alice",
+                    topicSlug = "quantum-physics",
+                    rootNodeId = "n0",
+                    currentNodeId = "n0",
+                    nodes = referencedKeys.mapIndexed { i, key ->
+                        SessionNode("n$i", if (i == 0) null else "n${i - 1}", key, "", Verb.SEED, 0, i, daysAgo(100))
+                    },
+                    startedAtEpochMillis = daysAgo(100),
+                    lastActiveAtEpochMillis = daysAgo(100),
+                ),
+            )
+            // One old, unread, UNREFERENCED document, newer than all six above.
+            explanations.insertIfAbsent(oldExplanation("unreferenced", createdAtEpochMillis = daysAgo(99)))
+
+            components.evictExplanations(pageSize = 2, maxPagesPerRun = 2)
+            assertNotNull(
+                explanations.findByKey("unreferenced"),
+                "the first call reads only the six referenced documents; it must not reach this one yet",
+            )
+
+            components.evictExplanations(pageSize = 2, maxPagesPerRun = 2)
+
+            assertNull(
+                explanations.findByKey("unreferenced"),
+                "a later call must resume where the previous one stopped, and reach this document",
+            )
+            referencedKeys.forEach {
+                assertNotNull(explanations.findByKey(it), "a referenced document must still survive")
+            }
+        }
+
+    @Test
     fun `evictExplanations never removes a recent document`() = runTest {
         val components = components("evict_recent")
         val explanations = ExplanationRepository(components.mongo.database)
@@ -767,7 +814,7 @@ class ComponentsTest {
             cookies = TestFixtures.cookieConfig,
             llmFactory = { FakeLlmClient() },
         ) {
-            override suspend fun evictExplanations(pageSize: Int) {
+            override suspend fun evictExplanations(pageSize: Int, maxPagesPerRun: Int) {
                 error("eviction blew up")
             }
         }
@@ -782,7 +829,7 @@ class ComponentsTest {
             cookies = TestFixtures.cookieConfig,
             llmFactory = { FakeLlmClient() },
         ) {
-            override suspend fun evictExplanations(pageSize: Int) {
+            override suspend fun evictExplanations(pageSize: Int, maxPagesPerRun: Int) {
                 error("eviction blew up")
             }
         }
