@@ -282,8 +282,9 @@ test('aborts the in-flight fetch when the reader navigates away mid-stream', asy
   // The proof this test exists for: the abort path actually ran, not merely that nothing crashed.
   await expect.poll(() => stream.aborted()).toBe(true);
 
-  // Back on the catalogue, with the topic tile live again — the navigation itself completed cleanly.
-  await expect(page.getByRole('button', { name: /Quantum Physics/ })).toBeEnabled();
+  // Back on the catalogue, with the topic tile live again — the navigation itself completed
+  // cleanly. Issue #45 turns the tile into a plain link, so its accessible role is now "link".
+  await expect(page.getByRole('link', { name: /Quantum Physics/ })).toBeEnabled();
   // And nothing thrown by the aborted generation escaped as an uncaught exception or unhandled
   // rejection. `SessionStore.explain`'s `catch` checks `controller.signal.aborted` and returns
   // silently for exactly this reason; this is the assertion that it actually does.

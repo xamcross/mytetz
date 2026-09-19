@@ -101,12 +101,31 @@ export async function stubCatalogueAndSession(
   return { sessionGetCount: () => getCount };
 }
 
-/** Opens `/`, waits for the catalogue, and starts the one stubbed topic — the first three of
- * acceptance criteria 1-2 (catalogue lists topics; selecting one creates a session and renders its
- * seed), common to every spec below. */
+/**
+ * Opens the reader on the one stubbed session, and renders its seed.
+ *
+ * Issue #45 turns the catalogue tile into a plain `<a href="/topics/<slug>">` link to a page Ktor
+ * renders — the "Start with this topic" control that creates a session now belongs on that page,
+ * not on the catalogue tile. This suite runs against a bare `ng serve` (see `playwright.config.ts`'s
+ * own doc comment): no Ktor process, and no Mongo, run alongside it, so `/topics/quantum-physics`
+ * cannot resolve here the way it does in production. Reaching the reader therefore no longer goes
+ * through the catalogue tile at all: this helper creates the session directly, with an in-page
+ * `fetch` so `stubCatalogueAndSession`'s own `page.route('**\/api/sessions', …)` still answers it,
+ * then navigates to `/learn/:sessionId` — the same two steps a real "Start with this topic" click
+ * would trigger once that control exists. `catalog-page.component.spec.ts` covers the tile's own
+ * `href`; this helper's job is only to get every other spec below into the reader.
+ */
 export async function openQuantumPhysicsSession(page: Page): Promise<void> {
   await page.goto('/');
-  await page.getByRole('button', { name: /Quantum Physics/ }).click();
+  const session = await page.evaluate(async () => {
+    const response = await fetch('/api/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ topicSlug: 'quantum-physics' }),
+    });
+    return (await response.json()) as { sessionId: string };
+  });
+  await page.goto(`/learn/${session.sessionId}`);
   await page.getByText(SEED).waitFor();
 }
 

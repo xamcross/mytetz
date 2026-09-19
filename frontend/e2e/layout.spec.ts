@@ -154,7 +154,7 @@ test('the tile grid takes one column at 390px, two at 768px and three at 1360px'
 }) => {
   await stubCatalogueAndSession(page);
   await page.goto('/');
-  await page.locator('.topic__button').first().waitFor();
+  await page.locator('.topic__tile').first().waitFor();
 
   for (const size of Object.values(WIDTHS)) {
     await page.setViewportSize(size);
@@ -175,7 +175,7 @@ test('the category pill row scrolls sideways at 390px rather than wrapping', asy
   await page.route('**/api/catalog/topics*', (route) => route.fulfill({ json: MANY_TOPICS }));
   await page.setViewportSize(WIDTHS.narrow);
   await page.goto('/');
-  await page.locator('.topic__button').first().waitFor();
+  await page.locator('.topic__tile').first().waitFor();
 
   const cats = page.locator('.catalog__cats');
   expect(await cats.evaluate((el) => getComputedStyle(el).overflowX)).toBe('auto');
@@ -205,7 +205,7 @@ test('nothing overflows the page sideways at any width, with every real category
   for (const size of Object.values(WIDTHS)) {
     await page.setViewportSize(size);
     await page.goto('/');
-    await page.locator('.topic__button').first().waitFor();
+    await page.locator('.topic__tile').first().waitFor();
 
     const doc = await page.evaluate(() => ({
       scroll: document.documentElement.scrollWidth,
@@ -223,14 +223,14 @@ test('the introduction, the filter row and the first tile all fit at 412px', asy
   await stubCatalogueAndSession(page);
   await page.setViewportSize({ width: 412, height: 915 });
   await page.goto('/');
-  await page.locator('.topic__button').first().waitFor();
+  await page.locator('.topic__tile').first().waitFor();
 
   await expect(page.locator('.catalog__intro')).toBeVisible();
 
   const boxes = {
     'the introduction': await page.locator('.catalog__intro').boundingBox(),
     'the filter row': await page.locator('.catalog__filter').boundingBox(),
-    'the first tile': await page.locator('.topic__button').first().boundingBox(),
+    'the first tile': await page.locator('.topic__tile').first().boundingBox(),
   };
   for (const [name, box] of Object.entries(boxes)) {
     expect(box, `${name} is on screen`).toBeTruthy();
@@ -254,7 +254,7 @@ test('the search field stays readable at every width, with every real category',
   for (const size of Object.values(WIDTHS)) {
     await page.setViewportSize(size);
     await page.goto('/');
-    await page.locator('.topic__button').first().waitFor();
+    await page.locator('.topic__tile').first().waitFor();
 
     const box = await page.locator('#topic-filter').boundingBox();
     // 260px holds roughly thirty characters at 15px, so a learner sees what they typed. The
@@ -268,7 +268,7 @@ test('the category pills wrap at 1360px, so every category stays reachable', asy
   await page.route('**/api/catalog/topics*', (route) => route.fulfill({ json: EVERY_CATEGORY }));
   await page.setViewportSize(WIDTHS.wide);
   await page.goto('/');
-  await page.locator('.topic__button').first().waitFor();
+  await page.locator('.topic__tile').first().waitFor();
 
   const cats = page.locator('.catalog__cats');
   const box = await cats.evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
@@ -289,7 +289,7 @@ test('the wordmark is Fredoka at 24px and weight 600', async ({ page }) => {
   await stubCatalogueAndSession(page);
   await page.setViewportSize(WIDTHS.wide);
   await page.goto('/');
-  await page.locator('.topic__button').first().waitFor();
+  await page.locator('.topic__tile').first().waitFor();
 
   const mark = await page.locator('.bar__mark').evaluate((el) => {
     const s = getComputedStyle(el);
@@ -478,7 +478,7 @@ test('every control still draws its focus ring', async ({ page }) => {
   await stubCatalogueAndSession(page);
   await page.setViewportSize(WIDTHS.wide);
   await page.goto('/');
-  await page.locator('.topic__button').first().waitFor();
+  await page.locator('.topic__tile').first().waitFor();
 
   await page.locator('#topic-filter').focus();
   await page.keyboard.press('Tab');
@@ -534,7 +534,7 @@ test('every font comes from this origin, and none from a Google Fonts host', asy
   });
 
   await page.goto('/');
-  await page.locator('.topic__button').first().waitFor();
+  await page.locator('.topic__tile').first().waitFor();
   // A face is fetched by the layout that first needs its weight, so the page is given a moment.
   await page.waitForTimeout(500);
 
@@ -565,7 +565,7 @@ test('the header fits on one line at 400px, with the Sign in link, the meter and
   await stubCatalogueAndSession(page);
   await page.setViewportSize({ width: 400, height: 900 });
   await page.goto('/');
-  await page.locator('.topic__button').first().waitFor();
+  await page.locator('.topic__tile').first().waitFor();
 
   await expect(page.getByRole('link', { name: 'Sign in' })).toBeVisible();
 
@@ -583,7 +583,7 @@ test('the mark draws at 28px, left of the wordmark', async ({ page }) => {
   await stubCatalogueAndSession(page);
   await page.setViewportSize(WIDTHS.wide);
   await page.goto('/');
-  await page.locator('.topic__button').first().waitFor();
+  await page.locator('.topic__tile').first().waitFor();
 
   const box = await page.locator('.bar__mark app-logo-mark').boundingBox();
 
@@ -595,7 +595,7 @@ test('the mark resolves its palette tokens inside the inline SVG', async ({ page
   await stubCatalogueAndSession(page);
   await page.setViewportSize(WIDTHS.wide);
   await page.goto('/');
-  await page.locator('.topic__button').first().waitFor();
+  await page.locator('.topic__tile').first().waitFor();
 
   // `fill="var(--mt-coral)"` is a presentation attribute, and a presentation attribute maps to a
   // CSS declaration, so `var()` inside one has to resolve. jsdom cannot prove that — it returns

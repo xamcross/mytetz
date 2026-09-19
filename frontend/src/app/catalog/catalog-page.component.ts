@@ -120,13 +120,12 @@ import { SessionView, TopicSummary } from '../core/models';
           <ul class="topics" [attr.aria-busy]="tilesLocked()">
             @for (t of filteredTopics(); track t.slug) {
               <li class="topic">
-                <button
-                  type="button"
-                  class="mt-card topic__button"
+                <a
+                  class="mt-card topic__tile"
+                  [attr.href]="'/topics/' + t.slug"
                   [attr.data-slug]="t.slug"
-                  [disabled]="tilesLocked()"
+                  [attr.aria-disabled]="tilesLocked()"
                   [attr.title]="tileLockedReason()"
-                  (click)="open(t)"
                 >
                   <!-- Every tile's category is --mt-muted. The design gives the first tile a coral
                        eyebrow, and the code drops it: a coral retry pill is reachable in this same
@@ -140,7 +139,7 @@ import { SessionView, TopicSummary } from '../core/models';
                       >Starting…</span
                     >
                   }
-                </button>
+                </a>
               </li>
             } @empty {
               <li class="topics__empty mt-card mt-card--dashed">
@@ -263,7 +262,7 @@ import { SessionView, TopicSummary } from '../core/models';
         display: flex;
         min-width: 0;
       }
-      .topic__button {
+      .topic__tile {
         position: relative;
         width: 100%;
         text-align: left;
@@ -272,21 +271,26 @@ import { SessionView, TopicSummary } from '../core/models';
         flex-direction: column;
         gap: 6px;
         color: inherit;
+        text-decoration: none;
         transition:
           transform 80ms ease-out,
           box-shadow 80ms ease-out;
       }
-      .topic__button:hover:not(:disabled) {
+      .topic__tile:hover:not([aria-disabled='true']) {
         transform: translateY(-2px);
         box-shadow: 0 6px 0 var(--mt-border);
       }
-      .topic__button:active:not(:disabled) {
+      .topic__tile:active:not([aria-disabled='true']) {
         transform: translateY(2px);
         box-shadow: 0 2px 0 var(--mt-border);
       }
-      .topic__button:disabled {
+      /* An anchor has no disabled attribute, so a locked tile is signalled through aria-disabled
+         instead, and pointer-events: none stops a click from navigating away while the tile is
+         locked. */
+      .topic__tile[aria-disabled='true'] {
         opacity: 0.55;
         box-shadow: none;
+        pointer-events: none;
       }
       .topic__title {
         font-size: 23px;
