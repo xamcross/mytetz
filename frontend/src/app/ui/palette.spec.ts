@@ -201,6 +201,60 @@ describe('the Candy palette', () => {
   });
 });
 
+describe('the non-text contrast of the controls (issue #103)', () => {
+  // `src/styles.css` and `focus-card.component.ts` are read directly, and their values are never
+  // copied into this file. A change to the real token, or to the real rule, is what makes each
+  // test below pass or fail — not a value someone remembered to update here.
+  const css = readFileSync('src/styles.css', 'utf8');
+  const tokens = readRootTokens(css);
+
+  it('gives --mt-edge a boundary of 3:1 or more against --mt-surface', () => {
+    if (!('--mt-edge' in tokens)) throw new Error(':root must declare --mt-edge');
+    expect(contrast(tokens['--mt-edge'], tokens['--mt-surface'])).toBeGreaterThanOrEqual(AA_LARGE);
+  });
+
+  it('gives the indeterminate progress band a boundary of 3:1 or more against its track', () => {
+    // The band and its track live in focus-card.component.ts, next to the animation they belong
+    // to, and not in styles.css. Both declarations still name a global token, so the values here
+    // resolve against the same :root block as every other pair in this file.
+    const componentCss = readFileSync('src/app/reader/focus-card.component.ts', 'utf8');
+    const track = resolveColor(
+      readDeclaration(readRule(componentCss, '.focus__track'), 'background'),
+      tokens,
+    );
+    const band = resolveColor(
+      readDeclaration(readRule(componentCss, '.focus__band'), 'background'),
+      tokens,
+    );
+    expect(contrast(track, band)).toBeGreaterThanOrEqual(AA_LARGE);
+  });
+
+  /**
+   * Round 2 of issue #103. The chosen and the unchosen quiz option share one edge, --mt-edge on
+   * --mt-surface, at 3.26:1. Their difference is the check glyph and the heavier edge, not a
+   * colour, so the glyph itself is the one graphic that must still clear 3:1 against the fill it
+   * sits on.
+   *
+   * No pair of edge colours reaches 3:1 between the two states themselves. The unchosen edge is
+   * #4a9d84. An amber dark enough to reach 3:1 against that value has to go past #573d00, a
+   * near-black brown that no longer reads as amber at all — computed at 3.11:1, only just over
+   * the line, and already unrecognisable as the system's amber. The glyph-against-fill pair below
+   * is the one comparison this design can actually keep in the amber family.
+   */
+  it('gives the check glyph a boundary of 3:1 or more against the chosen option it sits on', () => {
+    const componentCss = readFileSync('src/app/assess/quiz-panel.component.ts', 'utf8');
+    const glyph = resolveColor(
+      readDeclaration(readRule(componentCss, '.quiz-panel__check'), 'color'),
+      tokens,
+    );
+    const fill = resolveColor(
+      readDeclaration(readRule(componentCss, '.quiz-panel__option--chosen'), 'background'),
+      tokens,
+    );
+    expect(contrast(glyph, fill)).toBeGreaterThanOrEqual(AA_LARGE);
+  });
+});
+
 describe('the guide page buttons', () => {
   // `guides.css` cannot import `styles.css` (see its header comment), so this suite reads the
   // real shipped file and resolves each `var(--…)` value from its own `:root` block. A test that

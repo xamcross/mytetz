@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
@@ -260,5 +261,129 @@ describe('QuizPanelComponent', () => {
 
     expect(component.error()).not.toBeNull();
     expect(component.phase()).not.toBe('result');
+  });
+
+  /**
+   * Issue #103. `aria-pressed` already states the chosen option for a screen reader. A sighted
+   * learner with low vision needs a second signal that does not depend on colour: a check glyph,
+   * plus a heavier edge. The glyph carries `aria-hidden`, because `aria-pressed` already says the
+   * same thing and a screen reader must not read it twice.
+   */
+  describe('the chosen option carries a second signal that is not a colour', () => {
+    it('shows no check glyph until an option is chosen, then shows one, hidden from a screen reader', async () => {
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      const options = () =>
+        Array.from(fixture.nativeElement.querySelectorAll('.quiz-panel__option')) as HTMLElement[];
+
+      expect(options()[0].querySelector('.quiz-panel__check')).toBeNull();
+
+      component.choose(0);
+      fixture.detectChanges();
+
+      const check = options()[0].querySelector('.quiz-panel__check');
+      expect(check).not.toBeNull();
+      expect(check?.getAttribute('aria-hidden')).toBe('true');
+      // Every other option stays plain.
+      expect(options()[1].querySelector('.quiz-panel__check')).toBeNull();
+    });
+
+    it('keeps aria-pressed on the chosen option, alongside the glyph', async () => {
+      await fixture.whenStable();
+      component.choose(1);
+      fixture.detectChanges();
+
+      const options = Array.from(
+        fixture.nativeElement.querySelectorAll('.quiz-panel__option'),
+      ) as HTMLElement[];
+      expect(options[1].getAttribute('aria-pressed')).toBe('true');
+      expect(options[0].getAttribute('aria-pressed')).toBe('false');
+    });
+
+    it('gives the chosen option a thicker edge than an unchosen one, in the CSS and not only the fill', () => {
+      // A colour change alone is not a second signal. The rule itself must declare a heavier
+      // border, read from the real file and not copied here.
+      const source = readFileSync('src/app/assess/quiz-panel.component.ts', 'utf8');
+      const base = source.match(/\.quiz-panel__option\s*\{([^}]*)\}/)?.[1];
+      const chosen = source.match(/\.quiz-panel__option--chosen\s*\{([^}]*)\}/)?.[1];
+      if (!base) throw new Error('quiz-panel.component.ts must declare .quiz-panel__option');
+      if (!chosen) {
+        throw new Error('quiz-panel.component.ts must declare .quiz-panel__option--chosen');
+      }
+      expect(base).toMatch(/border(?:-width)?:\s*var\(--mt-border-w\)/);
+      expect(chosen).toMatch(/border-width:\s*3px/);
+    });
+  });
+
+  /**
+   * Round 2 of issue #103. The design review builds the quiz option "from .mt-card", and .mt-card
+   * carries the Candy lift. The first version of .quiz-panel__option dropped it, so the option
+   * read as a flat box and not as a control a learner presses. This restores the same rest shadow,
+   * hover lift, press and transition that .mt-pill already carries in styles.css.
+   */
+  describe('the quiz option keeps the Candy lift', () => {
+    const source = readFileSync('src/app/assess/quiz-panel.component.ts', 'utf8');
+
+    /** The body of the first CSS rule for `selector`. */
+    function rule(selector: string): string {
+      const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const match = source.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`));
+      if (!match) throw new Error(`quiz-panel.component.ts must declare a rule for ${selector}`);
+      return match[1];
+    }
+
+    /** The body of every `@media (hover: hover) { ... }` block, joined together — the same method
+     * `styles.spec.ts` uses, so a hover rule outside that guard never counts here either. */
+    function hoverGuardedText(): string {
+      let text = '';
+      let from = 0;
+      for (;;) {
+        const start = source.indexOf('@media (hover: hover)', from);
+        if (start === -1) return text;
+        const open = source.indexOf('{', start);
+        let depth = 0;
+        for (let i = open; i < source.length; i++) {
+          if (source[i] === '{') depth++;
+          if (source[i] === '}') {
+            depth--;
+            if (depth === 0) {
+              text += source.slice(open + 1, i) + '\n';
+              from = i + 1;
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    it('draws the rest shadow every .mt-pill carries', () => {
+      expect(rule('.quiz-panel__option')).toMatch(/box-shadow:\s*var\(--mt-lift\)/);
+    });
+
+    it('names the same press-and-hover transition .mt-pill uses', () => {
+      expect(rule('.quiz-panel__option')).toMatch(/var\(--mt-dur-press\)\s*var\(--mt-ease-press\)/);
+    });
+
+    it('lifts on hover, guarded by (hover: hover), the same distance and shadow as .mt-pill', () => {
+      const hoverText = hoverGuardedText();
+      expect(hoverText).toMatch(/\.quiz-panel__option:hover:not\(:disabled\)[^{]*\{[^}]*\}/);
+      const hoverRule = hoverText.match(
+        /\.quiz-panel__option:hover:not\(:disabled\)[^{]*\{([^}]*)\}/,
+      )?.[1];
+      if (!hoverRule) throw new Error('the hover rule must be guarded by (hover: hover)');
+      expect(hoverRule).toMatch(/transform:\s*translateY\(-1px\)/);
+      expect(hoverRule).toMatch(/box-shadow:\s*var\(--mt-lift-hover\)/);
+    });
+
+    it('presses down, the same distance and shadow as .mt-pill', () => {
+      const active = rule('.quiz-panel__option:active:not(:disabled)');
+      expect(active).toMatch(/transform:\s*translateY\(2px\)/);
+      expect(active).toMatch(/box-shadow:\s*var\(--mt-press\)/);
+    });
+
+    it('draws no shadow at all once disabled, the same as a disabled .mt-pill', () => {
+      expect(rule('.quiz-panel__option:disabled')).toMatch(/box-shadow:\s*none/);
+    });
   });
 });

@@ -43,12 +43,54 @@ test('a guide page carries its own canonical tag and needs no JavaScript', async
   await expect(page.locator('h1')).toHaveText('What to use instead of a highlighter');
 });
 
+/**
+ * Issue #118's own six new pages. Hardcoded here, and not read from the hub, so this test
+ * fails while a page does not exist yet, and it keeps passing once the page ships.
+ */
+const WAVE_2_SLUGS = [
+  'how-to-understand-a-difficult-text',
+  'how-to-use-ai-to-study-without-cheating',
+  'how-to-explain-a-text-to-yourself-while-you-read',
+  'how-many-times-should-you-reread-something',
+  'how-do-you-know-if-you-understand-something',
+  'how-long-should-a-study-session-be',
+];
+
+for (const slug of WAVE_2_SLUGS) {
+  test(`the wave 2 guide "${slug}" carries one h1, its own canonical tag, and working Start here links`, async ({
+    page,
+  }) => {
+    await page.goto(`/guides/${slug}`);
+
+    await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
+      'href',
+      `https://mytetz.com/guides/${slug}`,
+    );
+    await expect(page.locator('h1')).toHaveCount(1);
+    // No `app-root`: a crawler that runs no JavaScript still reads the whole page.
+    await expect(page.locator('app-root')).toHaveCount(0);
+
+    const startLinks = page.locator('.start__list a');
+    const startCount = await startLinks.count();
+    expect(startCount, `${slug} must carry a Start here block with three links`).toBe(3);
+
+    for (let i = 0; i < startCount; i++) {
+      const href = await startLinks.nth(i).getAttribute('href');
+      expect(href, `${slug}'s Start here link ${i} must point under /topics/`).toMatch(
+        /^\/topics\//,
+      );
+      const response = await page.request.get(href!);
+      expect(response.status(), `${href} must answer 200`).toBe(200);
+    }
+  });
+}
+
 test('every guide in the hub index answers with its own heading', async ({ page }) => {
   await page.goto('/guides');
 
   const links = page.locator('.index a');
   const count = await links.count();
-  expect(count).toBe(6);
+  expect(count).toBe(12);
 
   for (let i = 0; i < count; i++) {
     const heading = (await links.nth(i).locator('h2').textContent())?.trim();

@@ -142,7 +142,8 @@ import { TurnstileApi, loadTurnstileScript } from './turnstile';
       }
       .sign-in-panel__input {
         padding: 12px 14px;
-        border: var(--mt-border-w) solid var(--mt-border);
+        /* --mt-edge, not --mt-border: this is a control edge, and SC 1.4.11 needs 3:1. */
+        border: var(--mt-border-w) solid var(--mt-edge);
         border-radius: var(--mt-r-row);
         background: var(--mt-surface);
         color: var(--mt-ink);

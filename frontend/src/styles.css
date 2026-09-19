@@ -64,6 +64,11 @@
   --mt-surface: #fff;
   --mt-sunk: #f4fbf8;
   --mt-border: #cfe9e0;
+  /* The boundary of a control. --mt-border measures only 1.28:1 on --mt-surface, and WCAG 2.2
+     SC 1.4.11 needs 3:1. --mt-edge is the same mint hue, darker, and it draws a control edge
+     only: a pill, a field, a picker row, a quiz option. --mt-border stays on a card edge, which
+     is decoration and exempt. palette.spec.ts proves the ratio from this real value. */
+  --mt-edge: #4a9d84;
   --mt-rule: #d8efe8;
   --mt-chip: #e4f2ed;
   --mt-skeleton: #dcefe9;
@@ -245,7 +250,7 @@ button:disabled {
   align-items: center;
   gap: 6px;
   padding: 10px 16px;
-  border: var(--mt-border-w) solid var(--mt-border);
+  border: var(--mt-border-w) solid var(--mt-edge);
   border-radius: 999px;
   background: var(--mt-surface);
   color: var(--mt-muted);
