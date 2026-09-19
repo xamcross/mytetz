@@ -62,7 +62,7 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
   template: `
     <main class="reader">
       @if (store.loading()) {
-        <p class="visually-hidden" role="status">Loading your session…</p>
+        <p class="mt-sr-only" role="status">Loading your session…</p>
         <div class="reader__grid">
           <div class="reader__rail rail-skeleton" aria-hidden="true">
             <span class="mt-pill mt-pill--ghost rail-skeleton__exam">Exam</span>
@@ -233,14 +233,6 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
       .reader {
         padding: 28px 32px;
       }
-      .visually-hidden {
-        position: absolute;
-        width: 1px;
-        height: 1px;
-        overflow: hidden;
-        clip-path: inset(50%);
-        white-space: nowrap;
-      }
       /* One column below 768px. Two above it: the trail rail, then the card. The design's third
          column at 4a is dropped — every card in it needs a route that does not exist yet. It
          returns as a third track here and nowhere else. */
@@ -289,9 +281,6 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
         gap: 10px;
         align-items: center;
         flex-wrap: wrap;
-      }
-      .banner__back {
-        text-decoration: none;
       }
       /* The rail placeholder mirrors the loaded rail, state for state. It has an Exam ghost pill,
          an eyebrow at 768px and above, and a toggle ghost pill below it. Below 768px the rail

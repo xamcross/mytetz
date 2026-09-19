@@ -195,6 +195,14 @@ fun Application.module(components: Components = Components()) {
         )
         // `GET /glossary`. See GlossaryRoutes.kt's own KDoc.
         glossaryRoutes(explanations = components.explanations)
+        // `GET /sitemap.xml`. Replaces the static file #32 shipped — see SitemapRoutes.kt's own
+        // KDoc for why a static file cannot keep up with the catalogue, and for how it reads a
+        // topic's lastmod date.
+        sitemapRoutes(
+            catalog = components.catalog,
+            explanations = components.explanations,
+            modelFamily = components.modelFamily,
+        )
 
         // Every unmatched `/api/**` path, answered as JSON.
         //
