@@ -41,6 +41,9 @@ import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.routing.routing
 import io.ktor.server.testing.testApplication
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.bson.Document
 import org.slf4j.LoggerFactory
 import java.net.InetSocketAddress
@@ -561,6 +564,34 @@ class AuthRoutesTest {
         assertEquals(email, view.email)
         assertEquals(BillingConfig.DEFAULT_TRIAL_GENERATIONS, view.allowance)
         assertEquals(BillingConfig.DEFAULT_TRIAL_GENERATIONS, view.remaining)
+    }
+
+    @Test
+    fun `the account route sends every field on the wire, even a field at its default value`() = authApp {
+        // This test reads the body as TEXT and parses it to a `JsonObject`. It does NOT decode
+        // into `AccountView`. The decoder would put each default value back onto a missing key,
+        // so a body with an absent key would still pass a test that decoded first — see
+        // `AccountView`'s own KDoc for the trap this test guards against.
+        signIn()
+
+        val response = client.get("/api/account")
+
+        assertEquals(HttpStatusCode.OK, response.status)
+        val body = wireJson.parseToJsonElement(response.bodyAsText()).jsonObject
+        val expectedKeys = listOf(
+            "email",
+            "status",
+            "trialEndsAtEpochMillis",
+            "currentPeriodEndsAtEpochMillis",
+            "allowance",
+            "remaining",
+            "resetsAtEpochMillis",
+        )
+        for (key in expectedKeys) {
+            assertTrue(key in body, "the wire body has no \"$key\" key: $body")
+        }
+        assertEquals("TRIALING", body.getValue("status").jsonPrimitive.content)
+        assertEquals(JsonNull, body.getValue("currentPeriodEndsAtEpochMillis"))
     }
 
     @Test
