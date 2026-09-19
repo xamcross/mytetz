@@ -125,6 +125,21 @@ class GuidePagesTest {
         }
     }
 
+    /** Issue #47's own step 2: each public page links to the method page. */
+    @Test
+    fun `every guide page's footer links to the how-it-works page`() = testApplication {
+        application { routing { spaRoutes() } }
+
+        assertTrue(GuidePages.paths.isNotEmpty(), "the guide list must not be empty")
+        for (path in GuidePages.paths) {
+            val body = client.get(path).bodyAsText()
+            assertTrue(
+                """<a href="/how-it-works">How it works</a>""" in body,
+                "$path's footer carries no link to /how-it-works",
+            )
+        }
+    }
+
     @Test
     fun `every guide path is lowercase and carries no trailing slash`() {
         assertTrue(GuidePages.paths.isNotEmpty(), "the guide list must not be empty")

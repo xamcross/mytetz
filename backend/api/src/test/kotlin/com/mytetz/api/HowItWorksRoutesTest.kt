@@ -82,6 +82,15 @@ class HowItWorksRoutesTest {
     }
 
     @Test
+    fun `the footer links to itself, the same as every other page`() = testApplication {
+        application { routing { howItWorksRoutes(modelId = { "claude-sonnet-5" }) } }
+
+        val body = client.get("/how-it-works").bodyAsText()
+
+        assertTrue("""<a href="/how-it-works">How it works</a>""" in body, body)
+    }
+
+    @Test
     fun `the response carries no Set-Cookie header`() = testApplication {
         application { routing { howItWorksRoutes(modelId = { "claude-sonnet-5" }) } }
 

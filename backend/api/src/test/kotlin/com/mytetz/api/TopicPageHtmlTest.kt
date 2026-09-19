@@ -209,6 +209,15 @@ class TopicPageHtmlTest {
         assertTrue("2023-11-14" in html, html)
     }
 
+    // ------------------------------------------------------------- the footer
+
+    @Test
+    fun `the footer links to the how-it-works page`() {
+        val html = render(view())
+
+        assertTrue("""<a href="/how-it-works">How it works</a>""" in html, html)
+    }
+
     @Test
     fun `the page loads exactly one external script, and exactly one other script, the JSON-LD one`() {
         val html = render(view())
