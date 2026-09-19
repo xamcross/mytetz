@@ -1,14 +1,19 @@
 package com.mytetz.billing
 
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import org.slf4j.LoggerFactory
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -233,6 +238,162 @@ class FreemiusWebhookTest {
             .toByteArray(Charsets.UTF_8)
 
         assertFailsWith<SerializationException> { FreemiusWebhook.parse(body) }
+    }
+
+    // ------------------------------------------------------------------ tolerant reads
+    //
+    // schema.d.ts types EventLog.data as unknown. license.events.ts types 'license.deleted' with
+    // objects: { license: false }. Neither shape is the object shape parse expects. Each test in
+    // this group proves that parse still reads the event. Each test also proves that parse reads
+    // only the fields the vendor shape actually gives that event.
+
+    @Test
+    fun `a string data does not raise, and it gives no subscription id`() {
+        val body = """
+            {"id":"evt-5","type":"payment.refund","created":"2025-01-01 00:00:00","data":"a string"}
+        """.trimIndent().toByteArray(Charsets.UTF_8)
+
+        val event = FreemiusWebhook.parse(body)
+
+        assertEquals("evt-5", event.id)
+        assertNull(event.freemiusSubscriptionId)
+    }
+
+    @Test
+    fun `an array data does not raise, and it gives no subscription id`() {
+        val body = """
+            {"id":"evt-6","type":"payment.refund","created":"2025-01-01 00:00:00","data":[1,2,3]}
+        """.trimIndent().toByteArray(Charsets.UTF_8)
+
+        val event = FreemiusWebhook.parse(body)
+
+        assertEquals("evt-6", event.id)
+        assertNull(event.freemiusSubscriptionId)
+    }
+
+    @Test
+    fun `an objects license of false does not raise, and the period end falls back to next_payment`() {
+        val body = """
+            {"id":"evt-7","type":"license.deleted","created":"2025-01-01 00:00:00",
+            "objects":{"license":false,"subscription":{"next_payment":"2025-02-01 00:00:00"}}}
+        """.trimIndent().toByteArray(Charsets.UTF_8)
+
+        val event = FreemiusWebhook.parse(body)
+
+        assertEquals("evt-7", event.id)
+        assertEquals(FEB_1_2025_UTC_EPOCH_MILLIS, event.periodEndsAtEpochMillis)
+    }
+
+    @Test
+    fun `an objects license of false with no next_payment gives a null period end`() {
+        val body = """{"id":"evt-8","type":"license.deleted","created":"2025-01-01 00:00:00","objects":{"license":false}}"""
+            .toByteArray(Charsets.UTF_8)
+
+        val event = FreemiusWebhook.parse(body)
+
+        assertEquals("evt-8", event.id)
+        assertNull(event.periodEndsAtEpochMillis)
+    }
+
+    @Test
+    fun `a numeric top-level id is read as text`() {
+        val body = """{"id":9001,"type":"subscription.created","created":"2025-01-01 00:00:00"}"""
+            .toByteArray(Charsets.UTF_8)
+
+        val event = FreemiusWebhook.parse(body)
+
+        assertEquals("9001", event.id)
+    }
+
+    @Test
+    fun `a numeric objects user id is read as text`() {
+        val body = """
+            {"id":"evt-9","type":"subscription.created","created":"2025-01-01 00:00:00",
+            "objects":{"user":{"id":1001}}}
+        """.trimIndent().toByteArray(Charsets.UTF_8)
+
+        val event = FreemiusWebhook.parse(body)
+
+        assertEquals("1001", event.freemiusUserId)
+    }
+
+    @Test
+    fun `a numeric objects subscription id is read as text`() {
+        val body = """
+            {"id":"evt-10","type":"subscription.created","created":"2025-01-01 00:00:00",
+            "objects":{"subscription":{"id":2001}}}
+        """.trimIndent().toByteArray(Charsets.UTF_8)
+
+        val event = FreemiusWebhook.parse(body)
+
+        assertEquals("2001", event.freemiusSubscriptionId)
+    }
+
+    @Test
+    fun `a numeric data subscription_id is read as text`() {
+        val body = """
+            {"id":"evt-11","type":"subscription.created","created":"2025-01-01 00:00:00",
+            "data":{"subscription_id":2001}}
+        """.trimIndent().toByteArray(Charsets.UTF_8)
+
+        val event = FreemiusWebhook.parse(body)
+
+        assertEquals("2001", event.freemiusSubscriptionId)
+    }
+
+    @Test
+    fun `an unreadable expiration falls back to a readable next_payment, and logs one warning`() {
+        val body = """
+            {"id":"evt-12","type":"subscription.created","created":"2025-01-01 00:00:00",
+            "objects":{"license":{"expiration":"not a date"},
+            "subscription":{"next_payment":"2025-02-01 00:00:00"}}}
+        """.trimIndent().toByteArray(Charsets.UTF_8)
+        val appender = attachAppender()
+
+        val event = try {
+            FreemiusWebhook.parse(body)
+        } finally {
+            detachAppender(appender)
+        }
+
+        assertEquals(FEB_1_2025_UTC_EPOCH_MILLIS, event.periodEndsAtEpochMillis)
+        val logged = assertNotNull(
+            appender.list.firstOrNull { it.formattedMessage.contains("type=subscription.created") },
+            "the unreadable expiration was not logged: ${appender.list.map { it.formattedMessage }}",
+        )
+        assertTrue(logged.formattedMessage.contains("id=evt-12"))
+    }
+
+    @Test
+    fun `an unreadable expiration with no next_payment gives a null period end, and logs one warning`() {
+        val body = """
+            {"id":"evt-13","type":"subscription.created","created":"2025-01-01 00:00:00",
+            "objects":{"license":{"expiration":"not a date"}}}
+        """.trimIndent().toByteArray(Charsets.UTF_8)
+        val appender = attachAppender()
+
+        val event = try {
+            FreemiusWebhook.parse(body)
+        } finally {
+            detachAppender(appender)
+        }
+
+        assertNull(event.periodEndsAtEpochMillis)
+        assertNotNull(
+            appender.list.firstOrNull { it.formattedMessage.contains("id=evt-13") },
+            "the unreadable expiration was not logged: ${appender.list.map { it.formattedMessage }}",
+        )
+    }
+
+    private fun attachAppender(): ListAppender<ILoggingEvent> {
+        val appender = ListAppender<ILoggingEvent>().apply { start() }
+        (LoggerFactory.getLogger(FreemiusWebhook::class.java) as ch.qos.logback.classic.Logger).addAppender(appender)
+        return appender
+    }
+
+    private fun detachAppender(appender: ListAppender<ILoggingEvent>) {
+        (LoggerFactory.getLogger(FreemiusWebhook::class.java) as ch.qos.logback.classic.Logger)
+            .detachAppender(appender)
     }
 
     // ------------------------------------------------------------------ FreemiusConfig

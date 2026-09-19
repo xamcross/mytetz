@@ -1,9 +1,10 @@
 package com.mytetz.billing
 
-import kotlinx.serialization.SerialName
-import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import java.security.MessageDigest
 import java.time.Instant
 import java.time.LocalDateTime
@@ -11,6 +12,7 @@ import java.time.ZoneOffset
 import java.time.format.DateTimeParseException
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
+import org.slf4j.LoggerFactory
 
 /** Freemius signs a webhook body with this algorithm. Confirmed from the vendor documentation. */
 private const val HMAC_ALGORITHM: String = "HmacSHA256"
@@ -85,73 +87,15 @@ data class FreemiusEvent(
 )
 
 /**
- * The wire shape of one Freemius webhook payload.
+ * The two fields of a Freemius event an operator needs, to find the event in the Freemius
+ * dashboard.
  *
- * The source is the vendor SDK, at `github.com/Freemius/freemius-js`.
- * `packages/sdk/src/webhook/events.ts` gives the three top-level fields.
- * `subscription.events.ts` and `license.events.ts` give the shape of [objects] and [data].
- *
- * [id], [type] and [createdRaw] carry no default value. A payload without one of these three
- * fields raises an error in [FreemiusWebhook.parse]. [FreemiusWebhook.parse] treats only these
- * three fields as required.
- *
- * Every field of [objects] and [data] is optional. The event type in [type] decides which fields
- * Freemius sends. For example, a `subscription.created` event carries a `subscription` object,
- * and a `license.created` event does not. This one type reads every event type this deployment
- * receives. A field this deployment does not use yet is never a reason for
- * [FreemiusWebhook.parse] to raise an error.
+ * [FreemiusWebhook.identifyOrNull] reads these two fields best-effort. It reads them even from a
+ * body [FreemiusWebhook.parse] cannot decode. Both fields are vendor values. Neither field is
+ * personal data. A caller may log both fields. A caller must never log any other part of a
+ * webhook body.
  */
-@Serializable
-internal data class FreemiusWebhookPayload(
-    @SerialName("id") val id: String,
-    @SerialName("type") val type: String,
-    @SerialName("created") val createdRaw: String,
-    @SerialName("objects") val objects: FreemiusWebhookObjects? = null,
-    @SerialName("data") val data: FreemiusWebhookData? = null,
-)
-
-/**
- * The `objects` half of a Freemius webhook payload. It names the entities the event is about.
- *
- * Every field is optional. `packages/sdk/src/webhook/subscription.events.ts` and
- * `license.events.ts` each name a different subset of these three fields for each event type.
- * Neither file names `install` for an event this deployment reads today.
- */
-@Serializable
-internal data class FreemiusWebhookObjects(
-    @SerialName("user") val user: FreemiusWebhookUser? = null,
-    @SerialName("subscription") val subscription: FreemiusWebhookSubscription? = null,
-    @SerialName("license") val license: FreemiusWebhookLicense? = null,
-)
-
-/** The one entity under `objects.user` this deployment reads. See `schema.d.ts`, `User`. */
-@Serializable
-internal data class FreemiusWebhookUser(
-    @SerialName("id") val id: String? = null,
-    @SerialName("email") val email: String? = null,
-)
-
-/** The one entity under `objects.subscription` this deployment reads. See `schema.d.ts`, `Subscription`. */
-@Serializable
-internal data class FreemiusWebhookSubscription(
-    @SerialName("id") val id: String? = null,
-    @SerialName("next_payment") val nextPayment: String? = null,
-)
-
-/** The one entity under `objects.license` this deployment reads. See `schema.d.ts`, `License`. */
-@Serializable
-internal data class FreemiusWebhookLicense(
-    @SerialName("expiration") val expiration: String? = null,
-)
-
-/**
- * The `data` half of a Freemius webhook payload. It names the event-specific fields
- * `packages/sdk/src/webhook/subscription.events.ts` declares outside `objects`.
- */
-@Serializable
-internal data class FreemiusWebhookData(
-    @SerialName("subscription_id") val subscriptionId: String? = null,
-)
+data class FreemiusEventIdentity(val type: String?, val id: String?)
 
 /**
  * Verifies a Freemius webhook's signature, and decodes its body.
@@ -160,10 +104,37 @@ internal data class FreemiusWebhookData(
  * exact bytes it sent. A JSON parser is free to reorder fields or to change whitespace when it
  * writes a value back out, so verifying anything but the original bytes verifies a message
  * Freemius never signed.
+ *
+ * ## The wire shape [parse] reads
+ *
+ * The source is the vendor SDK, at `github.com/Freemius/freemius-js`.
+ * `packages/sdk/src/webhook/events.ts` gives the three top-level fields: `id`, `type` and
+ * `created`. `subscription.events.ts` and `license.events.ts` give the shape of `objects` and
+ * `data`.
+ *
+ * [parse] reads the body as a loose JSON tree, and not as one fixed type. Three facts about the
+ * vendor shape force that choice.
+ *
+ * - `schema.d.ts` types `EventLog.data` as `unknown`. `data` can be a string, an object, or an
+ *   array. Three event types [BillingService.apply] maps — `payment.refund`,
+ *   `payment.dispute.lost` and `subscription.renewal.retry` — carry no vendor type for `data` at
+ *   all. `data` can then take any of the three forms on one of those events.
+ * - `license.events.ts` types `'license.deleted'` with `objects: { license: false }`. An entity
+ *   under `objects` is not always an object.
+ * - `schema.d.ts` gives every id the type `string`, with `Format: int64`. The real JSON is not
+ *   confirmed before #73. [parse] reads a JSON string or a JSON number for an id, and gives back
+ *   its text either way.
+ *
+ * [parse] treats [FreemiusEvent.id], [FreemiusEvent.type] and
+ * [FreemiusEvent.occurredAtEpochMillis] as required. It raises a [SerializationException] when
+ * one of the three is absent, or is not a type it accepts. Every other field reads as absent when
+ * the vendor shape does not match, and [parse] never raises for that reason. An unmapped event
+ * type, a deleted license, and a field #73 has not yet confirmed must never turn a signed,
+ * genuine event into a `400`.
  */
 object FreemiusWebhook {
 
-    private val json = Json { ignoreUnknownKeys = true }
+    private val log = LoggerFactory.getLogger(FreemiusWebhook::class.java)
 
     /**
      * Reports whether [signatureHeader] is the HMAC-SHA256 of [rawBody], keyed by [secretKey] and
@@ -191,13 +162,12 @@ object FreemiusWebhook {
     /**
      * Decodes [rawBody] into a [FreemiusEvent].
      *
-     * [FreemiusWebhookPayload.id], [FreemiusWebhookPayload.type] and
-     * [FreemiusWebhookPayload.createdRaw] carry no default value. A payload without one of these
-     * three fields raises a [SerializationException] here. A null id would let
-     * [BillingService.apply] never record the change, and never report it.
-     * [parseFreemiusDate] raises the same [SerializationException] for a `created` value in
-     * neither date form it accepts. An unreadable date is not a usable event. The caller of
-     * [parse] sees one exception type for both failures.
+     * [rawBody] must decode to a JSON object. That object must carry a readable [FreemiusEvent.id],
+     * a readable [FreemiusEvent.type], and a readable `created` field. Each of these three checks
+     * raises a [SerializationException] on failure. A null id would let [BillingService.apply]
+     * never record the change, and never report it. The caller of [parse] sees one exception type
+     * for every failure, including a `created` value in neither date form [parseFreemiusDate]
+     * accepts.
      *
      * [FreemiusEvent.userReference] is always null here. Freemius documents no field that carries
      * it — see [FreemiusEvent]'s own KDoc. This deployment's only source for it is the email
@@ -209,30 +179,80 @@ object FreemiusWebhook {
      * `subscription.renewal.failed` event, for one example, carries no `data` object. That event
      * still names its subscription under `objects`.
      *
-     * [FreemiusEvent.periodEndsAtEpochMillis] prefers `objects.license.expiration` over
-     * `objects.subscription.next_payment`. The license controls the learner's entitlement. The
-     * subscription's own next payment date is a close estimate of the same date. [parse] reads
-     * it only when the event carries no license.
+     * [FreemiusEvent.periodEndsAtEpochMillis] comes from [resolvePeriodEnd]. Every field this
+     * function reads past [FreemiusEvent.id], [FreemiusEvent.type] and
+     * [FreemiusEvent.occurredAtEpochMillis] reads as absent, and never raises, when the vendor
+     * shape does not match: see this object's own KDoc for the three reasons that matters.
      */
     fun parse(rawBody: ByteArray): FreemiusEvent {
-        val payload = json.decodeFromString<FreemiusWebhookPayload>(rawBody.toString(Charsets.UTF_8))
-        val user = payload.objects?.user
-        val subscription = payload.objects?.subscription
-        val license = payload.objects?.license
+        val root = Json.parseToJsonElement(rawBody.toString(Charsets.UTF_8)) as? JsonObject
+            ?: throw SerializationException("a Freemius webhook body must be a JSON object")
 
-        val subscriptionId = payload.data?.subscriptionId ?: subscription?.id
-        val periodEnd = license?.expiration ?: subscription?.nextPayment
+        val id = root.idTextOrNull("id")
+            ?: throw SerializationException("a Freemius webhook body must carry a string or a number \"id\"")
+        val type = root.stringOrNull("type")
+            ?: throw SerializationException("a Freemius webhook body must carry a string \"type\"")
+        val createdRaw = root.stringOrNull("created")
+            ?: throw SerializationException("a Freemius webhook body must carry a string \"created\"")
+
+        val objects = root["objects"] as? JsonObject
+        val user = objects?.get("user") as? JsonObject
+        val subscription = objects?.get("subscription") as? JsonObject
+        val license = objects?.get("license") as? JsonObject
+        // schema.d.ts types EventLog.data as unknown. Only its object form has a subscription_id
+        // to read. A string or an array form — see this object's own KDoc — reads as absent here.
+        val data = root["data"] as? JsonObject
 
         return FreemiusEvent(
-            id = payload.id,
-            type = payload.type,
+            id = id,
+            type = type,
             userReference = null,
-            email = user?.email,
-            freemiusUserId = user?.id,
-            freemiusSubscriptionId = subscriptionId,
-            periodEndsAtEpochMillis = periodEnd?.let(::parseFreemiusDate),
-            occurredAtEpochMillis = parseFreemiusDate(payload.createdRaw),
+            email = user.stringOrNull("email"),
+            freemiusUserId = user?.idTextOrNull("id"),
+            freemiusSubscriptionId = data?.idTextOrNull("subscription_id") ?: subscription?.idTextOrNull("id"),
+            periodEndsAtEpochMillis = resolvePeriodEnd(license, subscription, type = type, id = id),
+            occurredAtEpochMillis = parseFreemiusDate(createdRaw),
         )
+    }
+
+    /**
+     * Reads [rawBody] best-effort, for [FreemiusEventIdentity] alone.
+     *
+     * A body a [parse] call already rejected reaches this function next, in `BillingRoutes.kt`'s
+     * own `catch`. This function never raises. It reads what it can, and gives back null for a
+     * field it cannot read — a body that is not even a JSON object, for one example, gives back
+     * [FreemiusEventIdentity] with both fields null.
+     */
+    fun identifyOrNull(rawBody: ByteArray): FreemiusEventIdentity {
+        val root = runCatching {
+            Json.parseToJsonElement(rawBody.toString(Charsets.UTF_8)) as? JsonObject
+        }.getOrNull()
+        return FreemiusEventIdentity(type = root?.stringOrNull("type"), id = root?.idTextOrNull("id"))
+    }
+
+    /**
+     * Resolves the period end for one event, from [license] and [subscription].
+     *
+     * `objects.license.expiration` is the first choice: the license controls the learner's
+     * entitlement. `objects.subscription.next_payment` is a close estimate of the same date, and
+     * this function reads it only when the event carries no readable expiration.
+     *
+     * An expiration that does not parse is not the same case as an absent one. A broken date
+     * must not reject a signed, genuine event. See `Entitlement.resolveActive`'s own KDoc for the
+     * reason a missing period end must never lock out a learner who has just paid. So this
+     * function logs one `BILLING_UNREADABLE_PERIOD_END` line for the broken date. That line names
+     * [type] and [id], and no other part of the body. This function then falls back to
+     * `next_payment`, the same way an absent expiration would.
+     */
+    private fun resolvePeriodEnd(license: JsonObject?, subscription: JsonObject?, type: String, id: String): Long? {
+        val expirationRaw = license.stringOrNull("expiration")
+        if (expirationRaw != null) {
+            val expiration = runCatching { parseFreemiusDate(expirationRaw) }.getOrNull()
+            if (expiration != null) return expiration
+            log.warn("BILLING_UNREADABLE_PERIOD_END type={} id={}", type, id)
+        }
+        val nextPaymentRaw = subscription.stringOrNull("next_payment") ?: return null
+        return runCatching { parseFreemiusDate(nextPaymentRaw) }.getOrNull()
     }
 
     /**
@@ -265,6 +285,31 @@ object FreemiusWebhook {
                 )
             }
         }
+    }
+
+    /**
+     * Reads [key] from this object as a Freemius id: a JSON string or a JSON number, given back
+     * as text. `schema.d.ts` gives every id the type `string`, with `Format: int64`, but the real
+     * JSON is not confirmed before #73 — see this object's own KDoc. A boolean, an object, an
+     * array, or a JSON null under [key] is not an id, and this function reads none of them.
+     */
+    private fun JsonObject?.idTextOrNull(key: String): String? {
+        val primitive = this?.get(key) as? JsonPrimitive ?: return null
+        if (primitive is JsonNull) return null
+        // A JsonPrimitive that is not a JSON string is a number, a boolean, or a bare null
+        // literal. JsonNull is already ruled out above, so only a boolean is left to refuse.
+        if (!primitive.isString && (primitive.content == "true" || primitive.content == "false")) return null
+        return primitive.content
+    }
+
+    /**
+     * Reads [key] from this object as plain text, or null when [key] is absent, is a JSON null,
+     * or does not hold a string, a number, or a boolean.
+     */
+    private fun JsonObject?.stringOrNull(key: String): String? {
+        val primitive = this?.get(key) as? JsonPrimitive ?: return null
+        if (primitive is JsonNull) return null
+        return primitive.content
     }
 
     private fun hmacLowerHex(rawBody: ByteArray, secretKey: String): String {
