@@ -97,23 +97,14 @@ import { RouterLink } from '@angular/router';
       :host {
         display: block;
       }
-      .legal-page {
-        max-width: 720px;
-        margin: 0 auto;
-        padding: 48px 20px 64px;
-        display: flex;
-        flex-direction: column;
-        gap: 28px;
-      }
-      h1 {
-        font-size: 32px;
-      }
-      h2 {
-        font-size: 20px;
-        margin-bottom: 8px;
-      }
-      p,
-      li {
+      /* This page's own paragraphs run several to a section — the cookies section holds three
+         in a row — so each one keeps a bottom margin. The shared .legal-page p rule in
+         styles.css sets margin: 0 instead, for terms-page and imprint-page, which each hold one
+         paragraph per section. The component's own attribute gives this rule the higher
+         specificity it needs to win over that shared one. li repeats the same three properties,
+         because the shared rule never selects it. */
+      .legal-page p,
+      .legal-page li {
         margin: 0 0 8px;
         font-size: 15px;
         line-height: 1.6;

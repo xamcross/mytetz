@@ -59,22 +59,32 @@ describe('QuizPanelComponent', () => {
     expect(component.currentQuestion()?.questionId).toBe('q1');
   });
 
-  it('renders as a labelled dialog', async () => {
+  /**
+   * Finding F12. The panel renders inline, with no backdrop and nothing `inert` around it, so
+   * `aria-modal="true"` told a screen reader a lie: the rest of the page was never hidden. The
+   * WAI-ARIA Authoring Practices' landmark-regions guidance
+   * (https://www.w3.org/WAI/ARIA/apg/practices/landmark-regions/) names `region` for exactly this
+   * case — a perceivable section of content that named landmarks do not already describe, with a
+   * label of its own — and requires that a `region` carry a label. This panel already computes
+   * one in `title()`, so `aria-label` moves across unchanged.
+   */
+  it('renders as a labelled region, and not a modal dialog', async () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    const dialog = fixture.nativeElement.querySelector('[role="dialog"]') as HTMLElement;
-    expect(dialog).toBeTruthy();
-    expect(dialog.getAttribute('aria-modal')).toBe('true');
-    expect(dialog.getAttribute('aria-label')).toBeTruthy();
+    const region = fixture.nativeElement.querySelector('[role="region"]') as HTMLElement;
+    expect(region).toBeTruthy();
+    expect(region.getAttribute('aria-modal')).toBeNull();
+    expect(region.getAttribute('aria-label')).toBeTruthy();
+    expect(fixture.nativeElement.querySelector('[role="dialog"]')).toBeNull();
   });
 
   it('moves focus into the panel once a question loads', async () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    const dialog = fixture.nativeElement.querySelector('[role="dialog"]') as HTMLElement;
-    expect(dialog.contains(document.activeElement)).toBe(true);
+    const region = fixture.nativeElement.querySelector('[role="region"]') as HTMLElement;
+    expect(region.contains(document.activeElement)).toBe(true);
   });
 
   it('closes on Escape, the same as VerbPickerComponent', async () => {
@@ -83,8 +93,8 @@ describe('QuizPanelComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    const dialog = fixture.nativeElement.querySelector('[role="dialog"]') as HTMLElement;
-    dialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    const region = fixture.nativeElement.querySelector('[role="region"]') as HTMLElement;
+    region.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
 
     expect(closed.length).toBe(1);
   });
@@ -384,6 +394,50 @@ describe('QuizPanelComponent', () => {
 
     it('draws no shadow at all once disabled, the same as a disabled .mt-pill', () => {
       expect(rule('.quiz-panel__option:disabled')).toMatch(/box-shadow:\s*none/);
+    });
+  });
+
+  /**
+   * Animation H. The whole panel once swapped from the question phase to the result phase in
+   * one frame. The score now lands with a small overshoot, and each review row follows in the
+   * order the questions were asked, each one a little later than the row before it.
+   */
+  describe('animation H, the reveal of a quiz result', () => {
+    const source = readFileSync('src/app/assess/quiz-panel.component.ts', 'utf8');
+
+    it('gives the score element animate.enter', () => {
+      expect(source).toMatch(/quiz-panel__score[^>]*animate\.enter="score--in"/);
+    });
+
+    it('gives every review row animate.enter and its own --i for the stagger', () => {
+      expect(source).toMatch(/<li[^>]*animate\.enter="review--in"[^>]*\[style\.--i\]="i"/);
+    });
+
+    it('declares .score--in with the panel duration and the settle easing', () => {
+      const rule = source.match(/\.score--in\s*\{([^}]*)\}/)?.[1];
+      if (!rule) throw new Error('quiz-panel.component.ts must declare .score--in');
+      expect(rule).toMatch(/animation:\s*score-in var\(--mt-dur-panel\) var\(--mt-ease-settle\)/);
+    });
+
+    it('declares .review--in with a stagger that reads --i', () => {
+      const rule = source.match(/\.review--in\s*\{([^}]*)\}/)?.[1];
+      if (!rule) throw new Error('quiz-panel.component.ts must declare .review--in');
+      expect(rule).toMatch(/animation:\s*review-in var\(--mt-dur-state\) var\(--mt-ease-out\)/);
+      expect(rule).toMatch(/animation-delay:\s*calc\(120ms \+ var\(--i\) \* 70ms\)/);
+    });
+
+    it('zeroes the stagger under reduced motion, in this same file', () => {
+      // 120ms and 70ms are literal values, not tokens, so the blanket reduced-motion rule in
+      // styles.css cannot reach them. The override lives here, next to the rule it silences —
+      // the same rule #102 set for a component's own animation.
+      const start = source.indexOf('@media (prefers-reduced-motion: reduce)');
+      if (start === -1)
+        throw new Error('quiz-panel.component.ts must declare its own reduced-motion block');
+      const block = source.slice(
+        start,
+        source.indexOf('}', source.indexOf('.review--in', start)) + 1,
+      );
+      expect(block).toMatch(/\.review--in\s*\{\s*animation-delay:\s*0ms/);
     });
   });
 });

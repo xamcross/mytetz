@@ -1,4 +1,4 @@
-import { Component, inject, signal } from '@angular/core';
+import { Component, effect, inject, signal } from '@angular/core';
 import { AccountStore } from '../core/account.store';
 import { ApiService } from '../core/api.service';
 
@@ -28,7 +28,11 @@ const METERED_STATUSES: ReadonlySet<string> = new Set([
     @if (view(); as account) {
       <div class="allowance-meter">
         @if (metered(account.status)) {
-          <span class="allowance-meter__count">
+          <span
+            class="allowance-meter__count"
+            [class.allowance-meter__count--tick]="ticked()"
+            (animationend)="onCountAnimationEnd($event)"
+          >
             {{ account.remaining }} of {{ account.allowance }} left
             {{ periodWords(account.status) }}
           </span>
@@ -49,9 +53,10 @@ const METERED_STATUSES: ReadonlySet<string> = new Set([
             type="button"
             class="mt-pill mt-pill--coral allowance-meter__subscribe"
             [disabled]="subscribing()"
+            [attr.aria-busy]="subscribing() ? 'true' : null"
             (click)="subscribe()"
           >
-            Subscribe
+            {{ subscribing() ? 'Opening checkout…' : 'Subscribe' }}
           </button>
         }
       </div>
@@ -66,16 +71,68 @@ const METERED_STATUSES: ReadonlySet<string> = new Set([
       .allowance-meter {
         display: flex;
         align-items: baseline;
-        gap: 8px;
+        flex-wrap: wrap;
+        gap: 4px 8px;
         font-size: 13px;
       }
       .allowance-meter__count {
         font-weight: 700;
-        white-space: nowrap;
+        min-width: 0;
+      }
+      /* Animation I. A brief lift and a small scale-up when the count changes — never drawing
+         more attention than the answer that just spent it. 160ms and 2px is the whole budget. */
+      .allowance-meter__count--tick {
+        animation: meter-tick var(--mt-dur-state) var(--mt-ease-settle) both;
+      }
+      @keyframes meter-tick {
+        0% {
+          transform: none;
+        }
+        40% {
+          transform: translateY(calc(-1 * var(--mt-move-press))) scale(1.06);
+        }
+        100% {
+          transform: none;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .allowance-meter__count--tick {
+          animation: none;
+        }
       }
       .allowance-meter__detail {
         color: var(--mt-muted);
+        min-width: 0;
+      }
+      /*
+       * A defect found in a screenshot on 2026-09-19, and not by issue #100's own test: on
+       * the account page at 390px, the account card's own meter did not wrap. "12 of 40 left
+       * today" and "Resets September 20, 2026 at 3:00 PM." sat on one line, wider than the
+       * card, and the page scrolled sideways by about 20px. Issue #100 only ever fixed the
+       * header — see the comment below — and its own test only asserted that the detail text
+       * stays visible in the account card, never that the card itself stays inside the page.
+       *
+       * The two white-space: nowrap rules now apply inside the header only, through
+       * host-context(.bar), so a one-line meter stays true where the design calls for it —
+       * the header bar is a fixed 64px, and a wrapped meter there would collide with the row
+       * below it — and the account page's own card, which has no such height limit, wraps onto a
+       * second line instead of pushing the page sideways.
+       */
+      :host-context(.bar) .allowance-meter__count,
+      :host-context(.bar) .allowance-meter__detail {
         white-space: nowrap;
+      }
+      /*
+       * Defect found in review of issue #106: the flex-wrap: wrap rule above, added so the
+       * account card's own meter could wrap, reached the header too. At 768px, 772px, 776px,
+       * 780px and 800px — a tablet in portrait — the header's meter wrapped onto a second,
+       * 34px-tall line, with the detail text below the count. The header bar is a fixed 64px, so
+       * a wrapped meter there collides with the row below it. This rule keeps the header's own
+       * meter on one line, the same way it always was; the account card, outside the bar
+       * element, keeps the wrap.
+       */
+      :host-context(.bar) .allowance-meter {
+        flex-wrap: nowrap;
       }
       .allowance-meter__error {
         color: var(--mt-err-ink);
@@ -129,6 +186,35 @@ export class AllowanceMeterComponent {
   private readonly account = inject(AccountStore);
   private readonly api = inject(ApiService);
   readonly view = this.account.view;
+
+  /** Animation I. True for the one render after `remaining` changes from one real value to
+   * another — never on the first render, and never when the view changes but the count does
+   * not. Cleared by [onCountAnimationEnd], not by a timer: a timer in a zoneless component needs
+   * its own destroy guard, and `animationend` needs none — the same rule `landed` follows on
+   * `focus-card.component.ts`. */
+  protected readonly ticked = signal(false);
+  private previousRemaining: number | null = null;
+
+  constructor() {
+    effect(() => {
+      const remaining = this.view()?.remaining ?? null;
+      if (
+        remaining !== null &&
+        this.previousRemaining !== null &&
+        remaining !== this.previousRemaining
+      ) {
+        this.ticked.set(true);
+      }
+      this.previousRemaining = remaining;
+    });
+  }
+
+  /** Ends animation I's tick, on the animation's own last frame rather than on a timer. Guards
+   * `event.animationName` the same way [onBodyAnimationEnd] on `focus-card.component.ts` does,
+   * so an unrelated animationend bubbling up from a child never clears this early. */
+  onCountAnimationEnd(event: AnimationEvent): void {
+    if (event.animationName === 'meter-tick') this.ticked.set(false);
+  }
 
   /** True while a checkout request is in flight. The button stays disabled during this time.
    * This stops a second click from sending a second request before the redirect happens. See

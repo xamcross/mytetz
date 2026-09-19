@@ -235,6 +235,47 @@ describe('.mt-pill answers hover, press and the disabled state', () => {
   });
 });
 
+describe('a busy .mt-pill (finding F7, animation J)', () => {
+  /**
+   * Defect 3 of the design review's second round. The bar sat exactly on the 2px bottom
+   * border (`inset: auto 0 -2px 0`), so on a ghost pill — dark teal on a teal border — it was
+   * invisible at 100% zoom. `inset: auto 0 0 0` sits it flush with the bottom of the padding
+   * box instead: inside the border, on the pill's own background, where it reads against every
+   * pill colour.
+   */
+  it('draws a sweeping bar inside the padding box, on a 900ms linear loop', () => {
+    const rule = css.match(/\.mt-pill\[aria-busy='true'\]::after\s*\{([^}]*)\}/);
+    if (!rule) throw new Error("styles.css must declare .mt-pill[aria-busy='true']::after");
+    expect(rule[1]).toMatch(/animation:\s*pill-busy 900ms linear infinite/);
+    expect(rule[1]).toMatch(/inset:\s*auto 0 0 0/);
+    expect(rule[1]).not.toMatch(/inset:\s*auto 0 -2px 0/);
+  });
+
+  /**
+   * Defect 3 of the design review's second round. The pill has a 999px radius, and the bar
+   * used to run straight from 0 to 100% of the padding box, so its flat, square ends sat
+   * outside the curve at each corner. `overflow: hidden` clips the bar — a child of this
+   * element — to the pill's own rounded shape. It does not clip the pill's own box-shadow,
+   * which is not a child and paints outside this element's own overflow regardless: the focus
+   * ring stays complete.
+   */
+  it('keeps the control at full opacity, and clips its own bar to the pill shape', () => {
+    const rule = css.match(/\.mt-pill\[aria-busy='true'\]\s*\{([^}]*)\}/);
+    if (!rule) throw new Error("styles.css must declare .mt-pill[aria-busy='true']");
+    expect(rule[1]).toMatch(/opacity:\s*1/);
+    expect(rule[1]).toMatch(/overflow:\s*hidden/);
+  });
+
+  it('stops the sweep under reduced motion, and leaves a static bar', () => {
+    const body = reducedMotionBlock(css);
+    const rule = body.match(/\.mt-pill\[aria-busy='true'\]::after\s*\{([^}]*)\}/);
+    if (!rule) {
+      throw new Error("the reduced-motion block must override .mt-pill[aria-busy='true']::after");
+    }
+    expect(rule[1]).toMatch(/animation:\s*none/);
+  });
+});
+
 describe('a link with the class .mt-pill', () => {
   it('clears the browser default underline', () => {
     const rule = css.match(/a\.mt-pill\s*\{([^}]*)\}/);
@@ -290,6 +331,60 @@ describe('a hover state for the controls that are not .mt-pill', () => {
     const text = readFileSync('src/app/catalog/catalog-page.component.ts', 'utf8');
     expect(hasSelector(text, '.topic__tile:hover')).toBe(true);
     expect(hasSelector(hoverGuardedText(text), '.topic__tile:hover')).toBe(true);
+  });
+});
+
+describe('animation N, the change between routes', () => {
+  it('declares the route transition rules inside @media (prefers-reduced-motion: no-preference)', () => {
+    const start = css.indexOf('@media (prefers-reduced-motion: no-preference)');
+    if (start === -1) {
+      throw new Error('styles.css must declare a prefers-reduced-motion: no-preference block');
+    }
+    const block = blockBodyAt(css, css.indexOf('{', start));
+    expect(hasSelector(block, '::view-transition-old(root)')).toBe(true);
+    expect(hasSelector(block, '::view-transition-new(root)')).toBe(true);
+    expect(block).toMatch(/animation:\s*vt-out var\(--mt-dur-route\)/);
+    expect(block).toMatch(/animation:\s*vt-in\s+var\(--mt-dur-route\)/);
+  });
+
+  it('declares no ::view-transition rule outside that guard', () => {
+    // A rule outside the guard would run for every learner, including one who asked for less
+    // motion — the opposite of what this animation promises.
+    const start = css.indexOf('@media (prefers-reduced-motion: no-preference)');
+    const guarded = blockBodyAt(css, css.indexOf('{', start));
+    const withoutGuardedBlock = css.replace(guarded, '');
+    expect(hasSelector(withoutGuardedBlock, '::view-transition')).toBe(false);
+  });
+});
+
+describe('the shared .legal-page block (design review, section 1.4, item 6)', () => {
+  const files = [
+    'src/app/legal/privacy-page.component.ts',
+    'src/app/legal/terms-page.component.ts',
+    'src/app/legal/imprint-page.component.ts',
+    'src/app/not-found/not-found-page.component.ts',
+  ];
+
+  it('declares .legal-page once, in styles.css', () => {
+    expect(hasSelector(css, '.legal-page')).toBe(true);
+  });
+
+  it('is used by the three legal pages, and by the not-found page as its fourth variant', () => {
+    for (const file of files) {
+      const text = readFileSync(file, 'utf8');
+      expect(text, `${file} must carry the class legal-page`).toMatch(/class="[^"]*\blegal-page\b/);
+    }
+  });
+
+  it('is not redeclared as a whole block in any of the four page components', () => {
+    // A page may still add its own rule for something the shared block does not cover — a list,
+    // a code sample, a page-specific override — but the layout block itself lives in one place.
+    for (const file of files) {
+      const text = readFileSync(file, 'utf8');
+      expect(text, `${file} must not redeclare the .legal-page block itself`).not.toMatch(
+        /\.legal-page\s*\{\s*\n\s*max-width/,
+      );
+    }
   });
 });
 
