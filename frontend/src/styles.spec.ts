@@ -236,16 +236,34 @@ describe('.mt-pill answers hover, press and the disabled state', () => {
 });
 
 describe('a busy .mt-pill (finding F7, animation J)', () => {
-  it('draws a sweeping bar along the bottom edge, on a 900ms linear loop', () => {
+  /**
+   * Defect 3 of the design review's second round. The bar sat exactly on the 2px bottom
+   * border (`inset: auto 0 -2px 0`), so on a ghost pill — dark teal on a teal border — it was
+   * invisible at 100% zoom. `inset: auto 0 0 0` sits it flush with the bottom of the padding
+   * box instead: inside the border, on the pill's own background, where it reads against every
+   * pill colour.
+   */
+  it('draws a sweeping bar inside the padding box, on a 900ms linear loop', () => {
     const rule = css.match(/\.mt-pill\[aria-busy='true'\]::after\s*\{([^}]*)\}/);
     if (!rule) throw new Error("styles.css must declare .mt-pill[aria-busy='true']::after");
     expect(rule[1]).toMatch(/animation:\s*pill-busy 900ms linear infinite/);
+    expect(rule[1]).toMatch(/inset:\s*auto 0 0 0/);
+    expect(rule[1]).not.toMatch(/inset:\s*auto 0 -2px 0/);
   });
 
-  it('keeps the control at full opacity, so its label stays readable', () => {
+  /**
+   * Defect 3 of the design review's second round. The pill has a 999px radius, and the bar
+   * used to run straight from 0 to 100% of the padding box, so its flat, square ends sat
+   * outside the curve at each corner. `overflow: hidden` clips the bar — a child of this
+   * element — to the pill's own rounded shape. It does not clip the pill's own box-shadow,
+   * which is not a child and paints outside this element's own overflow regardless: the focus
+   * ring stays complete.
+   */
+  it('keeps the control at full opacity, and clips its own bar to the pill shape', () => {
     const rule = css.match(/\.mt-pill\[aria-busy='true'\]\s*\{([^}]*)\}/);
     if (!rule) throw new Error("styles.css must declare .mt-pill[aria-busy='true']");
     expect(rule[1]).toMatch(/opacity:\s*1/);
+    expect(rule[1]).toMatch(/overflow:\s*hidden/);
   });
 
   it('stops the sweep under reduced motion, and leaves a static bar', () => {

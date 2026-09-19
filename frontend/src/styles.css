@@ -351,17 +351,24 @@ button:disabled {
    disabled one, and said nothing about what it was doing. This keeps the label at full colour —
    the label already carries a word for the work, for example "Sending…" — and sweeps a bar
    along the bottom edge, where the pill's own lift already lives. */
+/* Defect 3 found in review of issue #106. The design review's own text put the bar exactly on
+   the 2px bottom border, with no clip on the pill's own rounded corner. On a ghost pill — dark
+   teal on a teal border — the bar was invisible at 100% zoom, because it shared the border's own
+   colour. At the pill's 999px radius, the bar's flat, square ends also sat outside the curve at
+   each corner. overflow: hidden below clips the bar to the pill's own shape; it does not clip
+   the pill's own box-shadow (the lift, and the focus ring), because a box-shadow is not a child
+   and paints outside an element's own overflow regardless. */
 .mt-pill[aria-busy='true'] {
   position: relative;
+  overflow: hidden;
   cursor: progress;
   opacity: 1;
 }
 .mt-pill[aria-busy='true']::after {
   content: '';
   position: absolute;
-  inset: auto 0 -2px 0;
-  height: 2px;
-  border-radius: 2px;
+  inset: auto 0 0 0;
+  height: 3px;
   background: currentColor;
   opacity: 0.6;
   transform-origin: left;
