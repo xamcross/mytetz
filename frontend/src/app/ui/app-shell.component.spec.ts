@@ -61,6 +61,16 @@ describe('AppShellComponent', () => {
     expect(home.textContent.trim()).toBe('mytetz');
   });
 
+  it('shows a Glossary link to /glossary, since Ktor serves that page', () => {
+    fixture.detectChanges();
+
+    const links = Array.from(
+      fixture.nativeElement.querySelectorAll('.bar__nav a'),
+    ) as HTMLAnchorElement[];
+    const glossary = links.find((a) => a.textContent?.trim() === 'Glossary');
+    expect(glossary?.getAttribute('href')).toBe('/glossary');
+  });
+
   it('shows a Sign in link to /auth while no account is signed in', () => {
     fixture.detectChanges();
 

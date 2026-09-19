@@ -193,6 +193,8 @@ fun Application.module(components: Components = Components()) {
             catalog = components.catalog,
             explanations = components.explanations,
         )
+        // `GET /glossary`. See GlossaryRoutes.kt's own KDoc.
+        glossaryRoutes(explanations = components.explanations)
 
         // Every unmatched `/api/**` path, answered as JSON.
         //
