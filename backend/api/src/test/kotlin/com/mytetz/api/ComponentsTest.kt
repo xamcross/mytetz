@@ -9,6 +9,7 @@ import com.mytetz.account.GoogleConfig
 import com.mytetz.account.GoogleOAuth
 import com.mytetz.account.LoggingMailSender
 import com.mytetz.account.MailSender
+import com.mytetz.billing.BillingConfig
 import com.mytetz.graph.Explanation
 import com.mytetz.graph.ExplanationRepository
 import com.mytetz.graph.Verb
@@ -719,6 +720,36 @@ class ComponentsTest {
         )
 
         assertEquals("fake-model", components.modelFamily)
+    }
+
+    /**
+     * The core proof for issue #121: the FAQ page reads its three numbers from this one property,
+     * and never from a second call to [BillingConfig] with its own default. A missing constructor
+     * parameter here would fail this test at compile time, before any FAQ test runs.
+     */
+    @Test
+    fun `billingConfig resolves to the project's own defaults, with no override set`() {
+        val components = Components(
+            mongo = Mongo(MongoConfig(TestFixtures.connectionString, "test_api_billing_config_default")),
+            cookies = TestFixtures.cookieConfig,
+        )
+
+        assertEquals(BillingConfig.DEFAULT_TRIAL_DAYS, components.billingConfig.trialDays)
+        assertEquals(BillingConfig.DEFAULT_TRIAL_GENERATIONS, components.billingConfig.trialGenerations)
+        assertEquals(BillingConfig.DEFAULT_SUBSCRIBER_DAILY_EXPLAINS, components.billingConfig.subscriberDailyExplains)
+    }
+
+    @Test
+    fun `a test can override billingConfig, and the one instance reaches billing and the FAQ page alike`() {
+        val components = Components(
+            mongo = Mongo(MongoConfig(TestFixtures.connectionString, "test_api_billing_config_override")),
+            cookies = TestFixtures.cookieConfig,
+            billingConfig = BillingConfig(trialGenerations = 55, trialDays = 9, subscriberDailyExplains = 30),
+        )
+
+        assertEquals(9, components.billingConfig.trialDays)
+        assertEquals(55, components.billingConfig.trialGenerations)
+        assertEquals(30, components.billingConfig.subscriberDailyExplains)
     }
 
     @Test

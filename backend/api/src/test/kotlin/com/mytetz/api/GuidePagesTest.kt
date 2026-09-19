@@ -160,6 +160,21 @@ class GuidePagesTest {
         }
     }
 
+    /** Issue #121's own step 8: each public page links to the FAQ page too. */
+    @Test
+    fun `every guide page's footer links to the FAQ page`() = testApplication {
+        application { routing { spaRoutes() } }
+
+        assertTrue(GuidePages.paths.isNotEmpty(), "the guide list must not be empty")
+        for (path in GuidePages.paths) {
+            val body = client.get(path).bodyAsText()
+            assertTrue(
+                """<a href="/faq">FAQ</a>""" in body,
+                "$path's footer carries no link to /faq",
+            )
+        }
+    }
+
     @Test
     fun `every guide path is lowercase and carries no trailing slash`() {
         assertTrue(GuidePages.paths.isNotEmpty(), "the guide list must not be empty")

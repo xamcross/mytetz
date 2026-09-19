@@ -8,9 +8,18 @@ The catalogue lists topics by title, category and summary. A reader can search, 
 
 - [Catalogue](https://mytetz.com/): the curated list of topics.
 - [How it works](https://mytetz.com/how-it-works): which model writes an explanation, the known limits, and a contact.
+- [FAQ](https://mytetz.com/faq): the price, the trial, and cancellation.
 - [Privacy policy](https://mytetz.com/privacy)
 - [Terms of service](https://mytetz.com/terms)
 - [Imprint](https://mytetz.com/imprint)
+
+## Product
+
+- Price: $12 a month, through a Freemius checkout. The trial needs no card.
+- Trial: 40 explanations over 7 days, no credit card.
+- Subscriber allowance: 25 explanations each day.
+- Cancel: the account page, Manage subscription.
+- No account is needed for the catalogue, a topic page and its seed text.
 
 ## Guides
 
