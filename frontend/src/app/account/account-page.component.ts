@@ -1,9 +1,15 @@
-import { Component, OnInit, inject, signal } from '@angular/core';
+import { Component, DestroyRef, OnInit, inject, signal } from '@angular/core';
 import { HttpErrorResponse } from '@angular/common/http';
-import { RouterLink } from '@angular/router';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { AllowanceMeterComponent } from './allowance-meter.component';
 import { AccountStore } from '../core/account.store';
 import { ApiService } from '../core/api.service';
+
+/** How often the page reads the account again while a post-purchase poll runs. */
+const POLL_INTERVAL_MILLIS = 2000;
+
+/** How long the page waits for a changed status or period end before it gives up. */
+const POLL_TIMEOUT_MILLIS = 30000;
 
 /**
  * `/account` — the signed-in learner's own account page.
@@ -13,9 +19,18 @@ import { ApiService } from '../core/api.service';
  * screen. This page is the one place that reports the failure. See `AccountStore.error`'s own
  * comment for the full reason.
  *
- * The page loads the account on every visit. The page reads no query parameter. Freemius sends
- * the browser back here after checkout. The page does not trust anything in that return URL. A
- * fresh `GET /api/account` is the only trusted source.
+ * The page loads the account on every visit. Freemius sends the browser back here after
+ * checkout. The return URL carries an `action` query parameter and other values, including the
+ * learner's own email. The page reads only `action`, and only as a hint to poll. It takes no
+ * status, no date and no allowance from the URL. A fresh `GET /api/account` stays the only
+ * trusted source.
+ *
+ * When the hint is present, the page reads the account again every 2 seconds. The poll stops on
+ * a changed status, on a changed period end, after 30 seconds, or when the page closes. [polling]
+ * and [pollTimedOut] carry the two messages a learner sees during and after that wait.
+ *
+ * The page removes the query string from the address bar once the first load settles. This
+ * clears the learner's own email out of the address bar and the browser history.
  *
  * "Manage subscription" is present, and the button is inert. `POST /api/billing/checkout` is the
  * only billing link this backend exposes today. This task does not confirm that the same
@@ -60,6 +75,17 @@ import { ApiService } from '../core/api.service';
           }
 
           <app-allowance-meter />
+
+          @if (polling()) {
+            <p class="account-page__poll-status" role="status">
+              We are waiting for the payment confirmation. Your new allowance shows here in a
+              moment.
+            </p>
+          } @else if (pollTimedOut()) {
+            <p class="account-page__poll-status">
+              The confirmation is not here yet. Load this page again in a minute.
+            </p>
+          }
 
           @if (actionError(); as message) {
             <p class="account-page__error" role="alert">{{ message }}</p>
@@ -175,6 +201,12 @@ import { ApiService } from '../core/api.service';
         font-weight: 700;
         color: var(--mt-err-ink);
       }
+      .account-page__poll-status {
+        margin: 0;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--mt-muted);
+      }
       .account-page__actions {
         display: flex;
         flex-wrap: wrap;
@@ -217,6 +249,8 @@ import { ApiService } from '../core/api.service';
 export class AccountPageComponent implements OnInit {
   private readonly account = inject(AccountStore);
   private readonly api = inject(ApiService);
+  private readonly route = inject(ActivatedRoute);
+  private readonly router = inject(Router);
 
   readonly view = this.account.view;
   readonly error = this.account.error;
@@ -227,8 +261,84 @@ export class AccountPageComponent implements OnInit {
    * `GET /api/account`. */
   readonly actionError = signal<string | null>(null);
 
+  /** True while the post-purchase poll runs. See the class doc comment. */
+  readonly polling = signal(false);
+
+  /** True once the poll's 30-second limit passes with no change. */
+  readonly pollTimedOut = signal(false);
+
+  private pollIntervalId: ReturnType<typeof setInterval> | null = null;
+  private pollDeadlineId: ReturnType<typeof setTimeout> | null = null;
+
+  constructor() {
+    // Stops both poll timers on the way out, so a torn-down page never calls `AccountStore.load`
+    // again, and never reads the account of whichever session opens `/account` next.
+    inject(DestroyRef).onDestroy(() => this.stopPoll());
+  }
+
   ngOnInit(): void {
-    void this.account.load();
+    void this.loadAndMaybePoll();
+  }
+
+  /** Reads the account, clears Freemius's return parameters from the address bar, then starts
+   * the poll if the `action` hint is present and the first read left a signed-in view. */
+  private async loadAndMaybePoll(): Promise<void> {
+    await this.account.load();
+    await this.removeQueryString();
+    this.maybeStartPoll();
+  }
+
+  /** Drops every query parameter from the current URL, with no new history entry. A no-op when
+   * the URL already carries none, so a plain visit to `/account` triggers no navigation. */
+  private async removeQueryString(): Promise<void> {
+    if (Object.keys(this.route.snapshot.queryParams).length === 0) return;
+    await this.router.navigate([], { queryParams: {}, replaceUrl: true });
+  }
+
+  /** Starts the poll when Freemius's `action` hint is present and the learner is signed in. The
+   * hint is read once, from the route the page opened with — see the class doc comment on why
+   * the page trusts nothing else in the URL. */
+  private maybeStartPoll(): void {
+    if (!this.route.snapshot.queryParamMap.has('action')) return;
+    const view = this.account.view();
+    if (view === null) return;
+    this.startPoll(view.status, view.currentPeriodEndsAtEpochMillis);
+  }
+
+  /** Reads the account again every [POLL_INTERVAL_MILLIS], until [stopPoll] runs — on a changed
+   * status or period end, on the [POLL_TIMEOUT_MILLIS] deadline, or on destroy. The deadline
+   * timer starts before the interval timer, so a tick that lands on both fires the deadline
+   * first: the interval then never fires again, and no request is left in flight once the
+   * learner reads the timeout message. */
+  private startPoll(status: string, periodEndsAtEpochMillis: number | null): void {
+    this.polling.set(true);
+    this.pollTimedOut.set(false);
+    this.pollDeadlineId = setTimeout(() => {
+      this.stopPoll();
+      this.pollTimedOut.set(true);
+    }, POLL_TIMEOUT_MILLIS);
+    this.pollIntervalId = setInterval(() => {
+      void this.account.load().then(() => {
+        const view = this.account.view();
+        const changed =
+          view === null ||
+          view.status !== status ||
+          view.currentPeriodEndsAtEpochMillis !== periodEndsAtEpochMillis;
+        if (changed) this.stopPoll();
+      });
+    }, POLL_INTERVAL_MILLIS);
+  }
+
+  private stopPoll(): void {
+    if (this.pollIntervalId !== null) {
+      clearInterval(this.pollIntervalId);
+      this.pollIntervalId = null;
+    }
+    if (this.pollDeadlineId !== null) {
+      clearTimeout(this.pollDeadlineId);
+      this.pollDeadlineId = null;
+    }
+    this.polling.set(false);
   }
 
   /** The period end, as a date, or `null` when the account has none. The method formats the date
