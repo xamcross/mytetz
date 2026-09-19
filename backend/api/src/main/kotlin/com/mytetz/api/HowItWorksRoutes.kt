@@ -50,12 +50,12 @@ private const val GITHUB_URL = "https://github.com/xamcross/mytetz"
  * That is not true today, confirmed by reading `Components.prewarm()` and
  * `CatalogService.seedFromResource()`: a topic is `PUBLISHED` straight from `topics.json`, with
  * no draft gate, and `Components.bootstrap()` then pre-warms its seed automatically, on every
- * boot, with no review step in between. Issue #18's own requirement — "the implementer reads
- * every generated seed from the live store... after the pre-warm" — is a one-time check for that
- * issue's own catalogue growth, run after the seed is already live, and is not an enforced,
- * repeatable gate the code carries for every topic. This page states the true, narrower fact
- * instead, under "The known limits": no person checks a new explanation before mytetz shows it to
- * a reader. See this task's own report for the full evidence.
+ * boot, with no review step in between. Issue #18 (closed 2026-09-19) asked for one check: "the
+ * implementer reads every generated seed from the live store... after the pre-warm". That was a
+ * one-time check for that issue's own catalogue growth, run after the seed was already live. It
+ * is not a repeatable gate the code enforces for every topic. This page states the true, narrower
+ * fact instead, under "The known limits": no person checks a new explanation before mytetz shows
+ * it to a reader. See this task's own report for the full evidence.
  *
  * The `Organization` JSON-LD reuses `organizationJsonLd()` and `jsonLdDocument()` from `JsonLd.kt`
  * — the same node `/` carries — rather than building a second copy.
