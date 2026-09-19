@@ -6,8 +6,10 @@ import type {
   TopicSummary,
 } from '../src/app/core/models';
 import {
+  CHILD,
   SEED,
   accountView,
+  explainedView,
   mockExplainStream,
   mockQuiz,
   openQuantumPhysicsSession,
@@ -385,6 +387,10 @@ test('the picker opens below a phrase near the top of the card', async ({ page }
 
   await selectPhrase(page, 'focus-body', 'Quantum mechanics');
   await picker(page).waitFor();
+  // Animation D moves the picker with `transform` while it opens. Waiting for its entrance
+  // animation to finish keeps this a claim about the settled layout, and not about a box that is
+  // still sliding into place.
+  await expect(picker(page)).toHaveCSS('opacity', '1');
   const body = await page.locator('.focus__body').boundingBox();
   const box = await picker(page).boundingBox();
   expect(box!.y, 'the picker sits under the phrase when there is room below it').toBeGreaterThan(
@@ -404,6 +410,9 @@ test('the picker flips above a phrase near the bottom, and stays inside the card
     // own bottom padding — the least room below of anywhere in the card.
     await selectPhrase(page, 'focus-body', 'matter and light.');
     await picker(page).waitFor();
+    // Same wait as the test above, for the same reason: the entrance animation moves the box
+    // with `transform` while it plays, and this claim is about where the box settles.
+    await expect(picker(page)).toHaveCSS('opacity', '1');
     const body = await page.locator('.focus__body').boundingBox();
     const box = await picker(page).boundingBox();
     const card = await page.locator('.focus').boundingBox();
@@ -640,6 +649,71 @@ test.describe('with a reduced-motion preference', () => {
     expect(animationName).toBe('none');
 
     held.open();
+  });
+
+  test('the picker opens and closes with a 1ms fade, and leaves no element behind', async ({
+    page,
+  }) => {
+    // Animation D. The phone sheet's 100% travel is not a distance any --mt-move-* token
+    // covers, so its reduced-motion form is an explicit rule rather than a token substitution —
+    // this is the one animation of this issue that needs its own duration and name asserted,
+    // rather than relying on the generic token test above.
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await stubCatalogueAndSession(page);
+    await page.setViewportSize(WIDTHS.wide);
+    await gotoReader(page);
+    await selectPhrase(page, 'focus-body', 'Quantum mechanics');
+    await picker(page).waitFor();
+
+    const opened = await picker(page).evaluate((el) => {
+      const s = getComputedStyle(el);
+      return { animationName: s.animationName, animationDuration: s.animationDuration };
+    });
+    expect(opened.animationName, 'the picker fades in rather than sliding').toBe('picker-fade');
+    expect(opened.animationDuration).toBe('0.001s');
+
+    await page.keyboard.press('Escape');
+    // `animate.leave` keeps the picker in the DOM only until its animation ends. A duration of
+    // 1ms and not 0ms is what makes that `animationend` fire at all — see styles.css's own
+    // comment on the token block for why 0ms is unsafe here — so this is also the proof that the
+    // choice works for a real element, and not only for the tokens in isolation.
+    await expect(picker(page)).toHaveCount(0);
+  });
+
+  test('the answer replaces the stream box with no leftover element', async ({ page }) => {
+    // Animation A. The stream box leaves through `animate.leave`, and the reduced-motion tokens
+    // take its exit to 1ms. This is the proof that the element is actually gone afterwards, and
+    // not merely invisible.
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await stubCatalogueAndSession(page, explainedView(CHILD));
+    const stream = await mockExplainStream(page, 's1');
+    await openQuantumPhysicsSession(page);
+
+    await selectPhrase(page, 'focus-body', 'fundamental physical theory');
+    await verb(page, 'Explain it').click();
+    await stream.send(sseFrame('meta', { contentKey: 'k1', cached: false }));
+    await stream.send(sseFrame('delta', { t: CHILD }));
+    await page.locator('.focus__streaming').waitFor();
+
+    await stream.send(sseFrame('done', { contentKey: 'k1', grounded: true }));
+    await stream.close();
+
+    await expect(page.getByText(/subatomic scale/)).toBeVisible();
+    await expect(page.locator('.focus__streaming')).toHaveCount(0);
+    // Animation A's other half: the body settles at full opacity, and not stuck at the 0.25 the
+    // keyframe's `from` step declares.
+    await expect(page.locator('.focus__body')).toHaveCSS('opacity', '1');
+
+    // Animation E and F. A new trail row and a new crumb both land, and the current row still
+    // changes colour to say where the learner is — the duration tokens take 1ms, proved
+    // generically above, and this is the proof that the elements themselves still arrive and
+    // still carry the right state under that duration.
+    await expect(page.locator('.trail__item--current')).toContainText('fundamental physical');
+    await expect(page.locator('.trail__item--current')).toHaveCSS(
+      'background-color',
+      'rgb(15, 118, 110)',
+    );
+    await expect(page.locator('.crumb')).toHaveCount(2);
   });
 });
 

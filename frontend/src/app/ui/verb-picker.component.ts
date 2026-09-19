@@ -118,6 +118,33 @@ const VERBS: ReadonlyArray<{ verb: Verb; name: string; caption: string }> = [
         border: var(--mt-border-w) solid var(--mt-border);
         border-radius: var(--mt-r-panel);
         box-shadow: var(--mt-float);
+        /* Animation D. On a wide screen the popover grows from the phrase it explains, so the
+           origin sits at the corner nearest that phrase. */
+        transform-origin: top left;
+        animation: picker-open var(--mt-dur-panel) var(--mt-ease-out) both;
+      }
+      @keyframes picker-open {
+        from {
+          opacity: 0;
+          transform: translateY(calc(-1 * var(--mt-move-near))) scale(0.96);
+        }
+        to {
+          opacity: 1;
+          transform: none;
+        }
+      }
+      /* The host is the app-verb-picker tag itself, which the focus card's own template gives
+         the picker--out class through animate.leave — see the comment there for why it has to be
+         the host and not an element inside this file. :host() lets that class, added outside
+         this component, still select the visible box inside it. */
+      :host(.picker--out) .picker {
+        animation: picker-close var(--mt-dur-state) var(--mt-ease-in) both;
+      }
+      @keyframes picker-close {
+        to {
+          opacity: 0;
+          transform: translateY(calc(-1 * var(--mt-move-press))) scale(0.98);
+        }
       }
       .picker__lead {
         margin: 0;
@@ -200,22 +227,48 @@ const VERBS: ReadonlyArray<{ verb: Verb; name: string; caption: string }> = [
           width: auto;
           max-height: 60vh;
           border-radius: var(--mt-r-card) var(--mt-r-card) 0 0;
-          animation: picker-rise 200ms ease-out;
+          /* The sheet rises from the edge it is attached to. */
+          transform-origin: bottom center;
+          animation: picker-rise var(--mt-dur-panel) var(--mt-ease-out) both;
+        }
+        @keyframes picker-rise {
+          from {
+            transform: translateY(100%);
+          }
+          to {
+            transform: none;
+          }
+        }
+        :host(.picker--out) .picker {
+          animation: picker-fall var(--mt-dur-state) var(--mt-ease-in) both;
+        }
+        @keyframes picker-fall {
+          to {
+            transform: translateY(100%);
+          }
         }
       }
-      @keyframes picker-rise {
-        from {
-          transform: translateY(100%);
-        }
-        to {
-          transform: translateY(0);
-        }
-      }
-      /* The rise above keeps its own raw duration and does not move to the motion tokens (issue
-         #102 does not touch it). A learner who asks for less motion still needs it silenced. */
+      /* The phone sheet travels 100% of its own height, a distance no --mt-move-* token covers,
+         so its reduced-motion form is explicit rather than token-driven — a plain cross-fade with
+         no travel at all. This rule stays in this file rather than in styles.css: issue #102 found
+         that a component's own rule always outranks a same-class rule in the global sheet, so an
+         override that must win here has to live here. This replaces the animation: none rule
+         issue #102 left in its place, which silenced the phone sheet but gave desktop's own new
+         entrance and exit nothing to fall back to either. */
       @media (prefers-reduced-motion: reduce) {
         .picker {
-          animation: none;
+          animation: picker-fade 1ms linear both;
+        }
+        :host(.picker--out) .picker {
+          animation: picker-fade 1ms linear reverse both;
+        }
+        @keyframes picker-fade {
+          from {
+            opacity: 0;
+          }
+          to {
+            opacity: 1;
+          }
         }
       }
     `,

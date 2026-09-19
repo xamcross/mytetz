@@ -134,9 +134,19 @@ const READY_STATUS_MILLIS = 4000;
       </button>
 
       @if (pickerSpan(); as chosenSpan) {
+        <!--
+          Animation D. animate.leave goes on this tag, in this file, rather than inside
+          VerbPickerComponent's own template: Angular's animation guide states a nested
+          component's own animate.leave does not fire when an ancestor outside its template
+          removes it, and this @if is exactly such an ancestor. The class it adds still reaches
+          the picker's own visible box, because a component host carries the class its parent
+          template gives it, and verb-picker.component.ts's :host(.picker--out) selector reads it
+          from there.
+        -->
         <app-verb-picker
           [span]="chosenSpan"
           [anchor]="anchor()!"
+          animate.leave="picker--out"
           (chosen)="request($event)"
           (dismissed)="close($event)"
         />
