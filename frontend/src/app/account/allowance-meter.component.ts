@@ -92,6 +92,26 @@ const METERED_STATUSES: ReadonlySet<string> = new Set([
         :host-context(.bar) .allowance-meter__detail {
           display: none;
         }
+        /*
+         * Issue #100, round 2. The checkout error can wrap into several lines. Inside the row,
+         * a tall child does not grow the bar: the bar keeps its own fixed height of 64px, and
+         * the child overflows over the bar's other elements instead. A real run measures the
+         * error box from y=-16 to y=89, well outside the bar's own 0-to-64 range.
+         *
+         * This rule takes the error out of the row and fixes it just below the bar instead, at
+         * the bar's own right edge. The bar's height never changes, so top: 64px always lands
+         * just under it, and the fix needs no positioned ancestor in another file.
+         */
+        :host-context(.bar) .allowance-meter__error {
+          position: fixed;
+          top: 64px;
+          right: 20px;
+          max-width: 260px;
+          padding: 8px 12px;
+          background: var(--mt-err-bg);
+          border: var(--mt-border-w) solid var(--mt-err-border);
+          border-radius: var(--mt-r-row);
+        }
       }
     `,
   ],
