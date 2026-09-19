@@ -1,5 +1,9 @@
 package com.mytetz.api
 
+import ch.qos.logback.classic.Level
+import ch.qos.logback.classic.Logger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
 import com.mongodb.client.model.Filters
 import com.mytetz.account.AccountRepository
 import com.mytetz.account.AccountService
@@ -13,9 +17,13 @@ import com.mytetz.billing.SubscriptionStatus
 import com.mytetz.graph.Explanation
 import com.mytetz.graph.GraphChunk
 import com.mytetz.graph.Verb
+import com.mytetz.llm.LlmStreamTruncatedException
 import com.mytetz.quota.Allowance
 import com.mytetz.quota.PrincipalId
 import com.mytetz.quota.QuotaConfig
+import com.mytetz.quota.QuotaRepository
+import com.mytetz.quota.QuotaService
+import com.mytetz.session.SessionStatus
 import com.mytetz.session.SpanSelection
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.cookies.HttpCookies
@@ -35,8 +43,10 @@ import io.ktor.server.routing.routing
 import io.ktor.server.testing.ApplicationTestBuilder
 import io.ktor.server.testing.testApplication
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import org.bson.Document
+import org.slf4j.LoggerFactory
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -150,6 +160,12 @@ class SessionRoutesTest {
         // `dailyExplains` — see `SessionRoutes.kt`'s entitlement gate. A test that used to force
         // principal exhaustion through `dailyExplains` sets this instead.
         trialGenerations: Int = QuotaConfig.DEFAULT_DAILY_EXPLAINS,
+        // Null for every ordinary test, which keeps `stack.quota` — the one instance every other
+        // assertion in this file reads through `stack.quota.dailySpendMicros()` and the like. A test
+        // that must see a *recording* fail, and not merely a refusal, supplies its own
+        // [QuotaService] here, wired on a [com.mytetz.quota.QuotaRepository] subclass that fails on
+        // purpose.
+        quota: QuotaService? = null,
         block: suspend Scope.() -> Unit,
     ) = testApplication {
         val stack = TestFixtures.sessionApp(
@@ -184,7 +200,7 @@ class SessionRoutesTest {
             routing {
                 sessionRoutes(
                     sessions = { stack.sessions },
-                    quota = stack.quota,
+                    quota = quota ?: stack.quota,
                     billing = billing,
                     account = account,
                     cookies = TestFixtures.cookieConfig,
@@ -200,6 +216,7 @@ class SessionRoutesTest {
                     cookies = TestFixtures.cookieConfig,
                     quotaRepository = stack.quotaRepository,
                     billing = billing,
+                    quizzes = { error("quizzes are not exercised by SessionRoutesTest") },
                     clientAddresses = ClientAddressConfig(trustedHeader = null),
                 )
             }
@@ -456,6 +473,59 @@ class SessionRoutesTest {
         )
         assertEquals("no", response.headers["X-Accel-Buffering"])
         assertEquals(ContentType.Text.EventStream.contentType, response.contentType()?.contentType)
+    }
+
+    // ------------------------------------------------------------------ completion
+
+    @Test
+    fun `an explain on a completed session is refused before anything is generated`() = app {
+        val created = createSession()
+        val span = sessionView(created.sessionId).spanOn("behavior of matter")
+        stack.completeSession(created.sessionId)
+        val before = stack.generations
+
+        val response = explain(created.sessionId, span)
+
+        assertEquals(HttpStatusCode.Conflict, response.status)
+        assertEquals("SESSION_COMPLETED", response.apiError().code)
+        assertEquals(before, stack.generations, "a completed session reached the model")
+        assertEquals(1, sessionView(created.sessionId).nodes.size, "a completed session gained a node")
+    }
+
+    @Test
+    fun `GET reports a session's status, and a completed session stays readable`() = app {
+        val created = createSession()
+        assertEquals(SessionStatus.ACTIVE, sessionView(created.sessionId).status)
+
+        stack.completeSession(created.sessionId)
+
+        val view = sessionView(created.sessionId)
+        assertEquals(SessionStatus.COMPLETED, view.status)
+        assertTrue(view.explanations.values.any { it.contains("Quantum mechanics") }, "a completed session must stay readable")
+    }
+
+    @Test
+    fun `a learner can mark their own session complete`() = app {
+        val created = createSession()
+
+        val response = client.post("/api/sessions/${created.sessionId}/complete")
+
+        assertEquals(HttpStatusCode.NoContent, response.status)
+        assertEquals(SessionStatus.COMPLETED, sessionView(created.sessionId).status)
+    }
+
+    @Test
+    fun `completing an unknown or another learner's session answers the same 404`() = app {
+        val mine = createSession()
+        val stranger = anotherLearner()
+
+        val theirs = stranger.post("/api/sessions/${mine.sessionId}/complete")
+        val absent = stranger.post("/api/sessions/00000000-0000-0000-0000-000000000000/complete")
+
+        assertEquals(HttpStatusCode.NotFound, theirs.status)
+        assertEquals(absent.status, theirs.status)
+        assertEquals(absent.apiError(), theirs.apiError())
+        assertEquals(SessionStatus.ACTIVE, sessionView(mine.sessionId).status, "a stranger completed my session")
     }
 
     // ------------------------------------------------------------------ the entitlement gate
@@ -1051,6 +1121,126 @@ class SessionRoutesTest {
         assertEquals(1, sessionView(created.sessionId).nodes.size, "a cancelled request appended a node")
     }
 
+    @Test
+    fun `a stream cancelled two deltas in records an estimated cost`() = app {
+        val created = createSession()
+        val span = sessionView(created.sessionId).spanOn("behavior of matter")
+        val ledgerBefore = stack.quota.dailySpendMicros()
+        val owner = assertNotNull(stack.sessions.ownerOf(created.sessionId))
+        val countBefore = principalCount(owner)
+
+        // What a learner navigating away two deltas into the answer looks like from inside the
+        // flow. Real tokens were sampled by then, so this must not read as a free retry.
+        stack.llm.afterDeltaIndex = 1
+        stack.llm.afterDelta = { throw kotlin.coroutines.cancellation.CancellationException("navigated away") }
+
+        val text = runCatching { explain(created.sessionId, span).bodyAsText() }.getOrDefault("")
+
+        assertFalse(text.contains("event: error"), "a cancellation was reported as a stream failure")
+        assertFalse(text.contains("event: done"), "a cancelled stream reported completion")
+        assertTrue(
+            stack.quota.dailySpendMicros() > ledgerBefore,
+            "a stream cancelled after real tokens were sampled recorded no estimate",
+        )
+        assertEquals(
+            countBefore + 1,
+            principalCount(owner),
+            "the estimate did not count against the principal's daily allowance",
+        )
+        assertEquals(1, sessionView(created.sessionId).nodes.size, "a cancelled request appended a node")
+    }
+
+    @Test
+    fun `a truncated stream records an estimated cost`() = app {
+        val created = createSession()
+        val span = sessionView(created.sessionId).spanOn("behavior of matter")
+        val ledgerBefore = stack.quota.dailySpendMicros()
+        val owner = assertNotNull(stack.sessions.ownerOf(created.sessionId))
+        val countBefore = principalCount(owner)
+
+        // The provider stream ended with no stop reason. AnthropicLlmClient raises this for real;
+        // the fixture raises it directly instead of replaying the wire events that lead to it.
+        stack.llm.failWith = LlmStreamTruncatedException("the stream ended without a stop reason")
+
+        val text = explain(created.sessionId, span).bodyAsText()
+
+        assertTrue(text.contains("\"code\":\"GENERATION_FAILED\""), "expected a rejection: $text")
+        assertTrue(
+            stack.quota.dailySpendMicros() > ledgerBefore,
+            "a truncated stream recorded no estimate",
+        )
+        assertEquals(
+            countBefore + 1,
+            principalCount(owner),
+            "the estimate did not count against the principal's daily allowance",
+        )
+        assertEquals(1, sessionView(created.sessionId).nodes.size, "a truncated generation appended a node")
+    }
+
+    @Test
+    fun `a completed stream records the exact cost once and no estimate`() = app {
+        // Copies the setup of "spend is recorded once, by the caller that generated, for what it
+        // cost" and adds the one thing that test does not check: that a normal completion never
+        // logs SPEND_ESTIMATED, which is the line an operator greps to see the estimate path fire.
+        val created = createSession()
+        val span = sessionView(created.sessionId).spanOn("behavior of matter")
+
+        val appender = attachSessionRoutesAppender()
+        try {
+            explain(created.sessionId, span).bodyAsText()
+        } finally {
+            detachSessionRoutesAppender(appender)
+        }
+
+        assertTrue(
+            appender.list.none { it.formattedMessage.contains("SPEND_ESTIMATED") },
+            "a completed stream logged an estimate: ${appender.list.map { it.formattedMessage }}",
+        )
+    }
+
+    @Test
+    fun `a recording failure still raises the SPEND_UNRECORDED alert`() {
+        // A QuotaRepository whose ledger write fails, the same shape
+        // `QuotaServiceTest`'s "a counter write that fails mid-sequence still leaves the spend in
+        // the ledger" uses for `incrementCounter`. This is the exact cost path, not the estimate
+        // path: `spentMicros` is real and positive, and `recordSpend` still has to survive the
+        // repository throwing under it.
+        val database = TestFixtures.database("session_routes_spend_unrecorded")
+        val failingRepository = object : QuotaRepository(database) {
+            override suspend fun incrementLedger(day: String, costMicros: Long): Unit =
+                error("a step-down between round trips")
+        }
+        runBlocking { failingRepository.ensureIndexes() }
+
+        app(quota = QuotaService(failingRepository)) {
+            val created = createSession()
+            val span = sessionView(created.sessionId).spanOn("behavior of matter")
+
+            val appender = attachSessionRoutesAppender()
+            try {
+                explain(created.sessionId, span).bodyAsText()
+            } finally {
+                detachSessionRoutesAppender(appender)
+            }
+
+            val event = assertNotNull(
+                appender.list.firstOrNull { it.level == Level.ERROR },
+                "a failed record was not logged at ERROR: ${appender.list.map { it.formattedMessage }}",
+            )
+            assertTrue(event.formattedMessage.contains(SPEND_UNRECORDED_ALERT))
+        }
+    }
+
+    private fun attachSessionRoutesAppender(): ListAppender<ILoggingEvent> {
+        val appender = ListAppender<ILoggingEvent>().apply { start() }
+        (LoggerFactory.getLogger("com.mytetz.api.SessionRoutes") as Logger).addAppender(appender)
+        return appender
+    }
+
+    private fun detachSessionRoutesAppender(appender: ListAppender<ILoggingEvent>) {
+        (LoggerFactory.getLogger("com.mytetz.api.SessionRoutes") as Logger).detachAppender(appender)
+    }
+
     // ------------------------------------------------------------------ what bounds the endpoints
 
     @Test
@@ -1114,8 +1304,9 @@ class SessionRoutesTest {
         app(explainsPerCaller = 1) {
             val created = createSession()
             val span = sessionView(created.sessionId).spanOn("behavior of matter")
-            // The shape that the limiter exists for. A stream that breaks emits no
-            // `GraphChunk.Spent`. The ledger does not move, and the principal counter does not move.
+            // The shape that the limiter exists for. A bare RuntimeException is neither a
+            // cancellation nor a LlmStreamTruncatedException, so ExplanationGraph reports no
+            // estimate for it: the ledger does not move, and the principal counter does not move.
             // `appendNode` does not run, so the node budget stays full. Every other bound on this
             // endpoint reads zero. The limiter spends the allowance at the door, before all of that.
             // This is the only reason that the retry loop stops.

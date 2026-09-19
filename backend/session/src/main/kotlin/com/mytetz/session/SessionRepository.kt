@@ -6,6 +6,8 @@ import com.mongodb.client.model.Indexes
 import com.mongodb.client.model.Updates
 import com.mongodb.kotlin.client.coroutine.MongoDatabase
 import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.flow.toList
+import java.util.concurrent.TimeUnit
 
 /**
  * The session named by [sessionId] does not exist — it was never created, or it has been removed.
@@ -29,8 +31,13 @@ class SessionRepository(database: MongoDatabase) {
 
     /**
      * `principal_recent` serves "my sessions, most recent first"; `by_topic` serves per-topic
-     * lookups. Neither is a TTL index and nothing here expires — sessions are the learner's record
-     * of what they read, and dropping them is a product decision nobody has made.
+     * lookups; `by_explanation_key` serves [referencedExplanationKeys]. None of the three expires
+     * anything.
+     *
+     * `session_ttl` does. It expires a document the instant its `expiresAt` field's stored Date
+     * passes, which is only ever true for an anonymous session — see [LearningSession]'s own KDoc on
+     * [LearningSession.expiresAtEpochMillis]. A signed-in learner's sessions carry no such field and
+     * this index never touches them; they are kept until account deletion removes them.
      */
     suspend fun ensureIndexes() {
         collection.createIndex(
@@ -38,6 +45,11 @@ class SessionRepository(database: MongoDatabase) {
             IndexOptions().name("principal_recent"),
         )
         collection.createIndex(Indexes.ascending("topicSlug"), IndexOptions().name("by_topic"))
+        collection.createIndex(Indexes.ascending("nodes.explanationKey"), IndexOptions().name("by_explanation_key"))
+        collection.createIndex(
+            Indexes.ascending("expiresAt"),
+            IndexOptions().name("session_ttl").expireAfter(0, TimeUnit.SECONDS),
+        )
     }
 
     /** Raises `MongoWriteException` on a duplicate id; the id is the caller's to make unique. */
@@ -85,16 +97,89 @@ class SessionRepository(database: MongoDatabase) {
     }
 
     /**
+     * Of [candidates], reports which ones a session node still points at through
+     * [SessionNode.explanationKey].
+     *
+     * `Components.evictExplanations` is the only caller. It reads one batch of eviction
+     * candidates from `ExplanationRepository`, and must not delete a key that a session still
+     * references — a deleted target of a live node breaks that session's trail. See
+     * `SessionService.hydrate`'s own KDoc for what a broken trail looks like from that side.
+     *
+     * An empty [candidates] returns an empty set and asks Mongo nothing, because a caller with no
+     * candidates has nothing to check.
+     *
+     * ## Why this reads a distinct field and not a decoded document
+     *
+     * The fly machine this runs on has 512 MB, and the JVM gets a fraction of that. A session
+     * holds a `nodes` array that grows for as long as the learner keeps drilling, and decoding a
+     * whole page of full [LearningSession] documents just to read one string field off each one
+     * spends memory this rule exists to protect. `distinct` is a server-side operation
+     * (https://www.mongodb.com/docs/manual/reference/method/db.collection.distinct/): the server
+     * scans the field and returns only the distinct values it finds, so no full document, and no
+     * `nodes` array, ever crosses the wire.
+     *
+     * The MongoDB Kotlin coroutine driver call is
+     * `MongoCollection<T>.distinct<R>(fieldName, filter): DistinctFlow<R>`, generic in the result
+     * type `R` and independent of the collection's own document type `T` — so this reads `String`
+     * values off a `MongoCollection<LearningSession>` with no intermediate type. `DistinctFlow` is
+     * a `Flow<R>`, so `.toList()` collects it the same way `collection.find(...)` is collected
+     * elsewhere in this class.
+     *
+     * The extra `.filter` after `.toList()` is still needed, and is not redundant with the query
+     * filter: per MongoDB's own documented rule, "if the value of the specified field is an
+     * array, `distinct()` considers each element of the array as a separate value" — so a session
+     * that matches the filter because *one* of its nodes carries a wanted key contributes *every*
+     * one of its nodes' keys to the distinct result, not only the one that matched.
+     */
+    suspend fun referencedExplanationKeys(candidates: Collection<String>): Set<String> {
+        if (candidates.isEmpty()) return emptySet()
+        val wanted = candidates.toSet()
+        return collection.distinct<String>("nodes.explanationKey", Filters.`in`("nodes.explanationKey", wanted))
+            .toList()
+            .filter { it in wanted }
+            .toSet()
+    }
+
+    /**
      * Re-keys every session document that carries [from] as its `principalId` to [to]. Reports how
      * many it changed.
      *
      * Sign-in is the caller: an anonymous learner's sessions carry an `anon:` principal, and a
      * sign-in must move them onto the new `user:` principal, or the learner's history is orphaned
-     * under an id nothing else ever presents again.
+     * under an id nothing else ever presents again. A completed session moves too, exactly like an
+     * active one — see "When a session completes" on [SessionService].
+     *
+     * Also removes the `expiresAt` field, on every session moved, completed or not. That field
+     * exists only for an anonymous session; the moment sign-in claims one, it is a signed-in
+     * learner's session and must be kept until account deletion, not reaped by `session_ttl` ninety
+     * days after whatever anonymous activity it last saw.
      */
     suspend fun reassignPrincipal(from: String, to: String): Long {
-        val result = collection.updateMany(Filters.eq("principalId", from), Updates.set("principalId", to))
+        val result = collection.updateMany(
+            Filters.eq("principalId", from),
+            Updates.combine(Updates.set("principalId", to), Updates.unset("expiresAt")),
+        )
         return result.modifiedCount
+    }
+
+    /**
+     * Marks the session named by [sessionId] [SessionStatus.COMPLETED].
+     *
+     * Raises [SessionNotFoundException] when no session has that id, on the same `matchedCount`
+     * check [appendNode] uses and for the same reason: an `updateOne` that matches nothing is not an
+     * error to MongoDB, and a caller that could not tell "completed" from "no such session" would
+     * report success for a request that changed nothing.
+     *
+     * The filter is on `_id` only, exactly as [appendNode]'s is — this method does not check
+     * ownership, and neither does [appendNode]; see [SessionService]'s "Authorisation is the
+     * caller's".
+     */
+    suspend fun complete(sessionId: String) {
+        val result = collection.updateOne(
+            Filters.eq("_id", sessionId),
+            Updates.set("status", SessionStatus.COMPLETED.name),
+        )
+        if (result.matchedCount == 0L) throw SessionNotFoundException(sessionId)
     }
 
     /**

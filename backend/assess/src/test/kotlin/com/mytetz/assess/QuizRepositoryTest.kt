@@ -91,4 +91,30 @@ class QuizRepositoryTest {
         repository.upsertAttempt(scored)
         assertEquals(1, repository.findAttempt("a1")?.score)
     }
+
+    private fun attempt(id: String, principalId: String) = QuizAttempt(
+        id = id,
+        principalId = principalId,
+        sessionId = "s1",
+        templateId = "k1",
+        answers = emptyList(),
+        score = null,
+        total = 1,
+        createdAtEpochMillis = 0,
+        submittedAtEpochMillis = null,
+    )
+
+    @Test
+    fun `deleteForPrincipal removes only the attempts of that principal`(): Unit = runBlocking {
+        repository.upsertAttempt(attempt("a1", "user:1"))
+        repository.upsertAttempt(attempt("a2", "user:1"))
+        repository.upsertAttempt(attempt("a3", "user:2"))
+
+        val removed = repository.deleteForPrincipal("user:1")
+
+        assertEquals(2, removed)
+        assertNull(repository.findAttempt("a1"))
+        assertNull(repository.findAttempt("a2"))
+        assertNotNull(repository.findAttempt("a3"))
+    }
 }

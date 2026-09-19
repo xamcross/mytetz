@@ -29,6 +29,7 @@ function sessionFixture(overrides: Partial<SessionView> = {}): SessionView {
     rootNodeId: 'n1',
     currentNodeId: 'n1',
     nodes: [],
+    status: 'ACTIVE',
     explanations: { k1: 'Quantum mechanics describes small things.' },
     ...overrides,
   };

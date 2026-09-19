@@ -24,6 +24,7 @@ const SEED_VIEW: SessionView = {
   rootNodeId: 'n0',
   currentNodeId: 'n0',
   nodes: [ROOT_NODE],
+  status: 'ACTIVE',
   explanations: { k0: SEED },
 };
 

@@ -9,9 +9,15 @@ import com.mytetz.account.GoogleConfig
 import com.mytetz.account.GoogleOAuth
 import com.mytetz.account.LoggingMailSender
 import com.mytetz.account.MailSender
+import com.mytetz.graph.Explanation
+import com.mytetz.graph.ExplanationRepository
+import com.mytetz.graph.Verb
 import com.mytetz.llm.FakeLlmClient
 import com.mytetz.persistence.Mongo
 import com.mytetz.persistence.MongoConfig
+import com.mytetz.session.LearningSession
+import com.mytetz.session.SessionNode
+import com.mytetz.session.SessionRepository
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.cookies.HttpCookies
@@ -36,6 +42,7 @@ import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -119,6 +126,8 @@ class ComponentsTest {
         assertContains(indexNames(database, "explanations"), "created_at")
         assertContains(indexNames(database, "sessions"), "principal_recent")
         assertContains(indexNames(database, "sessions"), "by_topic")
+        assertContains(indexNames(database, "sessions"), "by_explanation_key")
+        assertContains(indexNames(database, "sessions"), "session_ttl")
         assertContains(indexNames(database, "principals"), "window_ttl")
         // AccountRepository, added by this task. `accountRepository.ensureIndexes()` was wired into
         // `bootstrap()` with no assertion here — the exact gap this test's own KDoc names. The two
@@ -147,6 +156,22 @@ class ComponentsTest {
         // The whole point of the index. Without `expireAfterSeconds` it is an ordinary ascending
         // index that reaps nothing, and `principals` grows by one document per anonymous visitor for
         // ever — silently, because an index that exists looks like an index that works.
+        assertEquals(0L, (index["expireAfterSeconds"] as Number).toLong())
+    }
+
+    @Test
+    fun `the session TTL index is a real TTL index and not an ordinary one`() = runTest {
+        val components = components("session-ttl")
+
+        components.bootstrap()
+
+        val index = assertNotNull(
+            components.mongo.database.getCollection<Document>("sessions").listIndexes().toList()
+                .firstOrNull { it.getString("name") == "session_ttl" },
+        )
+        // Without `expireAfterSeconds` this is an ordinary ascending index that reaps nothing, and
+        // an anonymous visitor's session grows the `sessions` collection for ever — see
+        // `SessionRepository.ensureIndexes`.
         assertEquals(0L, (index["expireAfterSeconds"] as Number).toLong())
     }
 
@@ -272,7 +297,7 @@ class ComponentsTest {
     }
 
     @Test
-    fun `module boots and serves without a model client, because the session routes defer it`() = testApplication {
+    fun `module boots and serves the catalogue even when the model client cannot build`() = testApplication {
         // The regression this exists for: `sessionRoutes(sessions = components.sessions, …)` reads a
         // lazy whose chain ends at `AnthropicLlmClient()`, which demands ANTHROPIC_API_KEY in its
         // constructor. Evaluating it while `module()` is being configured means a missing or
@@ -280,23 +305,28 @@ class ComponentsTest {
         // which need no model at all, down with it. The key is currently absent from fly secrets, so
         // this is the difference between "sessions unavailable" and "does not start".
         //
+        // The rule changed once `Components.prewarm` began to run on every boot: this factory IS
+        // now called, from inside `prewarm`'s own guard, exactly as `reconcile` calls
+        // `freemiusApiClientFactory` inside its own guard. The point of this test is that a build
+        // failure there still does not take the boot down. See `Components.prewarm`'s own KDoc.
+        //
         // Invisible to every other test in the suite, because they all inject a FakeLlmClient. This
-        // one injects a factory that fails if it is ever called.
+        // one injects a factory that always fails, to prove the guard holds.
         application {
             module(
                 Components(
                     mongo = Mongo(MongoConfig(TestFixtures.connectionString, "test_api_no_model")),
                     cookies = TestFixtures.cookieConfig,
-                    llmFactory = { error("the model client must not be built to serve the catalogue") },
+                    llmFactory = { error("simulated: the model client cannot build") },
                 )
             )
         }
 
         assertEquals(HttpStatusCode.OK, client.get("/api/health").status)
         // Not just the routing path: `bootstrap()` runs in the background and its failures are
-        // swallowed and logged, so a future version of it that touched `sessions` would leave both
-        // assertions above passing while the instance came up with no indexes and no catalogue.
-        // Waiting for readiness is what makes this cover the boot as well as the wiring.
+        // swallowed and logged, so a future version of it that touched `sessions` unguarded would
+        // leave both assertions above passing while the instance came up with no indexes and no
+        // catalogue. Waiting for readiness is what makes this cover the boot as well as the wiring.
         awaitReady(client)
         assertEquals(HttpStatusCode.OK, client.get("/api/catalog/topics").status)
     }
@@ -385,6 +415,11 @@ class ComponentsTest {
         // Nothing this slice registers touches the model. Building it eagerly means a missing or
         // freshly-rotated ANTHROPIC_API_KEY takes down topic browsing, which needs no model at all —
         // `AnthropicOkHttpClient.fromEnv()` demands the key during construction.
+        //
+        // This test reads properties directly, and it does not call `bootstrap()`. `bootstrap()`
+        // now builds the model client on every run, because `prewarm` needs it — see the test
+        // named "bootstrap builds the model client once for pre-warm, even when the migration is
+        // off", below, and `Components.prewarm`'s own KDoc for the rule that changed.
         components.catalog
         components.topicRequests
         components.quota
@@ -396,22 +431,24 @@ class ComponentsTest {
     }
 
     @Test
-    fun `bootstrap builds no model client when the migration is off`() = runTest {
+    fun `bootstrap builds the model client once for pre-warm, even when the migration is off`() = runTest {
         var clientBuilds = 0
 
         val components = Components(
             mongo = Mongo(MongoConfig(uri = TestFixtures.connectionString, databaseName = "test_api_no_migrate")),
             cookies = TestFixtures.cookieConfig,
-            // The migration is the only thing in bootstrap that forces the lazy model client. A
-            // build count of zero proves the migration did not run. It also proves that the
-            // catalogue boots with no ANTHROPIC_API_KEY. This class's KDoc protects that property.
+            // The rule changed: `migrate()` no longer forces the lazy model client on its own, but
+            // `prewarm()` now runs on every boot and reads `sessions` to reach it — see
+            // `Components.prewarm`'s own KDoc for why a published topic's seed must not wait on
+            // the migration flag. A build count of one proves `prewarm` ran exactly once; `llm` is
+            // itself `by lazy`, so the factory runs once no matter how many topics it pre-warms.
             llmFactory = { clientBuilds++; FakeLlmClient() },
             migrateOnBoot = false,
         )
 
         components.bootstrap()
 
-        assertEquals(0, clientBuilds, "bootstrap must not build a model client when the flag is off")
+        assertEquals(1, clientBuilds, "bootstrap must pre-warm, and so build the model client, even with the flag off")
     }
 
     @Test
@@ -535,6 +572,105 @@ class ComponentsTest {
         }
 
     @Test
+    fun `pre-warm runs even when the migration flag is off, and leaves one seed per published topic`() = runTest {
+        val components = Components(
+            mongo = Mongo(MongoConfig(uri = TestFixtures.connectionString, databaseName = "test_api_prewarm_no_migrate")),
+            cookies = TestFixtures.cookieConfig,
+            llmFactory = { FakeLlmClient() },
+            migrateOnBoot = false,
+        )
+        val explanations = components.mongo.database.getCollection<Document>("explanations")
+        explanations.drop()
+
+        components.bootstrap()
+
+        val published = components.catalog.listPublished(category = null, query = null)
+        assertEquals(
+            published.size.toLong(),
+            explanations.countDocuments(Filters.eq("modelFamily", "fake-model")),
+            "every published topic must have a seed, even with the migration flag off",
+        )
+    }
+
+    @Test
+    fun `pre-warm with the migration flag off never touches a document of another model family`() = runTest {
+        val components = Components(
+            mongo = Mongo(
+                MongoConfig(uri = TestFixtures.connectionString, databaseName = "test_api_prewarm_keeps_stranded"),
+            ),
+            cookies = TestFixtures.cookieConfig,
+            llmFactory = { FakeLlmClient() },
+            migrateOnBoot = false,
+        )
+        val explanations = components.mongo.database.getCollection<Document>("explanations")
+        explanations.drop()
+        // A document from a model family nobody runs any more. Only `migrate()` may remove one,
+        // and `migrate()` does not run when the flag is off.
+        explanations.insertOne(
+            Document()
+                .append("_id", "stranded")
+                .append("topicSlug", "quantum-physics")
+                .append("modelFamily", "claude-opus-5")
+                .append("body", "an unreachable body"),
+        )
+
+        components.bootstrap()
+
+        assertEquals(
+            1,
+            explanations.countDocuments(Filters.eq("modelFamily", "claude-opus-5")),
+            "pre-warm deleted a document of another model family; only migrate() may do that",
+        )
+        val published = components.catalog.listPublished(category = null, query = null)
+        assertEquals(
+            published.size.toLong(),
+            explanations.countDocuments(Filters.eq("modelFamily", "fake-model")),
+            "pre-warm must still seed every published topic under the current family",
+        )
+    }
+
+    @Test
+    fun `bootstrap does not throw when the model client cannot build for pre-warm, and the catalogue is still seeded`() =
+        runTest {
+            val components = Components(
+                mongo = Mongo(MongoConfig(uri = TestFixtures.connectionString, databaseName = "test_api_prewarm_no_key")),
+                cookies = TestFixtures.cookieConfig,
+                llmFactory = { error("no model credential configured") },
+                migrateOnBoot = false,
+            )
+
+            components.bootstrap() // must not throw, with no model credential configured
+
+            assertTrue(
+                components.catalog.listPublished(category = null, query = null).isNotEmpty(),
+                "the catalogue must be seeded even when the model client cannot build",
+            )
+        }
+
+    @Test
+    fun `a second boot's pre-warm calls the model zero times, because every seed already exists`() = runTest {
+        val fakeLlm = FakeLlmClient()
+        val components = Components(
+            mongo = Mongo(MongoConfig(uri = TestFixtures.connectionString, databaseName = "test_api_prewarm_idempotent")),
+            cookies = TestFixtures.cookieConfig,
+            llmFactory = { fakeLlm },
+            migrateOnBoot = false,
+        )
+
+        components.bootstrap()
+        val callsAfterFirstBoot = fakeLlm.calls.size
+        assertTrue(callsAfterFirstBoot > 0, "the first boot must generate at least one seed")
+
+        components.bootstrap()
+
+        assertEquals(
+            callsAfterFirstBoot,
+            fakeLlm.calls.size,
+            "the second boot's pre-warm must call the model zero more times",
+        )
+    }
+
+    @Test
     fun `bootstrap runs reconciliation with no Freemius credential and does not throw`() = runTest {
         // The missing credential is simulated through the factory, not through the real
         // environment: a developer's shell that happens to export FREEMIUS_API_KEY and
@@ -592,5 +728,253 @@ class ComponentsTest {
         )
 
         components.bootstrap() // must not throw, whatever FREEMIUS_API_KEY / FREEMIUS_PRODUCT_ID hold
+    }
+
+    // ------------------------------------------------------------------ evictExplanations
+
+    private fun daysAgo(days: Long): Long = System.currentTimeMillis() - days * 86_400_000L
+
+    /** A document old enough and quiet enough to be an eviction candidate, unless overridden. */
+    private fun oldExplanation(
+        key: String,
+        verb: Verb = Verb.EXPLAIN,
+        requestCount: Long = 0,
+        createdAtEpochMillis: Long = daysAgo(100),
+    ) = Explanation(
+        key = key,
+        topicSlug = "quantum-physics",
+        parentKey = null,
+        span = null,
+        spanSentence = null,
+        verb = verb,
+        variant = 0,
+        depth = 0,
+        body = "body for $key",
+        grounded = false,
+        sources = emptyList(),
+        promptVersion = "v1",
+        modelFamily = "fake-model",
+        modelId = "fake-model",
+        inputTokens = 10,
+        outputTokens = 20,
+        costMicros = 100,
+        requestCount = requestCount,
+        createdAtEpochMillis = createdAtEpochMillis,
+    )
+
+    @Test
+    fun `evictExplanations removes an old, unread, unreferenced document`() = runTest {
+        val components = components("evict_basic")
+        val explanations = ExplanationRepository(components.mongo.database)
+        explanations.insertIfAbsent(oldExplanation("stale"))
+
+        components.evictExplanations()
+
+        assertNull(explanations.findByKey("stale"), "an old, unread, unreferenced document must go")
+    }
+
+    @Test
+    fun `evictExplanations never removes a seed`() = runTest {
+        val components = components("evict_seed")
+        val explanations = ExplanationRepository(components.mongo.database)
+        explanations.insertIfAbsent(oldExplanation("seed", verb = Verb.SEED))
+
+        components.evictExplanations()
+
+        assertNotNull(explanations.findByKey("seed"), "a seed must survive eviction")
+    }
+
+    @Test
+    fun `evictExplanations never removes a document a session still references`() = runTest {
+        val components = components("evict_referenced")
+        val explanations = ExplanationRepository(components.mongo.database)
+        val sessions = SessionRepository(components.mongo.database)
+        explanations.insertIfAbsent(oldExplanation("referenced"))
+        sessions.insert(
+            LearningSession(
+                id = "s1",
+                principalId = "anon:alice",
+                topicSlug = "quantum-physics",
+                rootNodeId = "n0",
+                currentNodeId = "n0",
+                nodes = listOf(SessionNode("n0", null, "referenced", "", Verb.SEED, 0, 0, daysAgo(100))),
+                startedAtEpochMillis = daysAgo(100),
+                lastActiveAtEpochMillis = daysAgo(100),
+            ),
+        )
+
+        components.evictExplanations()
+
+        assertNotNull(explanations.findByKey("referenced"), "a referenced document must survive eviction")
+    }
+
+    @Test
+    fun `evictExplanations goes past a full page of referenced candidates to reach an unreferenced one behind it`() =
+        runTest {
+            val components = components("evict_past_referenced_page")
+            val explanations = ExplanationRepository(components.mongo.database)
+            val sessions = SessionRepository(components.mongo.database)
+
+            // Three old, unread, REFERENCED documents — more than a page holds, at pageSize = 2
+            // below. The oldest one first, so they sort ahead of the unreferenced document.
+            val referencedKeys = listOf("ref-0", "ref-1", "ref-2")
+            referencedKeys.forEachIndexed { i, key ->
+                explanations.insertIfAbsent(oldExplanation(key, createdAtEpochMillis = daysAgo(100) + i))
+            }
+            sessions.insert(
+                LearningSession(
+                    id = "s1",
+                    principalId = "anon:alice",
+                    topicSlug = "quantum-physics",
+                    rootNodeId = "n0",
+                    currentNodeId = "n0",
+                    nodes = referencedKeys.mapIndexed { i, key ->
+                        SessionNode("n$i", if (i == 0) null else "n${i - 1}", key, "", Verb.SEED, 0, i, daysAgo(100))
+                    },
+                    startedAtEpochMillis = daysAgo(100),
+                    lastActiveAtEpochMillis = daysAgo(100),
+                ),
+            )
+            // One old, unread, UNREFERENCED document, newer than all three above — it sorts
+            // behind them, on the far side of the first page.
+            explanations.insertIfAbsent(oldExplanation("unreferenced", createdAtEpochMillis = daysAgo(99)))
+
+            components.evictExplanations(pageSize = 2)
+
+            assertNull(
+                explanations.findByKey("unreferenced"),
+                "the job must read a second page rather than stop after a page with nothing to remove",
+            )
+            referencedKeys.forEach {
+                assertNotNull(explanations.findByKey(it), "a referenced document must still survive")
+            }
+        }
+
+    @Test
+    fun `evictExplanations carries its position across calls, so a later run reaches what an earlier one could not`() =
+        runTest {
+            val components = components("evict_carries_position")
+            val explanations = ExplanationRepository(components.mongo.database)
+            val sessions = SessionRepository(components.mongo.database)
+
+            // Six old, unread, REFERENCED documents — more than one run of pageSize = 2 and
+            // maxPagesPerRun = 2 can read (four documents) in a single call.
+            val referencedKeys = (0 until 6).map { "ref-$it" }
+            referencedKeys.forEachIndexed { i, key ->
+                explanations.insertIfAbsent(oldExplanation(key, createdAtEpochMillis = daysAgo(100) + i))
+            }
+            sessions.insert(
+                LearningSession(
+                    id = "s1",
+                    principalId = "anon:alice",
+                    topicSlug = "quantum-physics",
+                    rootNodeId = "n0",
+                    currentNodeId = "n0",
+                    nodes = referencedKeys.mapIndexed { i, key ->
+                        SessionNode("n$i", if (i == 0) null else "n${i - 1}", key, "", Verb.SEED, 0, i, daysAgo(100))
+                    },
+                    startedAtEpochMillis = daysAgo(100),
+                    lastActiveAtEpochMillis = daysAgo(100),
+                ),
+            )
+            // One old, unread, UNREFERENCED document, newer than all six above.
+            explanations.insertIfAbsent(oldExplanation("unreferenced", createdAtEpochMillis = daysAgo(99)))
+
+            components.evictExplanations(pageSize = 2, maxPagesPerRun = 2)
+            assertNotNull(
+                explanations.findByKey("unreferenced"),
+                "the first call reads only the six referenced documents; it must not reach this one yet",
+            )
+
+            components.evictExplanations(pageSize = 2, maxPagesPerRun = 2)
+
+            assertNull(
+                explanations.findByKey("unreferenced"),
+                "a later call must resume where the previous one stopped, and reach this document",
+            )
+            referencedKeys.forEach {
+                assertNotNull(explanations.findByKey(it), "a referenced document must still survive")
+            }
+        }
+
+    @Test
+    fun `evictExplanations never removes a recent document`() = runTest {
+        val components = components("evict_recent")
+        val explanations = ExplanationRepository(components.mongo.database)
+        explanations.insertIfAbsent(oldExplanation("recent", createdAtEpochMillis = daysAgo(1)))
+
+        components.evictExplanations()
+
+        assertNotNull(explanations.findByKey("recent"), "a recent document must survive eviction")
+    }
+
+    @Test
+    fun `evictExplanations logs what it removed and what it scanned`() = runTest {
+        val components = components("evict_log")
+        val explanations = ExplanationRepository(components.mongo.database)
+        explanations.insertIfAbsent(oldExplanation("stale"))
+        // A seed. The candidate query excludes it, so it must not inflate the scanned count.
+        explanations.insertIfAbsent(oldExplanation("seed", verb = Verb.SEED))
+
+        val appender = ListAppender<ILoggingEvent>().apply { start() }
+        val logger = LoggerFactory.getLogger("com.mytetz.api.Components") as ch.qos.logback.classic.Logger
+        logger.addAppender(appender)
+        try {
+            components.evictExplanations()
+        } finally {
+            logger.detachAppender(appender)
+        }
+
+        val event = assertNotNull(
+            appender.list.firstOrNull { it.level == Level.INFO && it.formattedMessage.contains("EVICTION") },
+            "no EVICTION line was logged: ${appender.list.map { it.formattedMessage }}",
+        )
+        assertEquals("EVICTION removed=1 scanned=1", event.formattedMessage)
+    }
+
+    @Test
+    fun `a failure inside evictExplanations does not fail the whole boot`() = runTest {
+        // Eviction is housekeeping. A learner-facing incident there must not take /api/health and
+        // topic browsing down with it, the same reasoning `reconcile()` guards its own risky step
+        // for.
+        val components = object : Components(
+            mongo = Mongo(MongoConfig(uri = TestFixtures.connectionString, databaseName = "test_api_evict_boot_failure")),
+            cookies = TestFixtures.cookieConfig,
+            llmFactory = { FakeLlmClient() },
+        ) {
+            override suspend fun evictExplanations(pageSize: Int, maxPagesPerRun: Int) {
+                error("eviction blew up")
+            }
+        }
+
+        components.bootstrap() // must not throw
+    }
+
+    @Test
+    fun `a failure inside evictExplanations at boot is logged under the same token the daily loop uses`() = runTest {
+        val components = object : Components(
+            mongo = Mongo(MongoConfig(uri = TestFixtures.connectionString, databaseName = "test_api_evict_boot_log")),
+            cookies = TestFixtures.cookieConfig,
+            llmFactory = { FakeLlmClient() },
+        ) {
+            override suspend fun evictExplanations(pageSize: Int, maxPagesPerRun: Int) {
+                error("eviction blew up")
+            }
+        }
+
+        val appender = ListAppender<ILoggingEvent>().apply { start() }
+        val logger = LoggerFactory.getLogger("com.mytetz.api.Components") as ch.qos.logback.classic.Logger
+        logger.addAppender(appender)
+        try {
+            components.bootstrap()
+        } finally {
+            logger.detachAppender(appender)
+        }
+
+        val event = assertNotNull(
+            appender.list.firstOrNull { it.level == Level.ERROR && it.formattedMessage.contains(EVICTION_LOOP_FAILED_TOKEN) },
+            "no $EVICTION_LOOP_FAILED_TOKEN line was logged: ${appender.list.map { it.formattedMessage }}",
+        )
+        assertNotNull(event.throwableProxy, "the failure log line did not carry the exception")
     }
 }

@@ -209,11 +209,12 @@ to the console only. Each timestamp shows the date and the UTC zone.
 
 The code already writes three tokens. A person sees them today only by chance.
 
-### Step 4.1 — Add a log drain and three alerts
+### Step 4.1 — Add a log drain and the alerts
 
-1. Connect a log service to the fly.io application. Use `fly logs` shipping, or add a Logtail,
-   Datadog or Better Stack drain.
-2. Make an alert for each of these strings. Send each alert to a channel that a person reads.
+Do this step in `docs/deploy.md`, section "Log drain, alert rules, and uptime check". That
+section holds the full alert rule table, the catch-all for a line with no token, and the uptime
+check. The table below names only the four highest-urgency strings, so a reader sees the stakes
+without opening the other file.
 
 | String | What it means | Urgency |
 |---|---|---|
@@ -276,6 +277,12 @@ is a page that a search engine can index well.
 method decides the page structure. Build both at one time.
 
 ### Decision 5.2 — When does a session end?
+
+**Decided in issue #22.** A session becomes `COMPLETED` after 30 days with no activity, or when the
+learner completes it in the reader. A completed session stays readable, and no new node can join
+it. MongoDB deletes an anonymous session 90 days after its creation, through a TTL index. The
+session of a signed-in learner stays until the account is deleted. The KDoc of `SessionService`
+holds the full rule. The text below is the state before that decision.
 
 **The state.** A session has a `COMPLETED` state. The wire format works and a test pins it. No
 code makes the transition. Every session stays `ACTIVE` for ever.

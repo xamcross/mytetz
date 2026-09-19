@@ -89,6 +89,7 @@ describe('app.routes titles', () => {
           depth: 0,
         },
       ],
+      status: 'ACTIVE',
       explanations: { k0: 'Quantum mechanics is odd.' },
     });
     await harness.fixture.whenStable();

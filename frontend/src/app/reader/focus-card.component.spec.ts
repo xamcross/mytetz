@@ -249,6 +249,17 @@ describe('FocusCardComponent', () => {
     expect(rootTextMatchesBody(bodyEl(), BODY)).toBe(true);
   });
 
+  it('disables highlighting and says why on a read-only, completed session', () => {
+    fixture.componentRef.setInput('readOnly', true);
+    fixture.detectChanges();
+
+    select(4, 11);
+
+    expect(pickerLive()).toBe(false);
+    expect(requests).toEqual([]);
+    expect(fixture.nativeElement.textContent).toContain('complete');
+  });
+
   it('closes the picker when a stream starts', async () => {
     select(4, 11);
     expect(pickerLive()).toBe(true);
