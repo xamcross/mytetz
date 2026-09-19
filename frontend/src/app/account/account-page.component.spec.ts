@@ -135,26 +135,13 @@ describe('AccountPageComponent', () => {
     expect(text()).toContain('Could not load your account');
   });
 
-  it('the account page offers sign out everywhere', async () => {
+  it('the account page offers no sign out everywhere control', async () => {
+    // Issue #88 removes the control. The owner had no reason for it, and it left the learner with
+    // an odd extra choice next to plain "Sign out". `AuthRoutes.kt` keeps the route for a later
+    // security page or an operator, but no page in this app calls it any more.
     await mount((req) => req.flush(active));
 
-    const button = fixture.nativeElement.querySelector(
-      '[data-action="sign-out-everywhere"]',
-    ) as HTMLButtonElement;
-    button.click();
-
-    const signOutReq = http.expectOne('/api/auth/sign-out-all');
-    expect(signOutReq.request.method).toBe('POST');
-    signOutReq.flush(null, { status: 204, statusText: 'No Content' });
-    await fixture.whenStable();
-
-    // A successful sign-out-everywhere also clears this browser's own cookie. `AuthRoutes.kt`
-    // calls `clearSessionCookie` on this route. The next account read then answers 401, and the
-    // store's own rule clears the view: a 401 means signed out.
-    http.expectOne('/api/account').flush(signedOut, { status: 401, statusText: '' });
-    await fixture.whenStable();
-
-    expect(store.view()).toBeNull();
+    expect(fixture.nativeElement.querySelector('[data-action="sign-out-everywhere"]')).toBeNull();
   });
 
   it('sign out posts to the single-session route', async () => {

@@ -108,10 +108,6 @@ export class ApiService {
     return firstValueFrom(this.http.post<void>('/api/auth/sign-out', null));
   }
 
-  signOutAll(): Promise<void> {
-    return firstValueFrom(this.http.post<void>('/api/auth/sign-out-all', null));
-  }
-
   /**
    * Asks the backend for a Freemius checkout URL for the signed-in learner.
    *
