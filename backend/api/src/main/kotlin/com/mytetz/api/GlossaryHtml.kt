@@ -7,19 +7,15 @@ import kotlinx.html.h1
 import kotlinx.html.head
 import kotlinx.html.lang
 import kotlinx.html.li
-import kotlinx.html.link
 import kotlinx.html.main
-import kotlinx.html.meta
 import kotlinx.html.p
 import kotlinx.html.script
-import kotlinx.html.title
 import kotlinx.html.ul
 import kotlinx.html.unsafe
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
-private const val SITE_URL = "https://mytetz.com"
 private const val GLOSSARY_DESCRIPTION =
     "Short, reviewed answers to phrases learners have asked about on mytetz."
 
@@ -31,12 +27,16 @@ data class GlossaryEntryView(val span: String, val topicSlug: String, val shortK
  * JSON-LD (https://schema.org/DefinedTerm, spec section 7.4). [entries] is already filtered to
  * published `EXPLAIN` nodes by `GlossaryRoutes.kt` — this function renders whatever list it is
  * given, published or not, so an empty list here means an empty database, exactly as issue #48's
- * own acceptance criterion asks.
+ * own acceptance criterion asks. An empty list renders a real empty state instead — see the `else`
+ * branch below — never an error.
  *
  * Every text value below reaches the page through `+value` or an attribute assignment, and the one
- * `unsafe { }` block wraps [jsonLdGraph]'s own output — see `JsonLd.kt`'s own KDoc. The page reuses
- * the same layout as the topic page and the explanation page, through [publicHeadBasics],
- * [publicHeaderBar] and [publicFooterBar].
+ * `unsafe { }` block wraps [jsonLdGraph]'s own output — see `JsonLd.kt`'s own KDoc.
+ *
+ * Round 2: the page reuses [commonHeadTags], [siteHeaderBar] and [siteFooter] from
+ * `TopicPageHtml.kt`, the same functions the topic page, the explanation page and `/how-it-works`
+ * share, and not a second copy of that markup (the earlier `PublicPageChrome.kt` this file first
+ * used is deleted).
  */
 fun HTML.glossaryHtml(entries: List<GlossaryEntryView>) {
     // Set before the first child — see TopicPageHtml.kt's own note on why the order matters.
@@ -45,17 +45,12 @@ fun HTML.glossaryHtml(entries: List<GlossaryEntryView>) {
     val canonical = "$SITE_URL/glossary"
 
     head {
-        publicHeadBasics()
-        title { +"Glossary | mytetz" }
-        meta(name = "description", content = GLOSSARY_DESCRIPTION)
-        link(rel = "canonical", href = canonical)
-
-        meta { attributes["property"] = "og:type"; attributes["content"] = "website" }
-        meta { attributes["property"] = "og:site_name"; attributes["content"] = "mytetz" }
-        meta { attributes["property"] = "og:url"; attributes["content"] = canonical }
-        meta { attributes["property"] = "og:title"; attributes["content"] = "Glossary | mytetz" }
-        meta { attributes["property"] = "og:description"; attributes["content"] = GLOSSARY_DESCRIPTION }
-        meta { attributes["property"] = "og:image"; attributes["content"] = "$SITE_URL/og-image.png" }
+        commonHeadTags(
+            pageTitle = "Glossary | mytetz",
+            description = GLOSSARY_DESCRIPTION,
+            canonical = canonical,
+            ogType = "website",
+        )
 
         if (entries.isNotEmpty()) {
             script(type = "application/ld+json") {
@@ -64,7 +59,7 @@ fun HTML.glossaryHtml(entries: List<GlossaryEntryView>) {
         }
     }
     body {
-        publicHeaderBar()
+        siteHeaderBar()
         main(classes = "wrap") {
             h1 { +"Glossary" }
             if (entries.isEmpty()) {
@@ -82,7 +77,7 @@ fun HTML.glossaryHtml(entries: List<GlossaryEntryView>) {
                 }
             }
         }
-        publicFooterBar()
+        siteFooter()
     }
 }
 

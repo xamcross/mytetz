@@ -14,7 +14,9 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
 
-private const val SITE_URL = "https://mytetz.com"
+// SITE_URL lives in TopicPageHtml.kt, as an internal const, and this file reuses it — a merge
+// found two files in this package each declaring their own "https://mytetz.com" constant, which
+// is a conflicting declaration, and not merely a duplicate value.
 
 /**
  * `GET /sitemap.xml`. Replaces the static file #32 shipped: a static file drifts from the
@@ -23,8 +25,10 @@ private const val SITE_URL = "https://mytetz.com"
  *
  * Lists the home page, one `<url>` for each published topic, one `<url>` for each path in
  * [GuidePages.paths] — the one list [GuidePagesTest] already holds the shipped guide pages to —
- * and, per issue #48, one `<url>` for each published explanation page, from
- * [publicExplanationSitemapEntries]. A pure read: this function calls
+ * one `<url>` for each path in [PublicPages.paths] (`/how-it-works`), one `<url>` for each
+ * published explanation page, from [publicExplanationSitemapEntries] (issue #48), and `/glossary`
+ * itself once one published explanation exists (issue #48, round 2 — see this function's own body
+ * for why `/glossary` is not in [PublicPages.paths]). A pure read: this function calls
  * [CatalogService.listPublished] and [ExplanationRepository.findByKey] only, the same rule
  * [topicPageRoutes] follows for the same reason. Spec section 13.2's shared-cache rule needs a
  * response with no `Set-Cookie` header, so this route never calls `Principals.resolve` and never
@@ -35,15 +39,14 @@ private const val SITE_URL = "https://mytetz.com"
  * 100-topic scale #18 targets.
  *
  * **`<lastmod>` for a topic, per spec sections 8.2 and 10.1.** Each published topic's `<url>` gets
- * a `<lastmod>` built from its seed explanation's [com.mytetz.graph.Explanation.createdAtEpochMillis],
- * read the same way [topicPageRoutes] reads it: [ContentKey.seed] and then
- * [ExplanationRepository.findByKey]. A topic with no stored seed yet gets no `<lastmod>` — this
- * route never generates one to fill the gap. [lastModifiedFor] also takes a review timestamp, for
- * #47's `Topic.reviewedAt`; this route passes `null` for it today, because that field does not
- * exist on `main` yet. Once #47 lands, the caller here should pass `topic.reviewedAt` in its place,
- * so the sitemap starts reporting the later of the two dates, exactly as spec section 8.2 asks.
- * The home page and every guide path get no `<lastmod>`: neither one has a seed explanation or a
- * `Topic` row, so no true last-modified date exists for either.
+ * a `<lastmod>` built from the later of its seed explanation's
+ * [com.mytetz.graph.Explanation.createdAtEpochMillis] and [com.mytetz.catalog.Topic.reviewedAt] —
+ * [lastModifiedFor] picks the later one. The seed date is read the same way [topicPageRoutes]
+ * reads it: [ContentKey.seed] and then [ExplanationRepository.findByKey]. A topic with no stored
+ * seed and no review date yet gets no `<lastmod>` — this route never generates one to fill the
+ * gap. The home page and every path in [GuidePages.paths] and [PublicPages.paths] get no
+ * `<lastmod>`: none of them has a seed explanation or a `Topic` row, so no true last-modified date
+ * exists for any of them.
  *
  * **Database reads for one request.** One [CatalogService.listPublished] call, plus one
  * [ExplanationRepository.findByKey] call for each published topic the first call returns.
@@ -65,9 +68,7 @@ fun Route.sitemapRoutes(
             val seed = explanations.findByKey(seedKey)
             SitemapUrl(
                 loc = "$SITE_URL/topics/${topic.slug}",
-                // `reviewedAtEpochMillis` is `null` until #47 adds `Topic.reviewedAt` — see this
-                // function's own KDoc.
-                lastmod = lastModifiedFor(seed?.createdAtEpochMillis, reviewedAtEpochMillis = null),
+                lastmod = lastModifiedFor(seed?.createdAtEpochMillis, topic.reviewedAt),
             )
         }
 
@@ -86,12 +87,14 @@ fun Route.sitemapRoutes(
             add(SitemapUrl(loc = "$SITE_URL/"))
             addAll(topicUrls)
             addAll(GuidePages.paths.map { SitemapUrl(loc = SITE_URL + it) })
+            addAll(PublicPages.paths.map { SitemapUrl(loc = SITE_URL + it) })
             addAll(explanationUrls)
             // Round 2: /glossary joins the sitemap only once it has one entry or more. An empty
             // glossary is a real page (see GlossaryHtml.kt's own empty state), but it names
             // nothing yet, so a crawler gains nothing from indexing it before then. The list this
             // route already read above (`publicExplanations`) answers the question at no extra
-            // database read.
+            // database read. /glossary stays out of PublicPages.paths (issue #47's fixed list) for
+            // the same reason: that list has no way to say "only sometimes".
             if (publicExplanations.isNotEmpty()) {
                 add(SitemapUrl(loc = "$SITE_URL/glossary"))
             }
@@ -164,10 +167,8 @@ internal fun xmlEscape(value: String): String = buildString(value.length) {
  *
  * Spec section 8.2 of `docs/superpowers/specs/2026-09-19-public-surface-design.md`: "#46's sitemap
  * route should use the **later** of `reviewedAt` and the seed's `createdAtEpochMillis` for
- * `lastmod`, once this field exists... Before `reviewedAt` exists, #46 uses `createdAtEpochMillis`
- * alone, exactly as section 10.1 already decides." [sitemapRoutes] calls this with `null` for
- * [reviewedAtEpochMillis] until #47 adds `Topic.reviewedAt`; once that field exists, the caller
- * should pass `topic.reviewedAt` in its place, and this function needs no change of its own.
+ * `lastmod`, once this field exists". [sitemapRoutes] now calls this with `topic.reviewedAt` for
+ * [reviewedAtEpochMillis], now that `Topic.reviewedAt` exists (#47).
  *
  * A calendar date, and not a full timestamp, because
  * https://www.sitemaps.org/protocol.html accepts the shorter W3C-datetime forms, and a crawler

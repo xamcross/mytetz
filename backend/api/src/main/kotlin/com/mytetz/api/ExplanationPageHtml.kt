@@ -6,19 +6,14 @@ import kotlinx.html.body
 import kotlinx.html.h1
 import kotlinx.html.head
 import kotlinx.html.lang
-import kotlinx.html.link
 import kotlinx.html.main
-import kotlinx.html.meta
 import kotlinx.html.p
 import kotlinx.html.script
-import kotlinx.html.title
 import kotlinx.html.unsafe
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
-
-private const val SITE_URL = "https://mytetz.com"
 
 /**
  * Everything [explanationPageHtml] needs to render one public explanation page.
@@ -52,10 +47,11 @@ data class ExplanationPageView(
  * page. `ExplanationPageRoutes.kt` never builds this view for a non-`EXPLAIN` node in the first
  * place, so the omission here is a second, independent guard and not the only one.
  *
- * The page reuses the same layout the topic page carries: `lang="en"` set before the first child
- * opens (see `TopicPageHtml.kt`'s own note on why the order matters), the viewport tag, the
- * `guides.css` stylesheet, and the header and footer bar — through [publicHeadBasics],
- * [publicHeaderBar] and [publicFooterBar], and not a second copy of that markup.
+ * Round 2: the page reuses the same layout functions the topic page and `/how-it-works` reuse —
+ * [commonHeadTags], [siteHeaderBar] and [siteFooter], from `TopicPageHtml.kt` — and not a second
+ * copy of that markup (the earlier `PublicPageChrome.kt` this file first used is deleted). An
+ * unpublished page passes `emitCanonicalTag = false` to [commonHeadTags]: see that function's own
+ * KDoc for why a page still carries `og:url` in that case.
  */
 fun HTML.explanationPageHtml(view: ExplanationPageView) {
     // Set before the first child, for the same reason TopicPageHtml.kt's own topicPageHtml sets it
@@ -66,26 +62,20 @@ fun HTML.explanationPageHtml(view: ExplanationPageView) {
     val canonical = "$SITE_URL/topics/${view.topicSlug}/explain/${view.shortKey}"
 
     head {
-        publicHeadBasics()
-        title { +pageTitle }
-        meta(name = "description", content = view.body)
-        if (view.published) link(rel = "canonical", href = canonical)
-
-        // meta(name = …) writes a `name` attribute; og:* tags need `property` — see
-        // TopicPageHtml.kt's own note on the same point.
-        meta { attributes["property"] = "og:type"; attributes["content"] = "article" }
-        meta { attributes["property"] = "og:site_name"; attributes["content"] = "mytetz" }
-        meta { attributes["property"] = "og:url"; attributes["content"] = canonical }
-        meta { attributes["property"] = "og:title"; attributes["content"] = pageTitle }
-        meta { attributes["property"] = "og:description"; attributes["content"] = view.body }
-        meta { attributes["property"] = "og:image"; attributes["content"] = "$SITE_URL/og-image.png" }
+        commonHeadTags(
+            pageTitle = pageTitle,
+            description = view.body,
+            canonical = canonical,
+            ogType = "article",
+            emitCanonicalTag = view.published,
+        )
 
         script(type = "application/ld+json") {
             unsafe { +jsonLdGraph(listOf(explanationBreadcrumbJsonLd(view, canonical))) }
         }
     }
     body {
-        publicHeaderBar()
+        siteHeaderBar()
         main(classes = "wrap") {
             p(classes = "crumb") {
                 a(href = "/") { +"mytetz" }
@@ -97,7 +87,7 @@ fun HTML.explanationPageHtml(view: ExplanationPageView) {
             h1 { +view.span }
             p(classes = "answer") { +view.body }
         }
-        publicFooterBar()
+        siteFooter()
     }
 }
 

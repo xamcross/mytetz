@@ -179,6 +179,41 @@ class TopicPageRoutesTest {
         assertFalse("Popular questions" in client.get("/topics/quantum-physics").bodyAsText())
     }
 
+    // ------------------------------------------------------------- review date (issue #47)
+
+    @Test
+    fun `a topic with a review date shows it on the rendered page`() = testApplication {
+        val c = components()
+        runBlocking {
+            val repository = TopicRepository(c.mongo.database)
+            repository.upsert(
+                Topic(slug = "reviewed-topic", title = "Reviewed Topic", category = "Physics", summary = "s")
+            )
+            repository.setReviewedAt("reviewed-topic", 1_700_000_000_000L)
+        }
+        application { routing { topicPageRoutes(c.catalog, c.explanations, c.modelFamily) } }
+
+        val body = client.get("/topics/reviewed-topic").bodyAsText()
+
+        assertTrue("Last reviewed" in body, body)
+        assertTrue("2023-11-14" in body, body)
+    }
+
+    @Test
+    fun `a topic with no review date shows no review line`() = testApplication {
+        val c = components()
+        runBlocking {
+            TopicRepository(c.mongo.database).upsert(
+                Topic(slug = "unreviewed-topic", title = "Unreviewed Topic", category = "Physics", summary = "s")
+            )
+        }
+        application { routing { topicPageRoutes(c.catalog, c.explanations, c.modelFamily) } }
+
+        val body = client.get("/topics/unreviewed-topic").bodyAsText()
+
+        assertFalse("Last reviewed" in body, body)
+    }
+
     // ------------------------------------------------------------- hostile input, end to end
 
     @Test

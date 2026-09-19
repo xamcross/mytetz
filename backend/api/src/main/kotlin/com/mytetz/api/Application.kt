@@ -195,6 +195,12 @@ fun Application.module(components: Components = Components()) {
         )
         // `GET /glossary`. See GlossaryRoutes.kt's own KDoc.
         glossaryRoutes(explanations = components.explanations)
+        // `GET /how-it-works`. Reads the model id the same no-model-client way
+        // `resolveModelForLogging`'s own boot log line above does — never `components.llm.modelId`,
+        // which would force the lazy model client to build. See `HowItWorksRoutes.kt`'s own KDoc.
+        howItWorksRoutes(
+            modelId = { resolveModelForLogging(System.getenv(AnthropicLlmClient.MODEL_ID_ENV)) },
+        )
         // `GET /sitemap.xml`. Replaces the static file #32 shipped — see SitemapRoutes.kt's own
         // KDoc for why a static file cannot keep up with the catalogue, and for how it reads a
         // topic's lastmod date.

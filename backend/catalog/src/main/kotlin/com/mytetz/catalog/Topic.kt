@@ -14,4 +14,13 @@ data class Topic(
     val aliases: List<String> = emptyList(),
     val status: TopicStatus = TopicStatus.PUBLISHED,
     val sortWeight: Int = 0,
+    /**
+     * When a person last confirmed this topic's text, in epoch milliseconds. Null until a
+     * curator sets it.
+     *
+     * A new field, and not a reuse of a seed explanation's own timestamp: a model migration
+     * regenerates every seed on the same day, whether or not a person looked at the new text.
+     * See `docs/superpowers/specs/2026-09-19-public-surface-design.md` section 8.
+     */
+    val reviewedAt: Long? = null,
 )

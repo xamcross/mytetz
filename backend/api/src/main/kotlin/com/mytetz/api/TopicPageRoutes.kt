@@ -74,6 +74,7 @@ fun Route.topicPageRoutes(
                     seedBody = seed?.body,
                     relatedTopics = related,
                     popularQuestions = popularQuestions,
+                    reviewedAt = topic.reviewedAt,
                 )
             )
         }

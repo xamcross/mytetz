@@ -67,6 +67,11 @@ import { BackendState, StatusDotComponent } from './status-dot.component';
         load, which is what a static page needs.
       -->
       <a class="foot__link" href="/guides">Guides</a>
+      <!--
+        A plain href, and not a routerLink, for the same reason as the /guides link above:
+        /how-it-works is a Ktor-rendered page, and app.routes.ts has no 'how-it-works' path.
+      -->
+      <a class="foot__link" href="/how-it-works">How it works</a>
       <a class="foot__link" routerLink="/privacy">Privacy</a>
       <a class="foot__link" routerLink="/terms">Terms</a>
       <a class="foot__link" routerLink="/imprint">Imprint</a>

@@ -76,6 +76,13 @@ class ExplanationPageHtmlTest {
         assertTrue("""class="foot"""" in html)
     }
 
+    @Test
+    fun `the footer holds the how-it-works link, the same shared footer the topic page uses`() {
+        val html = render(view())
+
+        assertTrue("""<a href="/how-it-works">How it works</a>""" in html)
+    }
+
     // ------------------------------------------------------------- hostile input
 
     @Test
