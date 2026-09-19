@@ -318,10 +318,15 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
       }
       /* Finding F11 of the design review. Test me and the session's own end control share this
          row, below the card. */
+      /* The card's own lift shadow (--mt-lift-card in styles.css) reaches 5px below its border
+         box. This row keeps at least 12px clear of that shadow, so it reads as a control below
+         the card and not as a control the shadow already touches. 20px of margin leaves 15px
+         clear of the shadow's own 5px, a margin above the 12px the criterion asks for. */
       .focus__actions {
         display: flex;
         gap: 10px;
         flex-wrap: wrap;
+        margin-top: 20px;
       }
       .reader__centre {
         max-width: 620px;

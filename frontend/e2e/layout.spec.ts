@@ -449,6 +449,34 @@ test('the keyboard Tab order at 390px reaches the reading column before the rail
 });
 
 /**
+ * Finding F11's third change. Test me and the session's own end control moved into one row
+ * below the card. The card's own lift shadow (--mt-lift-card in styles.css: `0 5px 0
+ * var(--mt-border)`) reaches 5px below its border box, and `getBoundingClientRect()` measures
+ * the border box, not the shadow — so the row needs at least 12px clear of `card.bottom + 5`,
+ * and not only of `card.bottom` itself, or it reads as touching the shadow.
+ */
+test('the action row below the card clears the card’s own lift shadow', async ({ page }) => {
+  const SHADOW_REACH = 5;
+  const MIN_CLEARANCE = 12;
+
+  for (const size of [WIDTHS.narrow, WIDTHS.wide]) {
+    await stubCatalogueAndSession(page);
+    await page.setViewportSize(size);
+    await gotoReader(page);
+
+    const card = await page.locator('.focus').boundingBox();
+    const actions = await page.locator('.focus__actions').boundingBox();
+    expect(card, `the card is on screen at ${size.width}px`).toBeTruthy();
+    expect(actions, `the action row is on screen at ${size.width}px`).toBeTruthy();
+
+    expect(
+      actions!.y - (card!.y + card!.height + SHADOW_REACH),
+      `the action row clears the card's lift shadow by at least ${MIN_CLEARANCE}px at ${size.width}px`,
+    ).toBeGreaterThanOrEqual(MIN_CLEARANCE);
+  }
+});
+
+/**
  * Round 2 of issue #104. `animate.leave` keeps the stream box mounted for the whole close
  * animation, after the review's own trigger for animation A already runs: the session refreshes,
  * the body lands, and `streamingText` clears. The three tests below confirm the moment stays
