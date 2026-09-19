@@ -420,6 +420,92 @@ class BillingServiceTest {
     }
 
     @Test
+    fun `a license extended event moves a past due row to active with the new period end`(): Unit = runTest {
+        // license.extended shares ACTIVE with subscription.created and subscription.renewal.retry
+        // in the type map. Nothing above exercises this third key on its own; without this test a
+        // typo in it would pass every other test in this file. Issue #72's own acceptance
+        // criteria name this exact case: a PAST_DUE row that gets this event becomes ACTIVE.
+        repository.upsert(
+            Subscription(
+                userId = "u1",
+                status = SubscriptionStatus.PAST_DUE,
+                graceEndsAtEpochMillis = now + 3 * DAY_MILLIS,
+                createdAtEpochMillis = now,
+                updatedAtEpochMillis = now,
+            )
+        )
+        val periodEnd = now + 30 * DAY_MILLIS
+        val event = freemiusEvent("evt-extended", "license.extended", periodEndsAt = periodEnd, occurredAt = now + 1)
+
+        val applied = service.apply(event)
+
+        assertEquals(true, applied)
+        val stored = repository.find("u1")
+        assertEquals(SubscriptionStatus.ACTIVE, stored?.status)
+        assertEquals(periodEnd, stored?.currentPeriodEndsAtEpochMillis)
+    }
+
+    @Test
+    fun `a license extended event with no userReference finds the row by freemiusUserId`(): Unit = runTest {
+        // objects.user is optional on license.extended — see FreemiusEvent's own KDoc. A renewal
+        // event can then carry no email, and BillingRoutes.kt's resolver leaves userReference
+        // null. The row must still be found, by the freemiusUserId the row itself already stored
+        // from an earlier event.
+        repository.upsert(
+            Subscription(
+                userId = "u1",
+                status = SubscriptionStatus.ACTIVE,
+                currentPeriodEndsAtEpochMillis = now,
+                freemiusUserId = "fs-user-1",
+                createdAtEpochMillis = now,
+                updatedAtEpochMillis = now,
+            )
+        )
+        val periodEnd = now + 30 * DAY_MILLIS
+        val event = freemiusEvent(
+            "evt-extended-no-ref",
+            "license.extended",
+            userReference = null,
+            periodEndsAt = periodEnd,
+            occurredAt = now + 1,
+            freemiusUserId = "fs-user-1",
+        )
+
+        val applied = service.apply(event)
+
+        assertEquals(true, applied)
+        val stored = repository.find("u1")
+        assertEquals(SubscriptionStatus.ACTIVE, stored?.status)
+        assertEquals(periodEnd, stored?.currentPeriodEndsAtEpochMillis)
+    }
+
+    @Test
+    fun `an event with no userReference and no freemiusUserId changes nothing`(): Unit = runTest {
+        repository.upsert(
+            Subscription(
+                userId = "u1",
+                status = SubscriptionStatus.ACTIVE,
+                currentPeriodEndsAtEpochMillis = now + 30 * DAY_MILLIS,
+                createdAtEpochMillis = now,
+                updatedAtEpochMillis = now,
+            )
+        )
+        val before = repository.find("u1")
+        val event = freemiusEvent(
+            "evt-no-ref-no-freemius-id",
+            "license.extended",
+            userReference = null,
+            freemiusUserId = null,
+            periodEndsAt = now + 60 * DAY_MILLIS,
+        )
+
+        val applied = service.apply(event)
+
+        assertEquals(false, applied)
+        assertEquals(before, repository.find("u1"))
+    }
+
+    @Test
     fun `an active event with no period end keeps the stored one`(): Unit = runTest {
         // subscription.renewal.retry is a retry attempt. The vendor does not document whether it
         // carries a period end. An event with no date must never delete the date the row holds,
@@ -678,6 +764,35 @@ class BillingServiceTest {
     }
 
     @Test
+    fun `a replayed license extended event id changes nothing`(): Unit = runTest {
+        // Issue #72's own acceptance criteria name this exact case for the new event.
+        repository.upsert(
+            Subscription(
+                userId = "u1",
+                status = SubscriptionStatus.ACTIVE,
+                currentPeriodEndsAtEpochMillis = now,
+                createdAtEpochMillis = now,
+                updatedAtEpochMillis = now,
+            )
+        )
+        val periodEnd = now + 30 * DAY_MILLIS
+        val event = freemiusEvent("evt-extended-replay", "license.extended", periodEndsAt = periodEnd, occurredAt = now + 1)
+        assertEquals(true, service.apply(event))
+        val afterFirst = repository.find("u1")
+
+        val repeat = freemiusEvent(
+            "evt-extended-replay",
+            "license.extended",
+            periodEndsAt = now + 999 * DAY_MILLIS,
+            occurredAt = now + 2,
+        )
+        val repeated = service.apply(repeat)
+
+        assertEquals(false, repeated)
+        assertEquals(afterFirst, repository.find("u1"), "a replay must not change the stored row")
+    }
+
+    @Test
     fun `an event older than the stored state is dropped`(): Unit = runTest {
         val stored = Subscription(
             userId = "u1",
@@ -696,6 +811,41 @@ class BillingServiceTest {
 
         assertEquals(false, applied)
         assertEquals(stored, repository.find("u1"), "a stale event must not overwrite a newer row")
+    }
+
+    @Test
+    fun `a stale license extended event changes nothing and logs BILLING_STALE_EVENT`(): Unit = runTest {
+        // Issue #72's own acceptance criteria name this exact case for the new event.
+        val stored = Subscription(
+            userId = "u1",
+            status = SubscriptionStatus.ACTIVE,
+            currentPeriodEndsAtEpochMillis = now + 30 * DAY_MILLIS,
+            createdAtEpochMillis = now,
+            updatedAtEpochMillis = now + 100,
+            lastEventAtEpochMillis = now + 100,
+        )
+        repository.upsert(stored)
+        val stale = freemiusEvent(
+            "evt-extended-stale",
+            "license.extended",
+            periodEndsAt = now + 60 * DAY_MILLIS,
+            occurredAt = now + 50,
+        )
+        val appender = attachAppender()
+
+        val applied = try {
+            service.apply(stale)
+        } finally {
+            detachAppender(appender)
+        }
+
+        assertEquals(false, applied)
+        assertEquals(stored, repository.find("u1"), "a stale event must not overwrite a newer row")
+        val logged = assertNotNull(
+            appender.list.firstOrNull { it.formattedMessage.contains("BILLING_STALE_EVENT") },
+            "a dropped event was not logged: ${appender.list.map { it.formattedMessage }}",
+        )
+        assertTrue(logged.formattedMessage.contains("evt-extended-stale"), "the log line must name the event id")
     }
 
     @Test

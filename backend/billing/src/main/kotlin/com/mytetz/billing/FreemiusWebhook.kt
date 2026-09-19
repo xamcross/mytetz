@@ -173,7 +173,12 @@ object FreemiusWebhook {
      * it — see [FreemiusEvent]'s own KDoc. This deployment's only source for it is the email
      * lookup `BillingRoutes.kt` runs after [parse] returns.
      *
-     * [FreemiusEvent.email] and [FreemiusEvent.freemiusUserId] come from `objects.user`.
+     * [FreemiusEvent.email] comes from `objects.user`. [FreemiusEvent.freemiusUserId] comes from
+     * `objects.user` too, first. `license.extended` — the renewal event issue #72 maps — types
+     * `objects.user` as optional, so this field then falls back to `objects.license.user_id`, the
+     * `License` entity's own field. [BillingService.apply] needs this fallback: the email lookup
+     * `BillingRoutes.kt` runs cannot find a learner from no email at all.
+     *
      * [FreemiusEvent.freemiusSubscriptionId] prefers `data.subscription_id`. It falls back to
      * `objects.subscription.id` when the event carries no `data.subscription_id`. A
      * `subscription.renewal.failed` event, for one example, carries no `data` object. That event
@@ -208,9 +213,12 @@ object FreemiusWebhook {
             type = type,
             userReference = null,
             email = user.stringOrNull("email"),
-            freemiusUserId = user?.idTextOrNull("id"),
+            // objects.user is optional on license.extended, the renewal event issue #72 maps.
+            // objects.license.user_id — the License entity's own field, confirmed in schema.d.ts —
+            // is the fallback for exactly that case.
+            freemiusUserId = user?.idTextOrNull("id") ?: license?.idTextOrNull("user_id"),
             freemiusSubscriptionId = data?.idTextOrNull("subscription_id") ?: subscription?.idTextOrNull("id"),
-            periodEndsAtEpochMillis = resolvePeriodEnd(license, subscription, type = type, id = id),
+            periodEndsAtEpochMillis = resolvePeriodEnd(data, license, subscription, type = type, id = id),
             occurredAtEpochMillis = parseFreemiusDate(createdRaw),
         )
     }
@@ -231,20 +239,38 @@ object FreemiusWebhook {
     }
 
     /**
-     * Resolves the period end for one event, from [license] and [subscription].
+     * Resolves the period end for one event, from [data], [license] and [subscription].
      *
-     * `objects.license.expiration` is the first choice: the license controls the learner's
-     * entitlement. `objects.subscription.next_payment` is a close estimate of the same date, and
-     * this function reads it only when the event carries no readable expiration.
+     * `data.to` is the first choice. `license.events.ts` types it on `license.extended`, the
+     * renewal event issue #72 maps, as the license's own new expiration date. A renewal must move
+     * the period end forward, and `data.to` is the one field the vendor documents for that date.
      *
-     * An expiration that does not parse is not the same case as an absent one. A broken date
-     * must not reject a signed, genuine event. See `Entitlement.resolveActive`'s own KDoc for the
-     * reason a missing period end must never lock out a learner who has just paid. So this
-     * function logs one `BILLING_UNREADABLE_PERIOD_END` line for the broken date. That line names
-     * [type] and [id], and no other part of the body. This function then falls back to
-     * `next_payment`, the same way an absent expiration would.
+     * `objects.license.expiration` is the next choice: the license controls the learner's
+     * entitlement on every other mapped event. `objects.subscription.next_payment` is a close
+     * estimate of the same date, and this function reads it only when the event carries neither of
+     * the two choices above.
+     *
+     * A date that does not parse is not the same case as an absent one. A broken date must not
+     * reject a signed, genuine event. See `Entitlement.resolveActive`'s own KDoc for the reason a
+     * missing period end must never lock out a learner who has just paid. So this function logs
+     * one `BILLING_UNREADABLE_PERIOD_END` line for a broken `data.to` or a broken `expiration`.
+     * That line names [type] and [id], and no other part of the body. This function then falls
+     * through to the next choice, the same way an absent value would.
      */
-    private fun resolvePeriodEnd(license: JsonObject?, subscription: JsonObject?, type: String, id: String): Long? {
+    private fun resolvePeriodEnd(
+        data: JsonObject?,
+        license: JsonObject?,
+        subscription: JsonObject?,
+        type: String,
+        id: String,
+    ): Long? {
+        val toRaw = data.stringOrNull("to")
+        if (toRaw != null) {
+            val to = runCatching { parseFreemiusDate(toRaw) }.getOrNull()
+            if (to != null) return to
+            log.warn("BILLING_UNREADABLE_PERIOD_END type={} id={}", type, id)
+        }
+
         val expirationRaw = license.stringOrNull("expiration")
         if (expirationRaw != null) {
             val expiration = runCatching { parseFreemiusDate(expirationRaw) }.getOrNull()
