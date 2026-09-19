@@ -57,7 +57,7 @@ object PromptBuilder {
      * prompt path, so a change to it must never re-key every other verb's already-cached
      * explanation. See `ExplanationGraph.keyFor` and the plan's own Decision 5.
      */
-    const val VISUALIZE_VERSION: String = "v1"
+    const val VISUALIZE_VERSION: String = "v2"
 
     /**
      * Puts a stored value on one line.
@@ -177,8 +177,12 @@ object PromptBuilder {
      * The visualize path's own system prompt. It does not share [system]'s "1 to 3 sentences"
      * rule: a diagram carries most of the answer here, so one short sentence is enough, and the
      * model is told to draw a self-contained inline SVG with no external reference of its own.
-     * `SvgSanitizer` enforces the safety half of this after the model answers; this text only asks
-     * for it first.
+     * `SvgSanitizer` enforces the safety half of this after the model answers, and never trusts
+     * this text alone — it refuses a document with no `svg` root, and it sets the SVG namespace
+     * itself on every kept element regardless of what the model wrote. Asking for `xmlns` and
+     * `viewBox` here only reduces waste: a model that already writes them correctly needs no
+     * correction, and a diagram with no `viewBox` usually does not scale sensibly once the
+     * renderer places it inside its own frame.
      */
     fun visualizeSystem(): String = """
         You are an expert teacher drawing a simple diagram for a curious beginner.
@@ -187,7 +191,9 @@ object PromptBuilder {
         1. Write one short sentence describing what the diagram shows. Never more than one.
         2. Draw the diagram as a single, valid, self-contained inline SVG document. Use only
            basic shapes and text — no external references, no scripts, no embedded HTML.
-        3. Keep the diagram simple: a handful of shapes the learner can read in a glance.
+        3. Give the root <svg> element the attribute xmlns="http://www.w3.org/2000/svg" and a
+           viewBox that fits the shapes you draw.
+        4. Keep the diagram simple: a handful of shapes the learner can read in a glance.
     """.trimIndent()
 
     /**

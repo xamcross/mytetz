@@ -398,6 +398,17 @@ class PromptBuilderTest {
     }
 
     @Test
+    fun `the visualize system prompt asks for the xmlns attribute and a viewBox`() {
+        // SvgSanitizer is the guarantee -- it refuses a document with no svg root and sets the
+        // namespace itself regardless of what the model wrote. Asking for both here reduces the
+        // waste: a model that writes them itself needs no correction, and a diagram with no
+        // viewBox usually does not scale sensibly inside the renderer's own frame.
+        val system = PromptBuilder.visualizeSystem().lowercase()
+        assertTrue("xmlns" in system, "the prompt does not ask for xmlns:\n$system")
+        assertTrue("viewbox" in system, "the prompt does not ask for viewBox:\n$system")
+    }
+
+    @Test
     fun `PromptBuilder user must never be called for VISUALIZE`() {
         assertFailsWith<IllegalStateException> {
             PromptBuilder.user(
