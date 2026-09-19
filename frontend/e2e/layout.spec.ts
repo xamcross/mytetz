@@ -675,7 +675,7 @@ test('the header fits on one line for a signed-in learner at 390px and 400px, wi
   for (const width of [390, 400]) {
     await page.setViewportSize({ width, height: 900 });
     await page.goto('/');
-    await page.locator('.topic__button').first().waitFor();
+    await page.locator('.topic__tile').first().waitFor();
 
     const meter = page.locator('app-allowance-meter');
     await expect(meter, `the meter is visible at ${width}px`).toBeVisible();
@@ -726,7 +726,7 @@ test('the header fits on one line for a learner in trial at 390px, with a long t
   );
   await page.setViewportSize({ width: 390, height: 900 });
   await page.goto('/');
-  await page.locator('.topic__button').first().waitFor();
+  await page.locator('.topic__tile').first().waitFor();
 
   const meter = page.locator('app-allowance-meter');
   await expect(meter).toContainText('12 of 40 left in your trial');
@@ -779,7 +779,7 @@ test('the header stays inside the page width when Subscribe fails for an expired
   await page.route('**/api/billing/checkout', (route) => route.fulfill({ status: 500, body: '' }));
   await page.setViewportSize({ width: 390, height: 900 });
   await page.goto('/');
-  await page.locator('.topic__button').first().waitFor();
+  await page.locator('.topic__tile').first().waitFor();
 
   await page.getByRole('button', { name: 'Subscribe' }).click();
 
@@ -835,7 +835,7 @@ test('the header still fits at 1360px when Subscribe fails, with the error insid
   await page.route('**/api/billing/checkout', (route) => route.fulfill({ status: 500, body: '' }));
   await page.setViewportSize(WIDTHS.wide);
   await page.goto('/');
-  await page.locator('.topic__button').first().waitFor();
+  await page.locator('.topic__tile').first().waitFor();
 
   await page.getByRole('button', { name: 'Subscribe' }).click();
 
@@ -879,7 +879,7 @@ test('the header stays inside the page width for an expired learner with no erro
   await stubAccount(page, accountView({ status: 'EXPIRED', remaining: 0 }));
   await page.setViewportSize({ width: 390, height: 900 });
   await page.goto('/');
-  await page.locator('.topic__button').first().waitFor();
+  await page.locator('.topic__tile').first().waitFor();
 
   const button = page.getByRole('button', { name: 'Subscribe' });
   await expect(button).toBeVisible();
