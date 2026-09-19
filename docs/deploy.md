@@ -128,13 +128,23 @@ fly secrets set MYTETZ_GLOBAL_DAILY_COST_CEILING_USD_MICROS=5000000 --app mytetz
 The machine restarts, and the new ceiling applies against the same day's ledger.
 A ceiling below the day's recorded spend stops new generation at once.
 
-**What the ceiling does not cover.** A request that ends before the model's own
-stream completes records no cost, because no token count exists for it. Two
-things do that: a learner who navigates away mid-answer, and a provider stream
-that ends without a stop reason, which includes the 120-second client timeout.
+**A stream that stops early now records an estimated cost.** Two things stop a
+stream before the model's own answer completes: a learner who navigates away
+mid-answer, and a provider stream that ends without a stop reason, which
+includes the 120-second client timeout. Both used to record nothing. Each one
+now records an estimate against this ceiling and against the learner's own
+daily allowance, and the server logs one `SPEND_ESTIMATED` line for each
+record. The estimate uses the real input token count when the stream reported
+one, and the real output token count when the stream reported one. It falls
+back to the length of the prompt and of the text the stream did deliver, each
+divided by four, when a real count did not arrive in time.
+
+One gap remains. A request that fails for any other reason — an upstream
+fault that is neither of the two above — still records nothing, because
+nothing says how much of an answer the model produced before it fell over.
 `EXPLAINS_PER_CALLER` in `SessionRoutes.kt` — 30 explanations per address per
-ten minutes — is what bounds that path. Its counters live in the process, so
-they reset whenever the machine cold-starts.
+ten minutes — is what bounds a retry loop built on that path. Its counters
+live in the process, so they reset whenever the machine cold-starts.
 
 ### 2.2 Every variable the backend reads
 
