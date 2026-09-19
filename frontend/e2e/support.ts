@@ -1,5 +1,10 @@
 import { Page } from '@playwright/test';
-import type { QuizResultView, QuizTemplateView, SessionView } from '../src/app/core/models';
+import type {
+  AccountView,
+  QuizResultView,
+  QuizTemplateView,
+  SessionView,
+} from '../src/app/core/models';
 
 /** The seed body of the one stubbed topic every spec in this suite drills into. */
 export const SEED =
@@ -420,4 +425,37 @@ export async function mockQuiz(
   await page.route(`**/api/sessions/${sessionId}/quizzes/${template.attemptId}/answers`, (route) =>
     route.fulfill({ json: result }),
   );
+}
+
+/**
+ * A full `GET /api/account` view for a signed-in learner. Every one of `AccountView`'s seven keys
+ * has a value — see `models.ts` — so a test never leans on a default the app happens to tolerate.
+ *
+ * The status defaults to `ACTIVE`, with a reset at "September 20, 2026 at 3:00 PM": a long month
+ * name, on purpose. Issue #100's design review calculated the header's width against this exact
+ * date, so a layout test that finds no overflow at a shorter date would not check the same claim.
+ */
+export function accountView(overrides: Partial<AccountView> = {}): AccountView {
+  return {
+    email: 'learner@example.com',
+    status: 'ACTIVE',
+    trialEndsAtEpochMillis: null,
+    currentPeriodEndsAtEpochMillis: null,
+    allowance: 40,
+    remaining: 12,
+    resetsAtEpochMillis: Date.UTC(2026, 8, 20, 15, 0, 0),
+    ...overrides,
+  };
+}
+
+/**
+ * Stubs `GET /api/account` with `view`, so `AllowanceMeterComponent` renders a signed-in learner.
+ *
+ * No test called this before issue #100. Every other spec keeps the present signed-out default:
+ * with no stub, the real request reaches the dev server, finds no backend behind it, fails with a
+ * status other than 401, and `AccountStore.load` leaves `view` at `null` — the same "Sign in" state
+ * those specs already rely on.
+ */
+export async function stubAccount(page: Page, view: AccountView): Promise<void> {
+  await page.route('**/api/account', (route) => route.fulfill({ json: view }));
 }

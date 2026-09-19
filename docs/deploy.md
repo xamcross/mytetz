@@ -90,7 +90,7 @@ Sensitive values are fly secrets. `fly secrets list` shows names and digests onl
 | `MYTETZ_COOKIE_SIGNING_KEY` | yes — the app refuses to boot without it, deliberately | signs the anonymous principal cookie. There is no safe default: a known key lets anyone mint any principal. 32 characters minimum |
 | `ANTHROPIC_API_KEY` | for explanation generation only | the model client is built lazily, so the catalogue serves without it |
 | `FREEMIUS_SECRET_KEY` | for checkout and the webhook only | signs and verifies the Freemius webhook. Built lazily, alongside `FREEMIUS_PRODUCT_ID` and `FREEMIUS_PLAN_ID`; the catalogue, sign-in and reading all still serve with none of the three set |
-| `FREEMIUS_API_KEY` | for reconciliation only | a Bearer token for the Freemius Developer API, distinct from `FREEMIUS_SECRET_KEY`. Built lazily; with `MYTETZ_RECONCILE_ON_BOOT` on and this unset, the boot logs `RECONCILE_SKIPPED` rather than failing |
+| `FREEMIUS_API_KEY` | for reconciliation and the customer portal | a Bearer token for the Freemius Developer API, distinct from `FREEMIUS_SECRET_KEY`. Built lazily; with `MYTETZ_RECONCILE_ON_BOOT` on and this unset, the boot logs `RECONCILE_SKIPPED` rather than failing. `POST /api/billing/portal` also needs this key, and answers `503 BILLING_UNAVAILABLE` while it is unset |
 | `MYTETZ_TURNSTILE_SECRET` | no | Turnstile checks a token in front of the magic-link request and the start of the Google flow. With this unset, the check is skipped and every sign-in still works — see section "Turnstile" below |
 
 Set them from the git-ignored `.env` at the repo root, without ever echoing them:
@@ -198,7 +198,7 @@ needs it, until an operator sets it.
 | `FREEMIUS_SECRET_KEY` | none | signs and verifies the Freemius webhook. Checkout and the webhook route answer `503` until this, `FREEMIUS_PRODUCT_ID` and `FREEMIUS_PLAN_ID` are all set. See the secrets table above. |
 | `FREEMIUS_PRODUCT_ID` | none | the Freemius product id. Checkout and the webhook route answer `503` until this, `FREEMIUS_SECRET_KEY` and `FREEMIUS_PLAN_ID` are all set. |
 | `FREEMIUS_PLAN_ID` | none | the Freemius plan id. Checkout and the webhook route answer `503` until this, `FREEMIUS_SECRET_KEY` and `FREEMIUS_PRODUCT_ID` are all set. |
-| `FREEMIUS_API_KEY` | none | a Bearer token for the Freemius Developer API. With `MYTETZ_RECONCILE_ON_BOOT` on and this unset, the boot logs `RECONCILE_SKIPPED` and reconciliation does nothing. See "Billing reconciliation" below. |
+| `FREEMIUS_API_KEY` | none | a Bearer token for the Freemius Developer API. With `MYTETZ_RECONCILE_ON_BOOT` on and this unset, the boot logs `RECONCILE_SKIPPED` and reconciliation does nothing. See "Billing reconciliation" below. `POST /api/billing/portal` also needs this key, and answers `503 BILLING_UNAVAILABLE` while it is unset. |
 | `MYTETZ_RECONCILE_ON_BOOT` | off | whether the reconciliation sweep runs at every boot. Only the exact word `true` turns it on. Section "Billing reconciliation" below explains it. |
 | `MYTETZ_TURNSTILE_SECRET` | none | the Turnstile secret key. With this unset, the Turnstile check is skipped, and every sign-in still works. Section "Turnstile" below explains it. |
 | `MYTETZ_TURNSTILE_SITE_KEY` | none | the Turnstile site key, reported to the browser at `GET /api/auth/config`. With this unset, the sign-in panel renders no widget. Section "Turnstile" below explains it. |

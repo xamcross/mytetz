@@ -1,6 +1,19 @@
 import { test, expect, type Page } from '@playwright/test';
-import type { SessionView, TopicSummary } from '../src/app/core/models';
-import { SEED, openQuantumPhysicsSession, selectPhrase, stubCatalogueAndSession } from './support';
+import type {
+  QuizResultView,
+  QuizTemplateView,
+  SessionView,
+  TopicSummary,
+} from '../src/app/core/models';
+import {
+  SEED,
+  accountView,
+  mockQuiz,
+  openQuantumPhysicsSession,
+  selectPhrase,
+  stubAccount,
+  stubCatalogueAndSession,
+} from './support';
 
 /**
  * What only a real browser can check about the Candy design.
@@ -491,6 +504,72 @@ test('every control still draws its focus ring', async ({ page }) => {
   expect(ring.offset).toBe('2px');
 });
 
+/** One question, so the quiz reaches its coral pill in one click. The score is not read here. */
+const PRESS_TEMPLATE: QuizTemplateView = {
+  attemptId: 'attempt-98',
+  kind: 'TEST_ME',
+  questions: [
+    {
+      questionId: 'q1',
+      stem: 'What does quantum mechanics describe?',
+      options: ['Matter and light', 'Only sound'],
+    },
+  ],
+};
+
+const PRESS_RESULT: QuizResultView = {
+  score: 1,
+  total: 1,
+  correctIndices: { q1: 0 },
+  rationales: { q1: 'Quantum mechanics describes matter and light.' },
+};
+
+test('a ghost pill draws no shadow while a learner presses it', async ({ page }) => {
+  await stubCatalogueAndSession(page);
+  await gotoReader(page);
+
+  const exam = page.getByTestId('exam');
+  const box = await exam.boundingBox();
+  if (box === null) throw new Error('the Exam pill has no box to press');
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  // `.mt-pill`'s transition takes 80ms, so this polls the computed value. It does not read the
+  // value right after `mouse.down()`, and it does not wait with a fixed sleep.
+  await expect
+    .poll(() => exam.evaluate((el) => getComputedStyle(el).boxShadow), {
+      message: 'a ghost pill must draw no shadow while a learner presses it',
+    })
+    .toBe('none');
+  await page.mouse.up();
+});
+
+test('a coral pill keeps its smaller shadow while a learner presses it', async ({ page }) => {
+  // The ghost fix above must change no other pill. This presses the coral pill of the Test Me
+  // quiz and checks that its press shadow still only shrinks, from a 4px lift to a 2px lift.
+  await stubCatalogueAndSession(page);
+  await mockQuiz(page, 's1', PRESS_TEMPLATE, PRESS_RESULT);
+  await gotoReader(page);
+
+  await page.getByTestId('test-me').click();
+  const quiz = page.locator('[role="dialog"]');
+  await quiz.getByText(PRESS_TEMPLATE.questions[0].stem).waitFor();
+  await quiz
+    .getByRole('button', { name: PRESS_TEMPLATE.questions[0].options[0], exact: true })
+    .click();
+
+  const seeResults = quiz.getByRole('button', { name: 'See results', exact: true });
+  const box = await seeResults.boundingBox();
+  if (box === null) throw new Error('the "See results" pill has no box to press');
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await expect
+    .poll(() => seeResults.evaluate((el) => getComputedStyle(el).boxShadow), {
+      message: 'a coral pill keeps a smaller shadow, not no shadow, while a learner presses it',
+    })
+    .toBe('rgb(214, 63, 63) 0px 2px 0px 0px');
+  await page.mouse.up();
+});
+
 test('Tab and Shift+Tab cycle inside the picker and never leave it', async ({ page }) => {
   await stubCatalogueAndSession(page);
   await page.setViewportSize(WIDTHS.wide);
@@ -559,7 +638,7 @@ test('every font comes from this origin, and none from a Google Fonts host', asy
   );
 });
 
-test('the header fits on one line at 400px, with the Sign in link, the meter and the dot', async ({
+test('the header fits on one line at 400px while signed out, with the Sign in link and the dot', async ({
   page,
 }) => {
   await stubCatalogueAndSession(page);
@@ -577,6 +656,295 @@ test('the header fits on one line at 400px, with the Sign in link, the meter and
     client: document.documentElement.clientWidth,
   }));
   expect(doc.scroll, 'the page does not scroll sideways at 400px').toBeLessThanOrEqual(doc.client);
+});
+
+/**
+ * Issue #100. The design review calculated an overflow for a signed-in learner at a phone width,
+ * from the meter's declared widths and font size, but the review states plainly that no person
+ * measured it in a browser. This test is the measurement, at both widths the review names.
+ *
+ * The reset date is fixed at "September 20, 2026 at 3:00 PM" — the exact example the review
+ * itself gives for a long detail string — so the measured widths answer the review's own claim.
+ */
+test('the header fits on one line for a signed-in learner at 390px and 400px, with a long reset date', async ({
+  page,
+}) => {
+  await stubCatalogueAndSession(page);
+  await stubAccount(page, accountView());
+
+  for (const width of [390, 400]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto('/');
+    await page.locator('.topic__button').first().waitFor();
+
+    const meter = page.locator('app-allowance-meter');
+    await expect(meter, `the meter is visible at ${width}px`).toBeVisible();
+    await expect(
+      meter,
+      `the meter states the count and the reset date at ${width}px`,
+    ).toContainText('12 of 40 left today');
+    await expect(meter).toContainText('Resets September 20, 2026 at 3:00 PM.');
+
+    const bar = await page.locator('.bar').boundingBox();
+    const meterBox = await meter.boundingBox();
+    const doc = await page.evaluate(() => ({
+      scroll: document.documentElement.scrollWidth,
+      client: document.documentElement.clientWidth,
+    }));
+
+    // Printed so the issue's own record of the measurement quotes a real run, not an estimate.
+    console.log(
+      `[issue-100] width=${width} scrollWidth=${doc.scroll} clientWidth=${doc.client} ` +
+        `barHeight=${bar!.height} meterWidth=${meterBox!.width}`,
+    );
+
+    expect(bar!.height, `the bar stays 64px tall at ${width}px, not wrapped to a second line`).toBe(
+      64,
+    );
+    expect(doc.scroll, `the page does not scroll sideways at ${width}px`).toBeLessThanOrEqual(
+      doc.client,
+    );
+  }
+});
+
+/**
+ * Every new learner starts in a trial, and the trial row prints a different pair of strings —
+ * "left in your trial" instead of "left today", and "Trial ends" instead of "Resets" — so it
+ * needs its own measurement and cannot lean on the ACTIVE case above.
+ */
+test('the header fits on one line for a learner in trial at 390px, with a long trial end date', async ({
+  page,
+}) => {
+  await stubCatalogueAndSession(page);
+  await stubAccount(
+    page,
+    accountView({
+      status: 'TRIALING',
+      trialEndsAtEpochMillis: Date.UTC(2026, 8, 20),
+      resetsAtEpochMillis: null,
+    }),
+  );
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.goto('/');
+  await page.locator('.topic__button').first().waitFor();
+
+  const meter = page.locator('app-allowance-meter');
+  await expect(meter).toContainText('12 of 40 left in your trial');
+  await expect(meter).toContainText('Trial ends September 20, 2026.');
+
+  const bar = await page.locator('.bar').boundingBox();
+  expect(bar!.height, 'the bar stays 64px tall for a learner in trial').toBe(64);
+
+  const doc = await page.evaluate(() => ({
+    scroll: document.documentElement.scrollWidth,
+    client: document.documentElement.clientWidth,
+  }));
+  expect(
+    doc.scroll,
+    'the page does not scroll sideways for a learner in trial',
+  ).toBeLessThanOrEqual(doc.client);
+});
+
+/** True when box `a` and box `b` share any area. Used below: a bar height of 64px and no
+ * sideways scroll are both still true if a tall child overflows the bar and sits on top of the
+ * wordmark or the Account link instead — this is the check that a coordinator review of issue
+ * #100 asked for, because those two facts alone do not rule that out. */
+function overlaps(
+  a: { x: number; y: number; width: number; height: number },
+  b: { x: number; y: number; width: number; height: number },
+): boolean {
+  return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
+}
+
+/**
+ * Issue #91 adds a checkout error to the meter, for an account with no active allowance. That
+ * text also renders in the header bar, so a failed checkout at a phone width needs its own proof
+ * that the bar stays one line and the page stays inside its own width.
+ *
+ * A bar that stays 64px tall and a page that does not scroll sideways are not, by themselves,
+ * proof that the error text sits inside the header row: `.bar` has a fixed height, so a tall
+ * child does not grow it — the child simply overflows, over the wordmark or over the page below.
+ * A first, failing run of this test measured exactly that: the error box ran from y=-16 to y=89,
+ * well outside the bar's own 0-to-64 range, even though the bar height and the scroll width both
+ * read as correct. The fix takes the error out of the row and fixes it just below the bar. This
+ * test now also reads the error's own box, and the boxes of the wordmark and the Account link, so
+ * that kind of overflow fails the test even when the bar height and the scroll width do not
+ * catch it.
+ */
+test('the header stays inside the page width when Subscribe fails for an expired learner at 390px', async ({
+  page,
+}) => {
+  await stubCatalogueAndSession(page);
+  await stubAccount(page, accountView({ status: 'EXPIRED', remaining: 0 }));
+  await page.route('**/api/billing/checkout', (route) => route.fulfill({ status: 500, body: '' }));
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.goto('/');
+  await page.locator('.topic__button').first().waitFor();
+
+  await page.getByRole('button', { name: 'Subscribe' }).click();
+
+  const error = page.locator('.allowance-meter__error');
+  await expect(error).toBeVisible();
+  await expect(error).toContainText(
+    'Could not start checkout. Check your connection and try again.',
+  );
+  await expect(error).toHaveAttribute('role', 'alert');
+
+  const bar = (await page.locator('.bar').boundingBox())!;
+  const errorBox = (await error.boundingBox())!;
+  const mark = (await page.locator('.bar__mark').boundingBox())!;
+  const account = (await page.locator('a.bar__account').boundingBox())!;
+  const doc = await page.evaluate(() => ({
+    scroll: document.documentElement.scrollWidth,
+    client: document.documentElement.clientWidth,
+  }));
+
+  // Printed so the issue's own record of the measurement quotes a real run, not an estimate.
+  console.log(
+    `[issue-100] checkout-error width=390 bar=${JSON.stringify(bar)} error=${JSON.stringify(errorBox)} ` +
+      `mark=${JSON.stringify(mark)} account=${JSON.stringify(account)} doc=${JSON.stringify(doc)}`,
+  );
+
+  expect(bar.height, 'the bar stays 64px tall while the error shows').toBe(64);
+  // The error is now a small card below the bar, not a row item — its top sits at or past
+  // the bar's own bottom edge, and never inside the bar's 0-to-64 range.
+  expect(errorBox.y, 'the error card sits below the bar, not on top of it').toBeGreaterThanOrEqual(
+    bar.y + bar.height,
+  );
+  expect(errorBox.x, 'the error card starts inside the window').toBeGreaterThanOrEqual(0);
+  expect(errorBox.x + errorBox.width, 'the error card ends inside the window').toBeLessThanOrEqual(
+    doc.client,
+  );
+  expect(overlaps(errorBox, mark), 'the error does not cover the wordmark').toBe(false);
+  expect(overlaps(errorBox, account), 'the error does not cover the Account link').toBe(false);
+  expect(doc.scroll, 'the page does not scroll sideways while the error shows').toBeLessThanOrEqual(
+    doc.client,
+  );
+});
+
+/**
+ * The fix above only applies below 768px. This proves the desktop header did not change for the
+ * worse: at 1360px there is room for the error on one line inside the row, exactly as before
+ * issue #100's second round.
+ */
+test('the header still fits at 1360px when Subscribe fails, with the error inside the row', async ({
+  page,
+}) => {
+  await stubCatalogueAndSession(page);
+  await stubAccount(page, accountView({ status: 'EXPIRED', remaining: 0 }));
+  await page.route('**/api/billing/checkout', (route) => route.fulfill({ status: 500, body: '' }));
+  await page.setViewportSize(WIDTHS.wide);
+  await page.goto('/');
+  await page.locator('.topic__button').first().waitFor();
+
+  await page.getByRole('button', { name: 'Subscribe' }).click();
+
+  const error = page.locator('.allowance-meter__error');
+  await expect(error).toBeVisible();
+  await expect(error).toContainText(
+    'Could not start checkout. Check your connection and try again.',
+  );
+
+  const bar = (await page.locator('.bar').boundingBox())!;
+  const errorBox = (await error.boundingBox())!;
+  const doc = await page.evaluate(() => ({
+    scroll: document.documentElement.scrollWidth,
+    client: document.documentElement.clientWidth,
+  }));
+
+  console.log(
+    `[issue-100] checkout-error width=1360 bar=${JSON.stringify(bar)} error=${JSON.stringify(errorBox)} doc=${JSON.stringify(doc)}`,
+  );
+
+  expect(bar.height, 'the bar stays 64px tall on desktop').toBe(64);
+  expect(errorBox.y, 'the error box stays inside the bar on desktop').toBeGreaterThanOrEqual(bar.y);
+  expect(
+    errorBox.y + errorBox.height,
+    'the error box stays inside the bar on desktop',
+  ).toBeLessThanOrEqual(bar.y + bar.height);
+  expect(doc.scroll, 'the page does not scroll sideways on desktop').toBeLessThanOrEqual(
+    doc.client,
+  );
+});
+
+/**
+ * The EXPIRED state without a failed checkout call: only the Subscribe button shows. The button
+ * alone must not push the header past the phone width either, and it must not cover the wordmark
+ * or the Account link.
+ */
+test('the header stays inside the page width for an expired learner with no error at 390px', async ({
+  page,
+}) => {
+  await stubCatalogueAndSession(page);
+  await stubAccount(page, accountView({ status: 'EXPIRED', remaining: 0 }));
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.goto('/');
+  await page.locator('.topic__button').first().waitFor();
+
+  const button = page.getByRole('button', { name: 'Subscribe' });
+  await expect(button).toBeVisible();
+
+  const bar = (await page.locator('.bar').boundingBox())!;
+  const buttonBox = (await button.boundingBox())!;
+  const mark = (await page.locator('.bar__mark').boundingBox())!;
+  const account = (await page.locator('a.bar__account').boundingBox())!;
+  const doc = await page.evaluate(() => ({
+    scroll: document.documentElement.scrollWidth,
+    client: document.documentElement.clientWidth,
+  }));
+
+  console.log(
+    `[issue-100] expired-no-error width=390 bar=${JSON.stringify(bar)} button=${JSON.stringify(buttonBox)} ` +
+      `mark=${JSON.stringify(mark)} account=${JSON.stringify(account)} doc=${JSON.stringify(doc)}`,
+  );
+
+  expect(bar.height, 'the bar stays 64px tall with only the Subscribe button').toBe(64);
+  expect(buttonBox.y, 'the Subscribe button does not start above the bar').toBeGreaterThanOrEqual(
+    bar.y,
+  );
+  expect(
+    buttonBox.y + buttonBox.height,
+    'the Subscribe button does not extend below the bar',
+  ).toBeLessThanOrEqual(bar.y + bar.height);
+  expect(overlaps(buttonBox, mark), 'the Subscribe button does not cover the wordmark').toBe(false);
+  expect(overlaps(buttonBox, account), 'the Subscribe button does not cover the Account link').toBe(
+    false,
+  );
+  expect(
+    doc.scroll,
+    'the page does not scroll sideways with only the Subscribe button',
+  ).toBeLessThanOrEqual(doc.client);
+});
+
+/**
+ * The account page renders the same `AllowanceMeterComponent` inside its own card, and the fix
+ * for the header must not reach it: the learner reads the full detail text there, on any width.
+ *
+ * The shell wraps every route, so a visit to `/account` renders two meters at once: the header's
+ * own, and the account page's. This test reads the account page's card, and not the header, by
+ * scoping to `.account-page__card` — the class `AccountPageComponent` gives its own card.
+ */
+test('the account page still shows the full detail text of the meter at 390px', async ({
+  page,
+}) => {
+  await stubAccount(page, accountView());
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.goto('/account');
+
+  const detail = page.locator('.account-page__card .allowance-meter__detail');
+  await expect(
+    detail,
+    'the detail stays visible in the account card, unlike in the header',
+  ).toBeVisible();
+  await expect(detail).toContainText('Resets September 20, 2026 at 3:00 PM.');
+
+  // The header's own meter, on the same page, still hides its detail — proof that the rule scopes
+  // to the header and did not simply stop applying below 768px.
+  const headerDetail = page.locator('header.bar .allowance-meter__detail');
+  await expect(
+    headerDetail,
+    'the header keeps hiding its own detail on every other page too',
+  ).toBeHidden();
 });
 
 test('the mark draws at 28px, left of the wordmark', async ({ page }) => {

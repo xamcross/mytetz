@@ -17,20 +17,36 @@ import { SignInPanelComponent } from './sign-in-panel.component';
  * No `auth` parameter at all is the direct-visit case issue #31 adds: [hasNoReason] is then true,
  * and the route renders the same `<app-sign-in-panel />` the reader's own wall shows. A parameter
  * present but unrecognised keeps the old behaviour, and sends the visitor on to the catalogue —
- * that shape only ever came from a broken or a stale link, and not from a sign-in in progress.
+ * that shape only ever came from a broken or a stale link, and not from a sign-in in progress. The
+ * page renders nothing at all for that one moment before the redirect completes.
+ *
+ * Issue #101 adds the sign-in panel below the error card, for each of the three recognised
+ * reasons. `AuthRoutes.kt` sets each one on a redirect:
+ *
+ * - `expired`: the magic-link token was already used, or it is past its life span. The panel
+ *   lets the learner ask for a new link at once.
+ * - `failed`: a Google sign-in attempt did not finish — a Turnstile check failed, the OAuth
+ *   state did not match, or the exchange with Google raised an error. The panel lets the learner
+ *   try again, by Google or by email.
+ * - `unavailable`: this deployment holds no Google OAuth configuration. The message itself says
+ *   "Use email instead", so the panel is not a spare control here — it is the one the message
+ *   points the learner to.
+ *
+ * All three reasons still leave email sign-in open, so the panel belongs under every message. No
+ * reason here means "sign-in itself is down"; a future reason of that kind would need its own
+ * decision, and not this same default.
  */
 @Component({
   selector: 'app-auth-landing',
   imports: [SignInPanelComponent],
   template: `
-    @if (message(); as text) {
+    @if (message() !== null || hasNoReason()) {
       <main class="auth-landing">
-        <div class="mt-card mt-card--error banner banner--error" role="alert">
-          <p class="banner__message">{{ text }}</p>
-        </div>
-      </main>
-    } @else if (hasNoReason()) {
-      <main class="auth-landing">
+        @if (message(); as text) {
+          <div class="mt-card mt-card--error banner banner--error" role="alert">
+            <p class="banner__message">{{ text }}</p>
+          </div>
+        }
         <app-sign-in-panel />
       </main>
     }

@@ -166,6 +166,9 @@ fun Application.module(components: Components = Components()) {
             // Freemius variable is missing, and reading it here would force that chain while this
             // module is still being configured.
             freemiusConfig = { components.freemiusConfig },
+            // A factory, for the same reason as `freemiusConfig` above. `Components.freemiusApiClient`
+            // is `by lazy`, on a chain that throws when a Freemius variable is missing.
+            freemiusApiClient = { components.freemiusApiClient },
             cookies = components.cookies,
         )
         // `GET /topics/{slug}`. A dedicated route, ahead of the `/api/{...}` catch-all and

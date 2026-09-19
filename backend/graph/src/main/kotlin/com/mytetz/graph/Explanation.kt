@@ -27,4 +27,10 @@ data class Explanation(
     val costMicros: Long,
     val requestCount: Long,
     val createdAtEpochMillis: Long,
+    /**
+     * Set only for a `VISUALIZE` document. Every other verb leaves this null. A document stored
+     * before this field existed also decodes with `media == null`, because the field carries a
+     * default and the driver does not require a stored key to be present.
+     */
+    val media: Media? = null,
 )
