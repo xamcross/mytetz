@@ -82,16 +82,24 @@ data class AuthConfigView(
  * [status], [trialEndsAtEpochMillis] and [currentPeriodEndsAtEpochMillis] come from the caller's own
  * subscription row. [allowance] and [remaining] come from the caller's resolved entitlement and
  * their own counter — see [accountViewFor].
+ *
+ * No field here has a default value. This application's `ContentNegotiation` install does not turn
+ * on `encodeDefaults`, so kotlinx.serialization omits a field whose value equals its declared
+ * default. A field with no default is always encoded — a nullable one as `null` when it has no
+ * value. [AuthConfigView]'s own KDoc states the same rule. Issue #22 and issue #89 each found this
+ * trap here: a `"TRIALING"` default hid `status`, and a `null` default hid
+ * `currentPeriodEndsAtEpochMillis`, for every trial learner. The frontend then read an absent key
+ * as `undefined`, and showed no status and "Invalid Date".
  */
 @Serializable
 data class AccountView(
     val email: String,
-    val status: String = "TRIALING",
-    val trialEndsAtEpochMillis: Long? = null,
-    val currentPeriodEndsAtEpochMillis: Long? = null,
+    val status: String,
+    val trialEndsAtEpochMillis: Long?,
+    val currentPeriodEndsAtEpochMillis: Long?,
     val allowance: Int,
     val remaining: Int,
-    val resetsAtEpochMillis: Long? = null,
+    val resetsAtEpochMillis: Long?,
 )
 
 /**
@@ -514,6 +522,7 @@ private suspend fun accountViewFor(
             currentPeriodEndsAtEpochMillis = subscription?.currentPeriodEndsAtEpochMillis,
             allowance = 0,
             remaining = 0,
+            resetsAtEpochMillis = null,
         )
     }
 
@@ -526,6 +535,7 @@ private suspend fun accountViewFor(
             currentPeriodEndsAtEpochMillis = subscription?.currentPeriodEndsAtEpochMillis,
             allowance = allowance,
             remaining = allowance,
+            resetsAtEpochMillis = null,
         )
     } else {
         AccountView(
