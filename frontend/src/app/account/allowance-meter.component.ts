@@ -98,14 +98,23 @@ const METERED_STATUSES: ReadonlySet<string> = new Set([
          * the child overflows over the bar's other elements instead. A real run measures the
          * error box from y=-16 to y=89, well outside the bar's own 0-to-64 range.
          *
-         * This rule takes the error out of the row and fixes it just below the bar instead, at
-         * the bar's own right edge. The bar's height never changes, so top: 64px always lands
-         * just under it, and the fix needs no positioned ancestor in another file.
+         * These two rules take the error out of the row and put it as a small card below the
+         * bar. The card hangs from this component's own host element, so it moves with the
+         * header when the page scrolls, and it needs no positioned ancestor in another file. A
+         * card with position: fixed was the first attempt. The bar is not sticky, so such a card
+         * stays on the screen, away from the header, after the learner scrolls. The host is about
+         * 38px tall and sits in the middle of the 64px bar, so 16px below the host is below the
+         * bar. The layout test asserts that result, and not this arithmetic.
          */
+        :host-context(.bar) {
+          position: relative;
+        }
         :host-context(.bar) .allowance-meter__error {
-          position: fixed;
-          top: 64px;
-          right: 20px;
+          position: absolute;
+          top: calc(100% + 16px);
+          right: 0;
+          z-index: 1;
+          width: max-content;
           max-width: 260px;
           padding: 8px 12px;
           background: var(--mt-err-bg);

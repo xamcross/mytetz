@@ -806,7 +806,7 @@ test('the header stays inside the page width when Subscribe fails for an expired
   );
 
   expect(bar.height, 'the bar stays 64px tall while the error shows').toBe(64);
-  // The error is now a small card fixed below the bar, not a row item — its top sits at or past
+  // The error is now a small card below the bar, not a row item — its top sits at or past
   // the bar's own bottom edge, and never inside the bar's 0-to-64 range.
   expect(errorBox.y, 'the error card sits below the bar, not on top of it').toBeGreaterThanOrEqual(
     bar.y + bar.height,
