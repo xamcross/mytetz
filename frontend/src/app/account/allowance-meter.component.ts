@@ -88,9 +88,11 @@ export class AllowanceMeterComponent {
     return status === 'TRIALING' ? 'in your trial' : 'today';
   }
 
-  /** The trial end, as a date, or `null` before a trial has one. */
-  trialEndText(epochMillis: number | null): string | null {
-    return epochMillis === null ? null : formatDate(epochMillis);
+  /** The trial end, as a date, or `null` before a trial has one. Treats an absent key
+   * (`undefined`) the same way as an explicit `null` — see `periodEndText` on
+   * `AccountPageComponent` for the full reason. */
+  trialEndText(epochMillis: number | null | undefined): string | null {
+    return epochMillis == null ? null : formatDate(epochMillis);
   }
 
   /**
@@ -101,9 +103,12 @@ export class AllowanceMeterComponent {
    *
    * Carries the date and not only the time. A reset can land on the day after the one the learner
    * is reading on, and a time with no date would then read as today's when it is tomorrow's.
+   *
+   * Treats an absent key (`undefined`) the same way as an explicit `null` — see `periodEndText`
+   * on `AccountPageComponent` for the full reason.
    */
-  resetText(epochMillis: number | null): string | null {
-    return epochMillis === null ? null : formatDateTime(epochMillis);
+  resetText(epochMillis: number | null | undefined): string | null {
+    return epochMillis == null ? null : formatDateTime(epochMillis);
   }
 }
 
