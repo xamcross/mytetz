@@ -98,6 +98,26 @@ class TopicPageHtmlTest {
     }
 
     @Test
+    fun `the Popular questions section links to the glossary, after the list`() {
+        val html = render(
+            view(popularQuestions = listOf(PopularQuestionView(span = "wave function", shortKey = "abcdef012345"))),
+        )
+
+        assertTrue("""<a href="/glossary">""" in html)
+        assertTrue(
+            html.indexOf("wave function") < html.indexOf("""<a href="/glossary">"""),
+            "the glossary link must come after the list of questions",
+        )
+    }
+
+    @Test
+    fun `no published explanation means no glossary link either`() {
+        val html = render(view(popularQuestions = emptyList()))
+
+        assertFalse("""<a href="/glossary">""" in html)
+    }
+
+    @Test
     fun `a popular question span carrying a script tag is escaped in the HTML body`() {
         val html = render(
             view(

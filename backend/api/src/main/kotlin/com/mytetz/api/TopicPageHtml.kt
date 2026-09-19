@@ -175,6 +175,10 @@ fun HTML.topicPageHtml(view: TopicPageView) {
                             }
                         }
                     }
+                    // Round 2: a link to the full glossary, after the list. This section only
+                    // renders when at least one question is published, so this link never leads
+                    // a visitor to the glossary's own empty state.
+                    p { a(href = "/glossary") { +"See every published answer in the glossary" } }
                 }
             }
 
