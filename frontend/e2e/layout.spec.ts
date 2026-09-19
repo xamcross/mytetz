@@ -269,6 +269,22 @@ test('the introduction, the filter row and the first tile all fit at 412px', asy
   expect(doc.scroll, 'the page does not scroll sideways at 412px').toBeLessThanOrEqual(doc.client);
 });
 
+/**
+ * Finding F8 of the design review, and an acceptance criterion of issue #105. The introduction
+ * used to hold nine sentences above the filter row, so a learner met the search field only after
+ * reading all of them. It now holds two, and the rest moved below the tile grid.
+ */
+test('the filter row sits within 240px of the top of the page at 412px', async ({ page }) => {
+  await stubCatalogueAndSession(page);
+  await page.setViewportSize({ width: 412, height: 915 });
+  await page.goto('/');
+  await page.locator('.topic__tile').first().waitFor();
+
+  const box = await page.locator('.catalog__filter').boundingBox();
+  expect(box, 'the filter row is on screen').toBeTruthy();
+  expect(box!.y, 'the filter row starts within 240px of the top').toBeLessThanOrEqual(240);
+});
+
 test('the search field stays readable at every width, with every real category', async ({
   page,
 }) => {
@@ -375,6 +391,88 @@ test('the reader does not move down when the loaded session replaces the skeleto
 
   for (const [width, jump] of Object.entries(jumps)) {
     expect(jump, `the main column stays put at ${width}px`).toBeLessThanOrEqual(1);
+  }
+});
+
+/**
+ * Finding F17 of the design review, and an acceptance criterion of issue #105. Below 768px the
+ * grid used to keep the rail first in source order, so a learner met the Exam pill, the trail
+ * toggle and the breadcrumb before the reading material. The reading column is first in the DOM
+ * now, at every width — see the template comment in reader-page.component.ts for why a plain CSS
+ * `order` was not enough on its own.
+ */
+test('the focus card sits above the trail rail below 768px', async ({ page }) => {
+  await stubCatalogueAndSession(page);
+  await page.setViewportSize(WIDTHS.narrow);
+  await gotoReader(page);
+
+  const main = await page.locator('.reader__main').boundingBox();
+  const rail = await page.locator('.reader__rail').boundingBox();
+  expect(main, 'the reading column is on screen').toBeTruthy();
+  expect(rail, 'the rail is on screen').toBeTruthy();
+  expect(main!.y, 'the reading column sits above the rail at 390px').toBeLessThan(rail!.y);
+});
+
+test('the keyboard Tab order at 390px reaches the reading column before the rail', async ({
+  page,
+}) => {
+  await stubCatalogueAndSession(page);
+  await page.setViewportSize(WIDTHS.narrow);
+  await gotoReader(page);
+
+  // Tabs from the top of the page and records, for each stop, whether it belongs to the reading
+  // column or to the rail — the real question F17 raises: does the eye and the keyboard agree on
+  // which comes first? `order` alone would not, because a browser tabs in DOM order regardless of
+  // it; this is why reader-page.component.ts moves the reading column in the DOM instead.
+  const regions: Array<'main' | 'rail' | null> = [];
+  for (let i = 0; i < 15; i++) {
+    await page.keyboard.press('Tab');
+    const region = await page.evaluate(() => {
+      const el = document.activeElement;
+      if (el?.closest('.reader__main')) return 'main';
+      if (el?.closest('.reader__rail')) return 'rail';
+      return null;
+    });
+    regions.push(region);
+  }
+
+  const firstMain = regions.indexOf('main');
+  const firstRail = regions.indexOf('rail');
+  // Printed so the report can quote the real order this run measured, and not an assumption.
+  console.log(`[issue-105] Tab order at 390px: ${regions.join(', ')}`);
+  expect(firstMain, 'a reading-column control is reachable').toBeGreaterThanOrEqual(0);
+  expect(firstRail, 'a rail control is reachable').toBeGreaterThanOrEqual(0);
+  expect(
+    firstMain,
+    'the reading column is reachable before the rail, matching what the eye meets first',
+  ).toBeLessThan(firstRail);
+});
+
+/**
+ * Finding F11's third change. Test me and the session's own end control moved into one row
+ * below the card. The card's own lift shadow (--mt-lift-card in styles.css: `0 5px 0
+ * var(--mt-border)`) reaches 5px below its border box, and `getBoundingClientRect()` measures
+ * the border box, not the shadow — so the row needs at least 12px clear of `card.bottom + 5`,
+ * and not only of `card.bottom` itself, or it reads as touching the shadow.
+ */
+test('the action row below the card clears the card’s own lift shadow', async ({ page }) => {
+  const SHADOW_REACH = 5;
+  const MIN_CLEARANCE = 12;
+
+  for (const size of [WIDTHS.narrow, WIDTHS.wide]) {
+    await stubCatalogueAndSession(page);
+    await page.setViewportSize(size);
+    await gotoReader(page);
+
+    const card = await page.locator('.focus').boundingBox();
+    const actions = await page.locator('.focus__actions').boundingBox();
+    expect(card, `the card is on screen at ${size.width}px`).toBeTruthy();
+    expect(actions, `the action row is on screen at ${size.width}px`).toBeTruthy();
+
+    expect(
+      actions!.y - (card!.y + card!.height + SHADOW_REACH),
+      `the action row clears the card's lift shadow by at least ${MIN_CLEARANCE}px at ${size.width}px`,
+    ).toBeGreaterThanOrEqual(MIN_CLEARANCE);
   }
 });
 
@@ -588,6 +686,23 @@ test('the picker flips above a phrase near the bottom, and stays inside the card
     await page.keyboard.press('Escape');
     await expect(picker(page)).toHaveCount(0);
   }
+});
+
+/**
+ * Below 768px the picker is a bottom sheet and anchor() is unused (see the test above's own
+ * counterpart), so the card's min-height — which exists only to give an anchored, flipped
+ * picker room above 768px — must not apply there. A short answer must not leave an empty area
+ * under the hint on a phone.
+ */
+test('the card has no min-height at 390px, so a short answer leaves no empty area', async ({
+  page,
+}) => {
+  await stubCatalogueAndSession(page);
+  await page.setViewportSize(WIDTHS.narrow);
+  await gotoReader(page);
+
+  const minHeight = await page.locator('.focus').evaluate((el) => getComputedStyle(el).minHeight);
+  expect(['0px', 'auto'], 'the card is as tall as its content at 390px').toContain(minHeight);
 });
 
 test('the picker is a bottom sheet at 390px and an anchored popover at 1360px', async ({
@@ -908,6 +1023,27 @@ test.describe('with a reduced-motion preference', () => {
     held.open();
   });
 
+  /**
+   * Animation G of the design review. `--mt-dur-state` is already 1ms under reduced motion, but
+   * the per-tile stagger is a literal `24ms` multiplier and not a token, so it needs its own
+   * override — confirmed here rather than assumed, the same way the picker's own phone-sheet
+   * fade above is.
+   */
+  test('the catalogue tile stagger has no delay', async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await stubCatalogueAndSession(page);
+    await page.route('**/api/catalog/topics*', (route) => route.fulfill({ json: EVERY_CATEGORY }));
+    await page.goto('/');
+    await page.locator('.topic__tile').first().waitFor();
+
+    const delays = await page
+      .locator('.topic')
+      .evaluateAll((els) => els.map((e) => getComputedStyle(e).animationDelay));
+    expect(new Set(delays), 'every tile enters with no delay under reduced motion').toEqual(
+      new Set(['0s']),
+    );
+  });
+
   test('the picker opens and closes with a 1ms fade, and leaves no element behind', async ({
     page,
   }) => {
@@ -1078,6 +1214,10 @@ test('a ghost pill draws no shadow while a learner presses it', async ({ page })
 test('a coral pill keeps its smaller shadow while a learner presses it', async ({ page }) => {
   // The ghost fix above must change no other pill. This presses the coral pill of the Test Me
   // quiz and checks that its press shadow still only shrinks, from a 4px lift to a 2px lift.
+  // A tall viewport, and not the default 720px one: issue #105's own action row below the card
+  // (F11) moved "See results" close enough to the default viewport's own bottom edge that a
+  // press there missed the pill outright — elementFromPoint answers null past the fold.
+  await page.setViewportSize(WIDTHS.wide);
   await stubCatalogueAndSession(page);
   await mockQuiz(page, 's1', PRESS_TEMPLATE, PRESS_RESULT);
   await gotoReader(page);
@@ -1250,43 +1390,125 @@ test('a long quiz option wraps to two lines, taller than a one-line option, with
   ).toBeLessThanOrEqual(longBox.y);
 });
 
+/**
+ * Finding F13 of the design review changes this test. It used to count five focusable controls —
+ * the five verbs — at every width. Below 768px the picker now also shows a Cancel button, so the
+ * trap there holds six controls; a control hidden with `display: none`, above 768px, is not
+ * focusable, so the desktop count stays five.
+ */
 test('Tab and Shift+Tab cycle inside the picker and never leave it', async ({ page }) => {
   await stubCatalogueAndSession(page);
-  await page.setViewportSize(WIDTHS.wide);
   await gotoReader(page);
-  await selectPhrase(page, 'focus-body', 'Quantum mechanics');
-  await picker(page).waitFor();
 
-  const verbNow = () => page.evaluate(() => document.activeElement?.getAttribute('data-verb'));
   const insideNow = () =>
     page.evaluate(
       () => document.querySelector('[role="dialog"]')?.contains(document.activeElement) ?? false,
     );
+  // A verb answers with its own name; Cancel has no data-verb, so it answers with its own
+  // data-testid instead — the two are never equal, so a Set over both still counts distinct
+  // controls correctly.
+  const controlNow = () =>
+    page.evaluate(() => {
+      const el = document.activeElement;
+      return el?.getAttribute('data-verb') ?? el?.getAttribute('data-testid') ?? null;
+    });
 
-  // Five verbs since slice 4 added VISUALIZE. One Tab press per verb, plus one more to see the
-  // wrap back to the first.
-  const verbCount = 5;
-  const forward: (string | null)[] = [];
-  for (let i = 0; i < verbCount + 1; i++) {
-    expect(await insideNow(), `focus stays inside the picker on Tab press ${i}`).toBe(true);
-    forward.push(await verbNow());
-    await page.keyboard.press('Tab');
+  for (const { size, controlCount } of [
+    { size: WIDTHS.wide, controlCount: 5 },
+    { size: WIDTHS.narrow, controlCount: 6 },
+  ]) {
+    await page.setViewportSize(size);
+    await selectPhrase(page, 'focus-body', 'Quantum mechanics');
+    await picker(page).waitFor();
+
+    // One Tab press per control, plus one more to see the wrap back to the first.
+    const forward: (string | null)[] = [];
+    for (let i = 0; i < controlCount + 1; i++) {
+      expect(
+        await insideNow(),
+        `focus stays inside the picker on Tab press ${i} at ${size.width}px`,
+      ).toBe(true);
+      forward.push(await controlNow());
+      await page.keyboard.press('Tab');
+    }
+    expect(
+      new Set(forward.slice(0, controlCount)).size,
+      `${controlCount} distinct controls are reachable at ${size.width}px`,
+    ).toBe(controlCount);
+    expect(
+      forward[controlCount],
+      `the wrapping Tab press returns to the first control at ${size.width}px`,
+    ).toBe(forward[0]);
+
+    // The wrapping press left focus on the second control, so one Shift+Tab walks back to the
+    // first.
+    await page.keyboard.press('Shift+Tab');
+    expect(await controlNow(), `Shift+Tab walks back one control at ${size.width}px`).toBe(
+      forward[0],
+    );
+
+    // And the backward wrap. Angular builds a full key name from the modifiers held, so
+    // `keydown.tab` alone never fires while Shift is down and this half needs its own binding.
+    await page.keyboard.press('Shift+Tab');
+    expect(await insideNow(), `Shift+Tab keeps focus inside the picker at ${size.width}px`).toBe(
+      true,
+    );
+    expect(
+      await controlNow(),
+      `Shift+Tab from the first control wraps to the last at ${size.width}px`,
+    ).toBe(forward[controlCount - 1]);
+
+    // A fresh load for the next width, rather than a resize: the picker's own CSS media query
+    // reacts to a resize immediately, but a fresh load is what every other width-specific test in
+    // this file already does, and it costs nothing extra here since a session is stubbed, not a
+    // live backend.
+    await page.keyboard.press('Escape');
+    await expect(picker(page)).toHaveCount(0);
+    await gotoReader(page);
   }
-  expect(new Set(forward.slice(0, verbCount)).size, 'five distinct verbs are reachable').toBe(
-    verbCount,
-  );
-  expect(forward[verbCount], 'the wrapping Tab press returns to the first verb').toBe(forward[0]);
+});
 
-  // The wrapping press left focus on the second verb, so one Shift+Tab walks back to the first.
-  await page.keyboard.press('Shift+Tab');
-  expect(await verbNow(), 'Shift+Tab walks back one verb').toBe(forward[0]);
+/**
+ * Finding F13 of the design review, and an acceptance criterion of issue #105. A phone has no
+ * Escape key, and the sheet's only exit used to be a tap outside it, which a learner had to
+ * guess.
+ */
+test('the picker has a visible Cancel control below 768px, and none above it', async ({ page }) => {
+  await stubCatalogueAndSession(page);
 
-  // And the backward wrap. Angular builds a full key name from the modifiers held, so
-  // `keydown.tab` alone never fires while Shift is down and this half needs its own binding.
-  await page.keyboard.press('Shift+Tab');
-  expect(await insideNow(), 'Shift+Tab keeps focus inside the picker').toBe(true);
-  expect(await verbNow(), 'Shift+Tab from the first verb wraps to the last').toBe(
-    forward[verbCount - 1],
+  await page.setViewportSize(WIDTHS.wide);
+  await gotoReader(page);
+  await selectPhrase(page, 'focus-body', 'Quantum mechanics');
+  await picker(page).waitFor();
+  await expect(
+    picker(page).getByRole('button', { name: 'Cancel', exact: true }),
+    'no cancel control at 1360px: Escape and a press outside already close the picker',
+  ).toBeHidden();
+  await page.keyboard.press('Escape');
+  await expect(picker(page)).toHaveCount(0);
+
+  await page.setViewportSize(WIDTHS.narrow);
+  await gotoReader(page);
+  await selectPhrase(page, 'focus-body', 'Quantum mechanics');
+  await picker(page).waitFor();
+  const cancel = picker(page).getByRole('button', { name: 'Cancel', exact: true });
+  await expect(
+    cancel,
+    'a phone has no Escape key, so the sheet needs its own close control',
+  ).toBeVisible();
+
+  await cancel.click();
+  await expect(picker(page)).toHaveCount(0);
+
+  // Cancel closes the picker the same way Escape does, so a learner who presses it keeps their
+  // place in the text the same way — see "Escape closes the picker and returns focus to the body
+  // paragraph" above for the same claim about the keyboard path.
+  const landed = await page.evaluate(() => {
+    const el = document.activeElement as HTMLElement | null;
+    return { testId: el?.getAttribute('data-testid') ?? null };
+  });
+  expect(landed.testId, 'Cancel returns focus to the paragraph, the same as Escape').toBe(
+    'focus-body',
   );
 });
 
