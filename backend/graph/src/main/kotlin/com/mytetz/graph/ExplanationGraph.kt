@@ -3,13 +3,16 @@ package com.mytetz.graph
 import com.mytetz.llm.LlmChunk
 import com.mytetz.llm.LlmClient
 import com.mytetz.llm.LlmRequest
+import com.mytetz.llm.LlmStreamTruncatedException
 import com.mytetz.llm.LlmUsage
 import com.mytetz.llm.Pricing
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.coroutines.cancellation.CancellationException
 
@@ -210,7 +213,29 @@ class ExplanationGraph(
             )
         }
 
-    fun getOrGenerate(request: GraphRequest): Flow<GraphChunk> = flow {
+    /**
+     * The single-argument form, for a caller that has no cancelled or truncated stream to account
+     * for — a cache hit never reaches [generate] at all, and [com.mytetz.session.SessionService.create]
+     * treats its own seed generation as out of scope for the estimate. See the two-argument overload.
+     */
+    fun getOrGenerate(request: GraphRequest): Flow<GraphChunk> = getOrGenerate(request) { _, _ -> }
+
+    /**
+     * [onEstimatedSpend] is called with an estimated cost and a short reason, when this caller's own
+     * model call stopped early on a [CancellationException] or on a [com.mytetz.llm.LlmStreamTruncatedException]
+     * — the two cases in which the model was billed for real tokens but [GraphChunk.Spent] is never
+     * emitted, because no exact cost is ever known. See [generate] for how the estimate is built.
+     *
+     * Called **inside `withContext(NonCancellable)`**, so a caller cancelled by the same exception
+     * that triggered the estimate still receives it. It has no default value: a caller that forgets
+     * it silently drops every estimate, and — as with [com.mytetz.session.SessionService.create]'s
+     * own `onSpend` — the two errors are not symmetric, so a caller must say so explicitly rather
+     * than by omission. [getOrGenerate] (one argument) is the explicit "I do not need this" spelling.
+     */
+    fun getOrGenerate(
+        request: GraphRequest,
+        onEstimatedSpend: suspend (costMicros: Long, reason: String) -> Unit,
+    ): Flow<GraphChunk> = flow {
         val key = keyFor(request)
 
         repository.findByKey(key)?.let { stored ->
@@ -240,7 +265,7 @@ class ExplanationGraph(
                 } else {
                     // `generate` announces its own cost on the way through — see GraphChunk.Spent —
                     // and returns the terminal chunk, which is emitted here.
-                    emit(generate(request, key))
+                    emit(generate(request, key, onEstimatedSpend))
                 }
             }
         } finally {
@@ -291,32 +316,52 @@ class ExplanationGraph(
      * The announcement is not the return value, and that separation is the whole point: see
      * [GraphChunk.Spent]. This function can raise after the money is spent, on three ordinary paths,
      * and the cost has already left by then.
+     *
+     * Two of its raises are not that: a [CancellationException] and a [LlmStreamTruncatedException]
+     * are real spend with no [GraphChunk.Spent] to show for it, because the stream never reached
+     * [LlmChunk.Done]. [onEstimatedSpend] carries an estimate for each — see [estimatedUsage].
      */
     private suspend fun FlowCollector<GraphChunk>.generate(
         request: GraphRequest,
         key: String,
+        onEstimatedSpend: suspend (costMicros: Long, reason: String) -> Unit,
     ): GraphChunk.Done {
+        val userPrompt = PromptBuilder.user(
+            PromptContext(
+                topicTitle = request.topicTitle,
+                ancestors = request.ancestors,
+                span = request.span,
+                spanSentence = request.spanSentence,
+                verb = request.verb,
+            )
+        )
+
         val raw = StringBuilder()
         var usage = LlmUsage()
+        var earlyUsage: LlmUsage? = null
         var stopReason: String? = null
 
         // Set only when OUR downstream collector is what failed, so the two directions can be told
         // apart in the catch below. `emit` is the only call in here that can fail downstream.
         var raisedDownstream: Throwable? = null
 
+        // Reports an estimate for a stream that stopped before Done arrived. Called from both catch
+        // clauses below and nowhere else, so the two stay in step on how the estimate is built.
+        suspend fun reportEstimate(reason: String) {
+            val estimate = estimatedUsage(userPrompt, raw.toString(), earlyUsage, usage)
+            val estimatedCostMicros = Pricing.costMicros(llm.modelId, estimate)
+            // NonCancellable: the CancellationException that brought us here has already begun
+            // tearing down this coroutine, and a plain suspend call in that state would be
+            // cancelled before it could run. `SessionService.create`'s own `onSpend` callback runs
+            // under no such guard because it is never called from a cancellation path; this one is.
+            withContext(NonCancellable) { onEstimatedSpend(estimatedCostMicros, reason) }
+        }
+
         try {
             llm.stream(
                 LlmRequest(
                     system = PromptBuilder.system(),
-                    userPrompt = PromptBuilder.user(
-                        PromptContext(
-                            topicTitle = request.topicTitle,
-                            ancestors = request.ancestors,
-                            span = request.span,
-                            spanSentence = request.spanSentence,
-                            verb = request.verb,
-                        )
-                    ),
+                    userPrompt = userPrompt,
                     maxTokens = config.maxOutputTokens,
                     effort = config.effort,
                 )
@@ -331,6 +376,8 @@ class ExplanationGraph(
                             throw e
                         }
                     }
+
+                    is LlmChunk.EarlyUsage -> earlyUsage = chunk.usage
 
                     is LlmChunk.Done -> {
                         usage = chunk.usage
@@ -347,12 +394,21 @@ class ExplanationGraph(
             // request would turn into real, repeated spend. `Mongo.ping()` carries the same guard
             // for the same reason. This also covers the flow's own abort signal (`take`, `first`),
             // which arrives as a CancellationException through `emit`.
+            //
+            // The tokens the model already produced are real spend even so. Reported as an estimate,
+            // because Done never arrived to report an exact one — see GraphChunk.Spent's own KDoc
+            // for why an exact cost cannot simply be carried on a chunk that is never emitted.
+            reportEstimate("CANCELLED")
             throw e
         } catch (e: Exception) {
             // A failure raised by our own collector travelled up through `emit` and belongs to the
             // caller. Rewriting it would break Flow's exception transparency contract and, again,
             // would report somebody else's problem as a failed generation.
             if (e === raisedDownstream) throw e
+            // Only a truncated stream estimates. A bare upstream failure — an SDK fault, a network
+            // error — says nothing about how much of an answer the model produced before it fell
+            // over, so estimating one here would be a number invented rather than a number derived.
+            if (e is LlmStreamTruncatedException) reportEstimate("TRUNCATED")
             throw GenerationFailedException("upstream generation failed for $key", e)
         }
 
@@ -418,5 +474,33 @@ class ExplanationGraph(
         }
 
         return GraphChunk.Done(winner)
+    }
+
+    /**
+     * The best known [LlmUsage] for a stream that stopped before [LlmChunk.Done] arrived.
+     *
+     * [earlyUsage] is [LlmChunk.EarlyUsage]'s own reading of `message_start`, when the stream lived
+     * long enough to deliver one — real input and cache figures, straight from the provider. Its
+     * absence falls back to [prompt] divided by four characters per token, a rough figure and not a
+     * measurement.
+     *
+     * [lastUsage] is whatever [Done][LlmChunk.Done] would have carried, which is the caller's
+     * running `usage` — real only when a `message_delta` genuinely arrived with output tokens on it.
+     * That practically never happens on a stream that stopped early: the provider reports output
+     * tokens together with the stop reason, at the very end, so a stream that never reached the end
+     * never reaches this either. [receivedText] divided by four is what carries the estimate in
+     * practice, and it understates a model using adaptive thinking — see [LlmClient] — because the
+     * provider bills thinking tokens as output and this method only ever sees the text delivered to
+     * the learner.
+     */
+    private fun estimatedUsage(
+        prompt: String,
+        receivedText: String,
+        earlyUsage: LlmUsage?,
+        lastUsage: LlmUsage,
+    ): LlmUsage {
+        val base = earlyUsage ?: LlmUsage(inputTokens = prompt.length / 4L)
+        val outputTokens = lastUsage.outputTokens.takeIf { it > 0 } ?: (receivedText.length / 4L)
+        return base.copy(outputTokens = outputTokens)
     }
 }

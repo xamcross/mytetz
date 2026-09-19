@@ -39,9 +39,28 @@ class FakeLlmClient(
      */
     var afterFirstDelta: (suspend () -> Unit)? = null
 
+    /**
+     * The usage a test wants reported through [LlmChunk.EarlyUsage], before the first delta.
+     *
+     * Null by default, so a test that never sets it sees no [LlmChunk.EarlyUsage] at all. This
+     * keeps `ExplanationGraphTest.kt`'s `take(2)` test green: it expects `Meta` and then `Delta`
+     * with nothing between them, and a default early usage would put a third chunk in the way.
+     */
+    var earlyUsage: LlmUsage? = null
+
+    /**
+     * Runs after the delta at [afterDeltaIndex] (0-based), the same shape as [afterFirstDelta] but
+     * for whatever index a test needs — a cancellation two deltas in, for instance, rather than only
+     * after the first. Null by default, so it does nothing unless a test sets both fields.
+     */
+    var afterDeltaIndex: Int? = null
+    var afterDelta: (suspend () -> Unit)? = null
+
     override fun stream(request: LlmRequest): Flow<LlmChunk> = flow {
         calls += request
         failWith?.let { throw it }
+
+        earlyUsage?.let { emit(LlmChunk.EarlyUsage(it)) }
 
         val body = bodyByPromptSubstring.entries
             .firstOrNull { request.userPrompt.contains(it.key) }
@@ -51,6 +70,7 @@ class FakeLlmClient(
         body.chunked(16).forEachIndexed { index, part ->
             emit(LlmChunk.Delta(part))
             if (index == 0) afterFirstDelta?.invoke()
+            if (index == afterDeltaIndex) afterDelta?.invoke()
         }
 
         emit(

@@ -532,8 +532,27 @@ class SessionService(
      *
      * Does **not** check that the principal owns the session; see "Authorisation is the caller's".
      * Each [ExplainPlan] may be collected once — see [ExplainPlan].
+     *
+     * **This form drops the estimate.** It passes a callback that does nothing, so a stream that a
+     * learner cancels, or that the provider truncates, records no cost through it. A test, and a
+     * caller that records no spend at all, can use it. A route that streams a generation to a
+     * learner must use the two-argument overload. If it does not, a cancelled stream costs money
+     * that no ledger shows, which is the gap that the callback exists to close. See that overload
+     * for [onEstimatedSpend]'s own contract.
      */
-    fun explain(plan: ExplainPlan): Flow<GraphChunk> = flow {
+    fun explain(plan: ExplainPlan): Flow<GraphChunk> = explain(plan) { _, _ -> }
+
+    /**
+     * [onEstimatedSpend] is [ExplanationGraph.getOrGenerate]'s own callback, threaded straight
+     * through: this class has no view of the model call that [ExplanationGraph] makes and nothing
+     * to add to the estimate it reports. See that function's KDoc for the full contract, and
+     * `SessionRoutes.kt`'s `streamExplanation` for the one caller that supplies a real callback
+     * rather than the one-argument overload's no-op.
+     */
+    fun explain(
+        plan: ExplainPlan,
+        onEstimatedSpend: suspend (costMicros: Long, reason: String) -> Unit,
+    ): Flow<GraphChunk> = flow {
         // Before anything, and inside the flow builder so it fires per collection rather than per
         // call: this plan carries ceiling decisions taken against the session as it was at prepare
         // time, and nothing below re-checks them.
@@ -545,7 +564,7 @@ class SessionService(
 
         var generated: Explanation? = null
 
-        graph.getOrGenerate(plan.request).collect { chunk ->
+        graph.getOrGenerate(plan.request, onEstimatedSpend).collect { chunk ->
             if (chunk is GraphChunk.Done) generated = chunk.explanation
             emit(chunk)
         }
@@ -584,8 +603,18 @@ class SessionService(
         selection: SpanSelection,
         verb: Verb,
         requestedVariant: Int?,
+    ): Flow<GraphChunk> = explain(sessionId, parentNodeId, selection, verb, requestedVariant) { _, _ -> }
+
+    /** [onEstimatedSpend] carries the same contract as the two-argument [explain] plan overload. */
+    fun explain(
+        sessionId: String,
+        parentNodeId: String,
+        selection: SpanSelection,
+        verb: Verb,
+        requestedVariant: Int?,
+        onEstimatedSpend: suspend (costMicros: Long, reason: String) -> Unit,
     ): Flow<GraphChunk> = flow {
-        emitAll(explain(prepare(sessionId, parentNodeId, selection, verb, requestedVariant)))
+        emitAll(explain(prepare(sessionId, parentNodeId, selection, verb, requestedVariant), onEstimatedSpend))
     }
 
     // ------------------------------------------------------------------ ownership
