@@ -803,6 +803,33 @@ test('a chosen quiz option keeps its amber fill under the pointer, on a press, a
     .toEqual({ fill: AMBER_BG_RGB, focusVisible: true });
 });
 
+test('a quiz option carries the Candy lift, and presses like a pill', async ({ page }) => {
+  // The design review builds the option "from .mt-card", which carries the offset lift. This
+  // checks the second, unchosen option, so it never overlaps with the amber-fill test above.
+  await stubCatalogueAndSession(page);
+  await mockQuiz(page, 's1', PRESS_TEMPLATE, PRESS_RESULT);
+  await gotoReader(page);
+
+  await page.getByTestId('test-me').click();
+  const quiz = page.locator('[role="dialog"]');
+  await quiz.getByText(PRESS_TEMPLATE.questions[0].stem).waitFor();
+  const other = quiz.getByRole('button', { name: PRESS_TEMPLATE.questions[0].options[1] });
+
+  // --mt-lift is "0 4px 0 var(--mt-border)", and --mt-border is rgb(207, 233, 224).
+  await expect(other).toHaveCSS('box-shadow', 'rgb(207, 233, 224) 0px 4px 0px 0px');
+
+  const box = await other.boundingBox();
+  if (box === null) throw new Error('the option has no box to press');
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await expect
+    .poll(() => other.evaluate((el) => getComputedStyle(el).boxShadow), {
+      message: 'a pressed quiz option keeps a smaller shadow, the same as a pressed pill',
+    })
+    .toBe('rgb(207, 233, 224) 0px 2px 0px 0px');
+  await page.mouse.up();
+});
+
 /** Finding F10. The first option is one line. The second is long enough to wrap onto a second
  * line inside the 560px-wide panel, at 15px and a 1.45 line-height. */
 const WRAP_TEMPLATE: QuizTemplateView = {

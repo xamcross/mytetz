@@ -315,4 +315,75 @@ describe('QuizPanelComponent', () => {
       expect(chosen).toMatch(/border-width:\s*3px/);
     });
   });
+
+  /**
+   * Round 2 of issue #103. The design review builds the quiz option "from .mt-card", and .mt-card
+   * carries the Candy lift. The first version of .quiz-panel__option dropped it, so the option
+   * read as a flat box and not as a control a learner presses. This restores the same rest shadow,
+   * hover lift, press and transition that .mt-pill already carries in styles.css.
+   */
+  describe('the quiz option keeps the Candy lift', () => {
+    const source = readFileSync('src/app/assess/quiz-panel.component.ts', 'utf8');
+
+    /** The body of the first CSS rule for `selector`. */
+    function rule(selector: string): string {
+      const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const match = source.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`));
+      if (!match) throw new Error(`quiz-panel.component.ts must declare a rule for ${selector}`);
+      return match[1];
+    }
+
+    /** The body of every `@media (hover: hover) { ... }` block, joined together — the same method
+     * `styles.spec.ts` uses, so a hover rule outside that guard never counts here either. */
+    function hoverGuardedText(): string {
+      let text = '';
+      let from = 0;
+      for (;;) {
+        const start = source.indexOf('@media (hover: hover)', from);
+        if (start === -1) return text;
+        const open = source.indexOf('{', start);
+        let depth = 0;
+        for (let i = open; i < source.length; i++) {
+          if (source[i] === '{') depth++;
+          if (source[i] === '}') {
+            depth--;
+            if (depth === 0) {
+              text += source.slice(open + 1, i) + '\n';
+              from = i + 1;
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    it('draws the rest shadow every .mt-pill carries', () => {
+      expect(rule('.quiz-panel__option')).toMatch(/box-shadow:\s*var\(--mt-lift\)/);
+    });
+
+    it('names the same press-and-hover transition .mt-pill uses', () => {
+      expect(rule('.quiz-panel__option')).toMatch(/var\(--mt-dur-press\)\s*var\(--mt-ease-press\)/);
+    });
+
+    it('lifts on hover, guarded by (hover: hover), the same distance and shadow as .mt-pill', () => {
+      const hoverText = hoverGuardedText();
+      expect(hoverText).toMatch(/\.quiz-panel__option:hover:not\(:disabled\)[^{]*\{[^}]*\}/);
+      const hoverRule = hoverText.match(
+        /\.quiz-panel__option:hover:not\(:disabled\)[^{]*\{([^}]*)\}/,
+      )?.[1];
+      if (!hoverRule) throw new Error('the hover rule must be guarded by (hover: hover)');
+      expect(hoverRule).toMatch(/transform:\s*translateY\(-1px\)/);
+      expect(hoverRule).toMatch(/box-shadow:\s*var\(--mt-lift-hover\)/);
+    });
+
+    it('presses down, the same distance and shadow as .mt-pill', () => {
+      const active = rule('.quiz-panel__option:active:not(:disabled)');
+      expect(active).toMatch(/transform:\s*translateY\(2px\)/);
+      expect(active).toMatch(/box-shadow:\s*var\(--mt-press\)/);
+    });
+
+    it('draws no shadow at all once disabled, the same as a disabled .mt-pill', () => {
+      expect(rule('.quiz-panel__option:disabled')).toMatch(/box-shadow:\s*none/);
+    });
+  });
 });

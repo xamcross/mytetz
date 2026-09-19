@@ -143,25 +143,42 @@ type QuizPhase = 'loading' | 'question' | 'result';
         font-size: 15px;
         font-weight: 600;
         line-height: 1.45;
-        transition: background var(--mt-dur-press) var(--mt-ease-press);
+        /* The design review builds this control "from .mt-card", and every card and pill in the
+           system carries the offset lift. A flat box does not read as pressable. */
+        box-shadow: var(--mt-lift);
+        transition:
+          background var(--mt-dur-press) var(--mt-ease-press),
+          transform var(--mt-dur-press) var(--mt-ease-press),
+          box-shadow var(--mt-dur-press) var(--mt-ease-press);
       }
       /* (hover: hover) and not a plain :hover: see styles.css's own comment on .mt-pill:hover
-         for why a touch screen needs this guard.
-         :not(.quiz-panel__option--chosen) on both rules below: a click leaves the pointer over
-         the option it landed on, so this rule would otherwise still match right after a learner
-         chooses it, and :hover comes after .quiz-panel__option--chosen in this file, so it would
-         win on source order even at equal specificity. The chosen fill must read clearly at
-         exactly that moment, so an unchosen option is the only one these two rules ever repaint. */
+         for why a touch screen needs this guard. The lift itself applies to every option, chosen
+         or not — a learner can still press a chosen option again, and it is still a control. */
       @media (hover: hover) {
+        .quiz-panel__option:hover:not(:disabled) {
+          transform: translateY(-1px);
+          box-shadow: var(--mt-lift-hover);
+        }
+        /* :not(.quiz-panel__option--chosen): a click leaves the pointer over the option it landed
+           on, so this rule would otherwise still match right after a learner chooses it, and
+           :hover comes after .quiz-panel__option--chosen in this file, so it would win on source
+           order even at equal specificity. The chosen fill must read clearly at exactly that
+           moment, so an unchosen option is the only one this rule ever repaints. */
         .quiz-panel__option:hover:not(:disabled):not(.quiz-panel__option--chosen) {
           background: var(--mt-sunk);
         }
       }
+      .quiz-panel__option:active:not(:disabled) {
+        transform: translateY(2px);
+        box-shadow: var(--mt-press);
+      }
+      /* Same reason as the hover rule above: a press must not swap the chosen fill either. */
       .quiz-panel__option:active:not(:disabled):not(.quiz-panel__option--chosen) {
         background: var(--mt-chip);
       }
       .quiz-panel__option:disabled {
         opacity: 0.55;
+        box-shadow: none;
         cursor: not-allowed;
       }
       /* aria-pressed already states this for a screen reader. A sighted learner with low vision
