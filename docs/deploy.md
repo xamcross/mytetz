@@ -567,6 +567,7 @@ line is for an operator, and no line ever reaches a learner.
 | `ACCOUNT_LINK_CONFLICT` | `AuthRoutes` | a Google sign-in's email is already linked to a different Google account | a real conflict, not a bug; the learner needs the sign-in method their account already used |
 | `MAIL_SEND_FAILED` | `MailSender` | a magic-link email could not be sent | check the mail provider's status and `MYTETZ_MAIL_API_KEY`; a learner is currently unable to sign in by email |
 | `CONFIG_MISSING` | `ConfigGate`, from `AuthRoutes` and `BillingRoutes` | a route needs an environment variable that is not set, so it answers `503` rather than `500`. One line names only the first missing variable in that route's own chain; a second variable, if one is also missing, only appears after the first is set | set the named variable. The next request retries on its own. No restart is needed |
+| `EVICTION_LOOP_FAILED` | `Components.bootstrap` (the boot-time run), and the daily loop in `Application.kt` | one explanation-eviction run raised an exception and did not complete | read the log line's own exception. Nothing else fails because of this: the boot still completes, and the next run — the next day, or the next boot — retries on its own |
 
 ### Reading a `BILLING_DRIFT` line
 
