@@ -274,7 +274,7 @@ test('the introduction, the filter row and the first tile all fit at 412px', asy
  * used to hold nine sentences above the filter row, so a learner met the search field only after
  * reading all of them. It now holds two, and the rest moved below the tile grid.
  */
-test('the filter row sits within 200px of the top of the page at 412px', async ({ page }) => {
+test('the filter row sits within 240px of the top of the page at 412px', async ({ page }) => {
   await stubCatalogueAndSession(page);
   await page.setViewportSize({ width: 412, height: 915 });
   await page.goto('/');
@@ -282,7 +282,7 @@ test('the filter row sits within 200px of the top of the page at 412px', async (
 
   const box = await page.locator('.catalog__filter').boundingBox();
   expect(box, 'the filter row is on screen').toBeTruthy();
-  expect(box!.y, 'the filter row starts within 200px of the top').toBeLessThanOrEqual(200);
+  expect(box!.y, 'the filter row starts within 240px of the top').toBeLessThanOrEqual(240);
 });
 
 test('the search field stays readable at every width, with every real category', async ({

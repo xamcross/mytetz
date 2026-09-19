@@ -397,14 +397,7 @@ import { TopicSummary } from '../core/models';
       }
       @media (max-width: 767px) {
         .catalog {
-          /* F8. Less air above the question, so the search field lands sooner on a phone. */
-          padding: 8px 20px 24px;
-        }
-        .catalog__inner {
-          /* F8. Every gap in this column tightens on a phone, so the header, the short
-             introduction and the filter row sit closer together and a learner reaches the search
-             field sooner. 16px above 768px, at every width. */
-          gap: 6px;
+          padding: 24px 20px;
         }
         .catalog__title {
           font-size: 26px;
