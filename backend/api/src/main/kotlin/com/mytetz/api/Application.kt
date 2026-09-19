@@ -186,6 +186,12 @@ fun Application.module(components: Components = Components()) {
             explanations = components.explanations,
             modelFamily = components.modelFamily,
         )
+        // `GET /how-it-works`. Reads the model id the same no-model-client way
+        // `resolveModelForLogging`'s own boot log line above does — never `components.llm.modelId`,
+        // which would force the lazy model client to build. See `HowItWorksRoutes.kt`'s own KDoc.
+        howItWorksRoutes(
+            modelId = { resolveModelForLogging(System.getenv(AnthropicLlmClient.MODEL_ID_ENV)) },
+        )
 
         // Every unmatched `/api/**` path, answered as JSON.
         //
