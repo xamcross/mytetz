@@ -37,8 +37,11 @@ const val MAX_WEBHOOK_BODY_BYTES: Long = 16_384
 @Serializable
 data class CheckoutResponse(val url: String)
 
+@Serializable
+data class PortalResponse(val url: String)
+
 /**
- * `POST /api/billing/checkout` and `POST /api/billing/webhook`.
+ * `POST /api/billing/checkout`, `POST /api/billing/portal`, and `POST /api/billing/webhook`.
  *
  * ## The checkout link carries an email, and nothing else
  *
@@ -47,6 +50,20 @@ data class CheckoutResponse(val url: String)
  * gives verbatim, with the signed-in learner's own email as `user_email` and `readonly_user=true`
  * so the learner cannot change that address at the till. No API call opens a session; the string
  * is the whole answer.
+ *
+ * ## The portal route reads only the session
+ *
+ * `POST /api/billing/portal` takes the signed-in learner's email from
+ * [AccountService.resolveSession]. It reads no email, and no id, from the caller. See
+ * [FreemiusApiClient.fetchPortalLink]'s own KDoc for the vendor call this route makes with that
+ * email. [FreemiusApiClient.fetchPortalLink] answers null for two different cases: a learner with
+ * no active subscription, and a failed vendor call. This route cannot tell the two apart, and it
+ * need not: it answers `404 NO_SUBSCRIPTION` for both.
+ *
+ * [freemiusApiClient] is a factory, for the same reason [freemiusConfig] is one, two paragraphs
+ * down. `Components.freemiusApiClient` is `by lazy`, on a chain that throws when
+ * `FREEMIUS_API_KEY` or `FREEMIUS_PRODUCT_ID` is missing. A direct read here would force that
+ * chain before `Application.module()` finishes its own setup.
  *
  * ## The webhook route reads the raw body before anything parses it
  *
@@ -84,6 +101,7 @@ fun Route.billingRoutes(
     account: AccountService,
     billing: BillingService,
     freemiusConfig: () -> FreemiusConfig,
+    freemiusApiClient: () -> FreemiusApiClient,
     cookies: PrincipalCookieConfig,
     // See `newConfigMissingLog`'s own KDoc.
     configMissingLogged: MutableSet<String> = newConfigMissingLog(),
@@ -113,6 +131,34 @@ fun Route.billingRoutes(
             "?user_email=$encodedEmail&readonly_user=true"
 
         call.respond(CheckoutResponse(url))
+    }
+
+    post("/api/billing/portal") {
+        val user = Principals.readSessionId(call, cookies)?.let { account.resolveSession(it) }
+        if (user == null) {
+            call.respond(HttpStatusCode.Unauthorized, ApiError("SIGN_IN_REQUIRED", "sign in to manage a subscription"))
+            return@post
+        }
+
+        val client = buildConfiguredOrNull(configMissingLogged, freemiusApiClient)
+        if (client == null) {
+            call.respond(
+                HttpStatusCode.ServiceUnavailable,
+                ApiError("BILLING_UNAVAILABLE", "billing is not available right now"),
+            )
+            return@post
+        }
+
+        // The same normalisation, and the same stored-address fallback, the checkout route above
+        // uses. See that route's own comment.
+        val email = MagicLinkService.normaliseEmail(user.email) ?: user.email
+        val link = client.fetchPortalLink(email)
+        if (link == null) {
+            call.respond(HttpStatusCode.NotFound, ApiError("NO_SUBSCRIPTION", "no subscription to manage"))
+            return@post
+        }
+
+        call.respond(PortalResponse(link))
     }
 
     post("/api/billing/webhook") {

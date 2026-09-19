@@ -13,6 +13,9 @@ import com.mytetz.billing.BillingService
 import com.mytetz.billing.FreemiusConfig
 import com.mytetz.billing.SubscriptionStatus
 import io.ktor.client.HttpClient
+import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.respond
+import io.ktor.client.engine.mock.respondError
 import io.ktor.client.plugins.cookies.HttpCookies
 import io.ktor.client.request.get
 import io.ktor.client.request.header
@@ -21,8 +24,10 @@ import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
+import io.ktor.http.headersOf
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.install
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
@@ -212,6 +217,11 @@ class BillingRoutesTest {
         // fallback to the real `freemiusConfig` below. A config-missing test overrides this to a
         // throwing lambda, the same shape `AuthRoutesTest`'s own `magicLinkFactory` uses.
         freemiusConfigFactory: (() -> FreemiusConfig)? = null,
+        // Null keeps every existing test on a portal client that answers a fixed link. No test
+        // outside the "portal" group below ever calls the portal route, so that default never
+        // actually runs. A portal test overrides this the same way a config-missing test
+        // overrides `freemiusConfigFactory` above.
+        freemiusApiClientFactory: (() -> FreemiusApiClient)? = null,
         block: suspend Scope.() -> Unit,
     ) = testApplication {
         val stack = TestFixtures.sessionApp()
@@ -222,6 +232,7 @@ class BillingRoutesTest {
         val billingRepository = BillingRepository(stack.database)
         val billing = BillingService(billingRepository, config = BillingConfig())
         val freemiusConfig = FreemiusConfig(secretKey = SECRET_KEY, productId = "prod-1", planId = "plan-1")
+        val freemiusApiClient = portalClient(link = "https://example.freemius.com/portal?token=default")
 
         application {
             install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) }
@@ -252,6 +263,7 @@ class BillingRoutesTest {
                     account = account,
                     billing = billing,
                     freemiusConfig = freemiusConfigFactory ?: { freemiusConfig },
+                    freemiusApiClient = freemiusApiClientFactory ?: { freemiusApiClient },
                     cookies = TestFixtures.cookieConfig,
                 )
             }
@@ -259,6 +271,29 @@ class BillingRoutesTest {
 
         val client = createClient { install(HttpCookies); followRedirects = false }
         Scope(client, account, mailSender, stack, billingRepository, freemiusConfig).block()
+    }
+
+    /**
+     * A [FreemiusApiClient] wired to a [MockEngine] that answers a fixed portal login response,
+     * for one test's own use of `POST /api/billing/portal`.
+     *
+     * [link] set answers `201` with that link, the shape a real subscriber gets. [link] null
+     * answers `404`, the shape `products/generate-portal-login-link`'s own schema documents for a
+     * learner with nothing to manage — see [FreemiusApiClient.fetchPortalLink]'s own KDoc.
+     */
+    private fun portalClient(link: String?): FreemiusApiClient {
+        val engine = MockEngine {
+            if (link != null) {
+                respond(
+                    content = """{"link": "$link"}""",
+                    status = HttpStatusCode.Created,
+                    headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                )
+            } else {
+                respondError(HttpStatusCode.NotFound)
+            }
+        }
+        return FreemiusApiClient(HttpClient(engine), FreemiusApiConfig(apiKey = "test-api-key", productId = "prod-1"))
     }
 
     private suspend fun HttpResponse.apiError(): ApiError = wireJson.decodeFromString(bodyAsText())
@@ -296,6 +331,53 @@ class BillingRoutesTest {
 
         val body: CheckoutResponse = wireJson.decodeFromString(response.bodyAsText())
         assertTrue(body.url.contains("readonly_user=true"), "the url must mark the address read-only: ${body.url}")
+    }
+
+    // ------------------------------------------------------------------ the customer portal
+
+    @Test
+    fun `portal answers 401 when signed out`() = app {
+        val response = client.post("/api/billing/portal")
+
+        assertEquals(HttpStatusCode.Unauthorized, response.status)
+        assertEquals("SIGN_IN_REQUIRED", response.apiError().code)
+    }
+
+    @Test
+    fun `portal returns the vendor's own link for a signed-in learner`() = app(
+        freemiusApiClientFactory = { portalClient(link = "https://example.freemius.com/portal?token=live") },
+    ) {
+        signIn()
+
+        val response = client.post("/api/billing/portal")
+
+        assertEquals(HttpStatusCode.OK, response.status)
+        val body: PortalResponse = wireJson.decodeFromString(response.bodyAsText())
+        assertEquals("https://example.freemius.com/portal?token=live", body.url)
+    }
+
+    @Test
+    fun `portal answers NO_SUBSCRIPTION when the vendor gives no link`() = app(
+        freemiusApiClientFactory = { portalClient(link = null) },
+    ) {
+        signIn()
+
+        val response = client.post("/api/billing/portal")
+
+        assertEquals(HttpStatusCode.NotFound, response.status)
+        assertEquals("NO_SUBSCRIPTION", response.apiError().code)
+    }
+
+    @Test
+    fun `portal answers BILLING_UNAVAILABLE when the freemius api credential is missing`() = app(
+        freemiusApiClientFactory = { error("FREEMIUS_API_KEY is not set") },
+    ) {
+        signIn()
+
+        val response = client.post("/api/billing/portal")
+
+        assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
+        assertEquals("BILLING_UNAVAILABLE", response.apiError().code)
     }
 
     // ------------------------------------------------------------------ the webhook and email resolution
