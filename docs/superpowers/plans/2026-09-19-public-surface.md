@@ -56,11 +56,16 @@ issue only for detail the spec does not repeat.
   `frontend/src/app/app.routes.ts` and no path to `SpaRoutes.paths`
   (`backend/api/src/main/kotlin/com/mytetz/api/SpaRoutes.kt:19-27`). Every catalogue tile and every
   guide-page link to a topic is a plain `<a href>`, never a `routerLink`.
-- Every JSON-LD value goes through the JSON-LD escape helper (Task 1.1) before it reaches a
-  `<script type="application/ld+json">` block. Every other text value — the title, the summary,
-  the seed body, a span, an explanation body — goes through the HTML DSL's ordinary text or
-  attribute position (`+value`, or an attribute assignment) and never through an `unsafe { }`
-  block.
+- Every JSON-LD value is built with kotlinx.serialization's `buildJsonObject`/`buildJsonArray`, and
+  never with a hand-written string template. Every JSON-LD document goes through `jsonLdGraph` or
+  `jsonLdDocument` (Task 1.1) before it reaches a `<script type="application/ld+json">` block.
+  Every other text value — the title, the summary, the seed body, a span, an explanation body —
+  goes through the HTML DSL's ordinary text or attribute position (`+value`, or an attribute
+  assignment) and never through an `unsafe { }` block.
+- `unsafe { }` only ever wraps a call to `jsonLdGraph` or `jsonLdDocument` (Task 1.1): every
+  occurrence in this plan has the exact shape `unsafe { +jsonLdGraph(...) }` or
+  `unsafe { +jsonLdDocument(...) }`, never a hand-built string. A reviewer rejects a pull request
+  that writes `unsafe { }` any other way.
 - An owner step stays an owner step. This plan never runs `fly`, `flyctl`, or a Cloudflare
   dashboard action from an agent's machine. Task 1.8 states the Cloudflare change as an exact,
   literal set of dashboard steps for the owner to carry out.
@@ -75,8 +80,8 @@ issue only for detail the spec does not repeat.
 |---|---|
 | `gradle/libs.versions.toml` | Adds the `ktor-server-html-builder` library entry, on the existing `ktor` version. |
 | `backend/api/build.gradle.kts` | Adds `implementation(libs.ktor.server.html.builder)`. |
-| `backend/api/src/main/kotlin/com/mytetz/api/JsonLd.kt` | New. `jsonLdScriptSafe(json: String): String`, the `</`-to-`<\/` substitution. |
-| `backend/api/src/test/kotlin/com/mytetz/api/JsonLdTest.kt` | New. Hostile-input tests for the substitution. |
+| `backend/api/src/main/kotlin/com/mytetz/api/JsonLd.kt` | New. `jsonLdScriptSafe` (escapes every `<`, `>`, `&`, U+2028, U+2029), `jsonLdGraph`/`jsonLdDocument` (build with kotlinx.serialization), `organizationJsonLd`. The one file every JSON-LD builder in this plan lives in. |
+| `backend/api/src/test/kotlin/com/mytetz/api/JsonLdTest.kt` | New. Hostile-input tests, and a round-trip test through `Json.parseToJsonElement`. |
 | `backend/api/src/main/kotlin/com/mytetz/api/TopicPageHtml.kt` | New. The pure HTML-DSL renderer: `TopicPageView`, `RelatedTopicView`, `fun HTML.topicPageHtml(view: TopicPageView)`. No route, no I/O. |
 | `backend/api/src/test/kotlin/com/mytetz/api/TopicPageHtmlTest.kt` | New. Hostile-input escape tests, rendered through `kotlinx.html.stream.createHTML()`. |
 | `backend/llm/src/main/kotlin/com/mytetz/llm/AnthropicLlmClient.kt` | Widens `Companion.resolveModel` from `internal` to `public` (spec section 6.2). No other change. |
@@ -105,11 +110,10 @@ issue only for detail the spec does not repeat.
 | File | Responsibility |
 |---|---|
 | `backend/catalog/src/main/kotlin/com/mytetz/catalog/Topic.kt` | Adds `val reviewedAt: Long? = null`. |
-| `backend/catalog/src/main/kotlin/com/mytetz/catalog/TopicRepository.kt` | Adds `setReviewedAt(slug: String, epochMillis: Long)`, or the project's own migration convention if one already governs a field addition — Task 3.1 confirms which before it writes code. |
+| `backend/catalog/src/main/kotlin/com/mytetz/catalog/TopicRepository.kt` | Adds `setReviewedAt(slug: String, epochMillis: Long)`. Widens `upsertPreservingStatus` to also carry `reviewedAt` across a boot's re-seed, so a boot does not erase it. |
 | `backend/api/src/main/kotlin/com/mytetz/api/TopicPageHtml.kt` | Adds "Last reviewed `<date>`" and `dateModified` in the `LearningResource` JSON-LD, from `Topic.reviewedAt`. |
-| `backend/api/src/main/kotlin/com/mytetz/api/HowItWorksRoutes.kt` | New. `GET /how-it-works`. |
+| `backend/api/src/main/kotlin/com/mytetz/api/HowItWorksRoutes.kt` | New. `GET /how-it-works`. Reuses `organizationJsonLd`/`jsonLdDocument` from `JsonLd.kt` (Task 1.1) — no new JSON-LD file this phase. |
 | `backend/api/src/test/kotlin/com/mytetz/api/HowItWorksRoutesTest.kt` | New. |
-| `backend/api/src/main/kotlin/com/mytetz/api/OrganizationJsonLd.kt` | New. The shared `Organization` JSON-LD fragment for `/` and `/how-it-works`. |
 | `frontend/src/app/ui/app-shell.component.ts` | Adds a footer link to `/how-it-works`. |
 | `frontend/public/guides/*/index.html` (7 files) | Each page's JSON-LD `@graph` gains an `author` node. |
 
@@ -119,7 +123,7 @@ issue only for detail the spec does not repeat.
 |---|---|
 | `backend/graph/src/main/kotlin/com/mytetz/graph/Explanation.kt` | Adds `val published: Boolean = false`. |
 | `backend/graph/src/main/kotlin/com/mytetz/graph/ExplanationRepository.kt` | Adds `setPublished(key: String, published: Boolean)`, `findPublished(): List<Explanation>` (`EXPLAIN` only), and the short-key range lookup `findByShortKeyPrefix(prefix: String): List<Explanation>`. |
-| `backend/api/src/main/kotlin/com/mytetz/api/ExplanationPageRoutes.kt` | New. `GET /topics/{slug}/explain/{shortKey}`. |
+| `backend/api/src/main/kotlin/com/mytetz/api/ExplanationPageRoutes.kt` | New. `GET /topics/{slug}/explain/{shortKey}`, with its own `BreadcrumbList` JSON-LD, built with `buildJsonObject` and rendered through `jsonLdGraph` (Task 1.1). |
 | `backend/api/src/main/kotlin/com/mytetz/api/GlossaryRoutes.kt` | New. `GET /glossary`. |
 | `backend/api/src/test/kotlin/com/mytetz/api/ExplanationPageRoutesTest.kt` | New. |
 | `backend/api/src/test/kotlin/com/mytetz/api/GlossaryRoutesTest.kt` | New. |
@@ -135,100 +139,255 @@ issue only for detail the spec does not repeat.
 route and its renderer, `Components.modelFamily`, and the `/topics/*`-is-Ktor's routing
 precedent.
 
-## Task 1.1: the JSON-LD script-safety helper
+## Task 1.1: the JSON-LD builder and the script-safety helper
 
 **Files:**
 - Create: `backend/api/src/main/kotlin/com/mytetz/api/JsonLd.kt`
 - Create: `backend/api/src/test/kotlin/com/mytetz/api/JsonLdTest.kt`
 
 **Interfaces:**
-- Produces: `fun jsonLdScriptSafe(json: String): String`.
+- Produces: `fun jsonLdScriptSafe(json: String): String`, `fun jsonLdGraph(nodes: List<JsonObject>): String`,
+  `fun jsonLdDocument(node: JsonObject): String`, `fun organizationJsonLd(): JsonObject`.
 
-**Why this task exists, stated once for the whole phase.** Spec section 4.6 states the rule: a
-`<script type="application/ld+json">` block is placed correctly by the HTML DSL, but the browser's
-HTML parser still closes the tag on the literal sequence `</script`, before any JSON parser runs.
-The fix replaces every `/` that follows a `<` with `\/`. A JSON string reads `\/` as an ordinary
-slash, so no JSON value changes meaning, and a browser never reads `<\/script` as a closing tag.
-Reference: https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html.
+**Why this task builds JSON-LD with kotlinx.serialization, and never with a hand-written string.**
+The first draft of this plan built each JSON-LD value with a private `jsonString`/`jsonEscape`
+helper that escaped only `"` and `\`. JSON also requires an escape for every control character
+from U+0000 to U+001F. A seed body or a summary with a line break or a tab in it then produced
+invalid JSON-LD, which fails #45's own acceptance criterion at https://validator.schema.org/. This
+project already depends on kotlinx.serialization (`gradle/libs.versions.toml`'s `serialization`
+entry). Every JSON-LD value in this plan is built with `buildJsonObject`/`buildJsonArray`/`put` and
+serialized with `Json.encodeToString`, confirmed against the official API documentation:
+https://kotlinlang.org/api/kotlinx.serialization/kotlinx-serialization-json/kotlinx.serialization.json/build-json-object.html
+and
+https://kotlinlang.org/api/kotlinx.serialization/kotlinx-serialization-json/kotlinx.serialization.json/-json/parse-to-json-element.html.
+No task after this one writes a raw JSON string template.
+
+**Why `jsonLdScriptSafe` replaces every `<`, and not only `</`.** The first draft of this plan
+replaced `/` with `\/` only after a `<`, which stops the plain sequence `</script>`. The HTML
+standard's own restrictions on the content of a `script` element describe more parser states than
+that one substitution covers: after the literal text `<!--` and then `<script`, the tokenizer
+enters what the standard calls the "script data double escaped" state, and the next `</script>` no
+longer closes the element the way the single substitution assumes. Reference, read in full before
+this task is implemented:
+https://html.spec.whatwg.org/multipage/scripting.html#restrictions-for-contents-of-script-elements.
+The robust rule removes the trigger instead of naming every sequence that uses it: every `<`
+character becomes the six-character JSON string escape backslash-u-0-0-3-c. Kotlin source writes
+this escape as the string `"\\u003c"`, a doubled backslash, so the compiled output carries one
+backslash followed by the four hex digits. Every state the standard describes for a script
+element's raw text needs a literal `<` character to begin. A payload with no `<` character enters
+none of them. A JSON parser reads that one escape back as the single character `<`, so no JSON-LD
+value changes meaning, and `Json.parseToJsonElement` undoes the escape on its own — this function
+needs no matching "un-escape" step anywhere in this plan.
+
+`jsonLdScriptSafe` also escapes `>`, `&`, U+2028 (LINE SEPARATOR) and U+2029 (PARAGRAPH SEPARATOR),
+each for its own reason, stated here once:
+
+- `>` and `&` carry meaning to a consumer that is not JSON-aware — an old SGML tool, or a future
+  code path that treats this payload as HTML text instead of parsing it as JSON. Escaping them
+  costs nothing: each one becomes its own six-character JSON string escape, the same shape as the
+  `<` case above, and none of the three change the value a JSON parser reads back.
+- U+2028 and U+2029 are valid inside a JSON string, but each one is illegal inside a JavaScript
+  string or template literal. This project never evaluates this payload as JavaScript. Escaping
+  the two characters here means a later change that copies this payload into a JavaScript string
+  does not inherit a defect this function could close for free today.
 
 - [ ] **Step 1: Write the failing tests**
 
 ```kotlin
 package com.mytetz.api
 
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 
 class JsonLdTest {
 
+    // ------------------------------------------------------------- jsonLdScriptSafe
+
     @Test
-    fun `a closing script tag inside a value is neutralised`() {
-        val hostile = """{"description":"end the tag with </script><script>alert(1)</script>"}"""
+    fun `a value carrying a closing script tag holds no closing script tag after escaping`() {
+        val safe = jsonLdScriptSafe("""{"description":"</script><script>alert(1)</script>"}""")
 
-        val safe = jsonLdScriptSafe(hostile)
-
-        assertFalse("</script" in safe, "a literal </script sequence survived: $safe")
+        assertFalse("<" in safe, "a literal < character survived: $safe")
+        val parsed = Json.parseToJsonElement(safe)
         assertEquals(
-            """{"description":"end the tag with <\/script><\/script>alert(1)<\/script>"}""",
-            safe,
+            "</script><script>alert(1)</script>",
+            parsed.jsonObject["description"]!!.jsonPrimitive.content,
         )
     }
 
     @Test
-    fun `a value with no closing-tag sequence is unchanged`() {
+    fun `the double-escaped-state attack does not survive as a literal sequence`() {
+        // The HTML standard's own worked example: "<!--" then "<script" puts the parser into a
+        // state where the NEXT "</script>" does not close the element. Reference:
+        // https://html.spec.whatwg.org/multipage/scripting.html#restrictions-for-contents-of-script-elements
+        val safe = jsonLdScriptSafe("""{"body":"<!--<script>"}""")
+
+        assertFalse("<" in safe, "a literal < character survived: $safe")
+        assertEquals(
+            "<!--<script>",
+            Json.parseToJsonElement(safe).jsonObject["body"]!!.jsonPrimitive.content,
+        )
+    }
+
+    @Test
+    fun `a value with no angle bracket is unchanged`() {
         val plain = """{"name":"mytetz"}"""
 
         assertEquals(plain, jsonLdScriptSafe(plain))
     }
 
     @Test
-    fun `an already-escaped slash is not doubled`() {
-        val once = """{"url":"https:\/\/mytetz.com"}"""
+    fun `an ampersand and a line separator are escaped too`() {
+        val safe = jsonLdScriptSafe("{\"x\":\"a & b \u2028 c\"}")
 
-        assertEquals(once, jsonLdScriptSafe(once))
+        assertFalse("&" in safe)
+        assertFalse("\u2028" in safe)
+        assertEquals("a & b \u2028 c", Json.parseToJsonElement(safe).jsonObject["x"]!!.jsonPrimitive.content)
+    }
+
+    // ------------------------------------------------------------- jsonLdGraph / jsonLdDocument
+
+    @Test
+    fun `jsonLdGraph produces a context and graph that Json can parse back to the same values`() {
+        val hostile = "A title with a \" quote, a \\ backslash, a\nline break and a\ttab."
+        val node = buildJsonObject {
+            put("@type", "LearningResource")
+            put("name", hostile)
+        }
+
+        val script = jsonLdGraph(listOf(node))
+        val parsed = Json.parseToJsonElement(script)
+
+        assertEquals("https://schema.org", parsed.jsonObject["@context"]!!.jsonPrimitive.content)
+        assertEquals(hostile, parsed.jsonObject["@graph"]!!.jsonArray[0].jsonObject["name"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `jsonLdDocument wraps one node the same way`() {
+        val node = buildJsonObject { put("@type", "Organization"); put("name", "mytetz") }
+
+        val parsed = Json.parseToJsonElement(jsonLdDocument(node))
+
+        assertEquals("mytetz", parsed.jsonObject["@graph"]!!.jsonArray[0].jsonObject["name"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `organizationJsonLd names the project's GitHub repository`() {
+        val parsed = Json.parseToJsonElement(jsonLdDocument(organizationJsonLd()))
+
+        val sameAs = parsed.jsonObject["@graph"]!!.jsonArray[0].jsonObject["sameAs"]!!
+        assertEquals(JsonPrimitive("https://github.com/xamcross/mytetz"), sameAs.jsonArray[0])
     }
 }
 ```
 
-- [ ] **Step 2: Run the test. Confirm the failure**
+(This test file needs `import kotlinx.serialization.json.jsonArray`, `.jsonObject` and
+`.jsonPrimitive` — the `kotlinx.serialization.json` extension accessors on `JsonElement` — alongside
+the imports already shown.)
+
+- [ ] **Step 2: Run the tests. Confirm the failure**
 
 Run: `./gradlew :backend:api:test --tests "com.mytetz.api.JsonLdTest"`
-Expected failure: a compile error — `jsonLdScriptSafe` is unresolved.
+Expected failure: a compile error — `jsonLdScriptSafe`, `jsonLdGraph`, `jsonLdDocument` and
+`organizationJsonLd` are unresolved.
 
 - [ ] **Step 3: Write `JsonLd.kt`**
 
 ```kotlin
 package com.mytetz.api
 
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
+
 /**
- * Stops a `</script` sequence inside a JSON-LD payload from ending the `<script>` block early.
+ * Stops a JSON-LD payload from ending its own `<script>` block early, or from being read as HTML
+ * by any consumer that is not a JSON parser.
  *
- * A browser's HTML parser closes a `<script>` element on the literal text `</script`, before any
- * JSON parser runs inside it — the parser reads HTML first and JSON second. A JSON string treats
- * `\/` as an ordinary slash, so replacing every `/` that follows a `<` removes the early close and
- * changes no value. Reference:
- * https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html
+ * A browser's HTML parser can end a `script` element's content before any JSON parser ever sees
+ * it. The naive fix — replacing only `</` — is not enough: after the literal text `<!--` and then
+ * `<script`, the standard's own tokenizer enters a further state ("script data double escaped") in
+ * which the next `</script>` does not close the element as expected. Reference:
+ * https://html.spec.whatwg.org/multipage/scripting.html#restrictions-for-contents-of-script-elements
  *
- * Every JSON-LD payload this project renders goes through this function before it reaches a
- * `<script type="application/ld+json">` block. A title, a summary, a seed body, a span and an
- * explanation body can each hold arbitrary text, because a model wrote four of them and a learner
- * chose the fifth.
+ * The robust rule removes the trigger rather than naming every sequence that depends on it: every
+ * `<` character becomes the six-character JSON string escape backslash-u-0-0-3-c. No state the
+ * standard describes can begin without a literal `<`, and a JSON parser reads that escape back as
+ * the one character `<`, so no value changes meaning — [Json.parseToJsonElement] undoes this on
+ * its own, with no matching reversal step of its own.
+ *
+ * `>`, `&`, U+2028 and U+2029 are escaped for the same reason, stated in full in this plan's Task
+ * 1.1 KDoc: `>`/`&` for a consumer that is not JSON-aware, and U+2028/U+2029 because each is legal
+ * in a JSON string and illegal in a JavaScript string, defending a payload this project does not
+ * evaluate as JavaScript today against a future change that might.
  */
-fun jsonLdScriptSafe(json: String): String = json.replace("</", "<\\/")
+fun jsonLdScriptSafe(json: String): String = buildString(json.length) {
+    for (ch in json) {
+        when (ch) {
+            '<' -> append("\\u003c")
+            '>' -> append("\\u003e")
+            '&' -> append("\\u0026")
+            '\u2028' -> append("\\u2028")
+            '\u2029' -> append("\\u2029")
+            else -> append(ch)
+        }
+    }
+}
+
+/**
+ * Builds one `{"@context": "https://schema.org", "@graph": [...]}` document out of one or more
+ * schema.org node objects, serializes it with kotlinx.serialization, and makes the result safe to
+ * embed in a `<script type="application/ld+json">` element with [jsonLdScriptSafe].
+ *
+ * Every JSON-LD document this project renders is built this way. `Json.encodeToString` escapes
+ * every character JSON itself requires escaped — the quote, the backslash, and each control
+ * character U+0000 to U+001F — which a hand-written string template does not do on its own.
+ */
+fun jsonLdGraph(nodes: List<JsonObject>): String {
+    val document = buildJsonObject {
+        put("@context", "https://schema.org")
+        put("@graph", JsonArray(nodes))
+    }
+    return jsonLdScriptSafe(Json.encodeToString(document))
+}
+
+/** [jsonLdGraph] for the common case of one single schema.org node. */
+fun jsonLdDocument(node: JsonObject): String = jsonLdGraph(listOf(node))
+
+/**
+ * The `Organization` JSON-LD node, shared by `/` and `/how-it-works` (spec section 11).
+ *
+ * `sameAs` carries one entry today: the project's GitHub repository. Spec section 17 question 2
+ * asks the owner for any further public profile; ship with one entry until an answer arrives —
+ * `sameAs` accepts a list, so a later addition is additive.
+ */
+fun organizationJsonLd(): JsonObject = buildJsonObject {
+    put("@type", "Organization")
+    put("name", "mytetz")
+    put("url", "https://mytetz.com")
+    put("logo", "https://mytetz.com/icon.svg")
+    putJsonArray("sameAs") { add(kotlinx.serialization.json.JsonPrimitive("https://github.com/xamcross/mytetz")) }
+}
 ```
 
-- [ ] **Step 4: Run the test. Confirm it passes**
+- [ ] **Step 4: Run the tests. Confirm they pass**
 
 Run: `./gradlew :backend:api:test --tests "com.mytetz.api.JsonLdTest"`
-Expected: PASS, all three tests.
+Expected: PASS, all seven tests.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add backend/api/src/main/kotlin/com/mytetz/api/JsonLd.kt \
         backend/api/src/test/kotlin/com/mytetz/api/JsonLdTest.kt
-git commit -m "feat(api): add the JSON-LD script-safety helper"
+git commit -m "feat(api): build JSON-LD with kotlinx.serialization, escape every angle bracket"
 ```
 
 ---
@@ -396,7 +555,7 @@ git commit -m "feat(api): add Components.modelFamily, read with no model client 
 - Create: `backend/api/src/test/kotlin/com/mytetz/api/TopicPageHtmlTest.kt`
 
 **Interfaces:**
-- Consumes: `jsonLdScriptSafe` (Task 1.1).
+- Consumes: `jsonLdGraph` (Task 1.1).
 - Produces: `data class RelatedTopicView(val slug: String, val title: String)`,
   `data class TopicPageView(val slug: String, val title: String, val category: String, val summary: String, val seedBody: String?, val relatedTopics: List<RelatedTopicView>)`,
   `fun HTML.topicPageHtml(view: TopicPageView)`.
@@ -407,8 +566,12 @@ hostile input, before any route exists to call it.**
 1. Every text value — the title, the summary, the seed body, the related-topic titles — goes
    through the DSL's normal text position (`+value`) or an attribute assignment, never through an
    `unsafe { }` block, so `kotlinx.html`'s stream writer escapes it by default.
-2. The `LearningResource`/`BreadcrumbList` JSON-LD block goes through `jsonLdScriptSafe` before it
-   is written inside `<script type="application/ld+json">`.
+2. The `LearningResource`/`BreadcrumbList` JSON-LD block is built with `buildJsonObject` and
+   rendered through `jsonLdGraph` (Task 1.1) before it reaches `<script type="application/ld+json">`.
+   This file builds the two page-specific node objects (`learningResourceJsonLd`,
+   `breadcrumbListJsonLd`) because each one needs `TopicPageView`, a type `JsonLd.kt` does not know
+   about; `JsonLd.kt` still owns the one substitution function and the one graph-assembling
+   function, so nothing here writes a JSON string by hand.
 
 - [ ] **Step 1: Add the Ktor HTML DSL dependency**
 
@@ -435,6 +598,10 @@ package com.mytetz.api
 
 import kotlinx.html.html
 import kotlinx.html.stream.createHTML
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -442,6 +609,14 @@ import kotlin.test.assertTrue
 class TopicPageHtmlTest {
 
     private fun render(view: TopicPageView): String = createHTML().html { topicPageHtml(view) }
+
+    /** Pulls the JSON-LD `<script>` block's text out of a rendered page and parses it. No
+     * un-escaping step runs first: [jsonLdScriptSafe]'s substitutions are ordinary JSON `\u00XX`
+     * escapes, and [Json.parseToJsonElement] already resolves those on its own. */
+    private fun ldJson(html: String) = Json.parseToJsonElement(
+        Regex("""<script type="application/ld\+json">(.*?)</script>""", RegexOption.DOT_MATCHES_ALL)
+            .find(html)!!.groupValues[1]
+    )
 
     private fun view(
         title: String = "Special Relativity",
@@ -458,7 +633,7 @@ class TopicPageHtmlTest {
     )
 
     @Test
-    fun `a title carrying a script tag is escaped, not executed`() {
+    fun `a title carrying a script tag is escaped in the HTML body, not executed`() {
         val html = render(view(title = "<script>alert(1)</script>"))
 
         assertFalse("<script>alert(1)</script>" in html, "the hostile title was not escaped: $html")
@@ -466,36 +641,7 @@ class TopicPageHtmlTest {
     }
 
     @Test
-    fun `a seed body carrying a closing script tag does not end the ld+json block early`() {
-        val html = render(view(seedBody = "Read on. </script><script>alert(1)</script> Then stop."))
-
-        val ldJsonBlock = Regex(
-            """<script type="application/ld\+json">(.*?)</script>""",
-            RegexOption.DOT_MATCHES_ALL,
-        ).find(html)?.groupValues?.get(1)
-
-        // The seed body is not embedded in the JSON-LD block in this task's shape (it renders in a
-        // <p>), so this test targets the summary instead, which the JSON-LD description field does
-        // carry — see the next test for the field that actually matters.
-        assertFalse("</script><script>alert(1)" in html.substringAfter("<p>"), "a raw closing tag reached the body")
-    }
-
-    @Test
-    fun `a summary carrying a closing script tag is neutralised inside the JSON-LD block`() {
-        val hostile = "End the tag. </script><script>alert(1)</script>"
-        val html = render(view(summary = hostile))
-
-        val ldJsonBlock = Regex(
-            """<script type="application/ld\+json">(.*?)</script>""",
-            RegexOption.DOT_MATCHES_ALL,
-        ).find(html)!!.groupValues[1]
-
-        assertFalse("</script" in ldJsonBlock, "a literal </script survived inside the JSON-LD block: $ldJsonBlock")
-        assertTrue("<\\/script" in ldJsonBlock)
-    }
-
-    @Test
-    fun `a related-topic title is escaped`() {
+    fun `a related-topic title is escaped in the HTML body`() {
         val html = render(view(related = listOf(RelatedTopicView("x", "<img src=x onerror=alert(1)>"))))
 
         assertFalse("<img src=x onerror=alert(1)>" in html)
@@ -508,8 +654,56 @@ class TopicPageHtmlTest {
 
         assertTrue(view().summary in html)
     }
+
+    // ------------------------------------------------------------- the JSON-LD block
+
+    @Test
+    fun `the JSON-LD block holds no literal angle bracket, whatever the summary contains`() {
+        val html = render(view(summary = "End the tag. </script><script>alert(1)</script>"))
+
+        val block = Regex("""<script type="application/ld\+json">(.*?)</script>""", RegexOption.DOT_MATCHES_ALL)
+            .find(html)!!.groupValues[1]
+        assertFalse("<" in block, "a literal < character survived inside the JSON-LD block: $block")
+    }
+
+    @Test
+    fun `a title with a double quote, a backslash, a line break and a tab round-trips through the JSON-LD block`() {
+        val hostile = "A \"title\" with a \\ backslash,\na line break and\ta tab."
+        val html = render(view(title = hostile))
+
+        val parsed = ldJson(html)
+        val learningResource = parsed.jsonObject["@graph"]!!.jsonArray.first {
+            it.jsonObject["@type"]?.jsonPrimitive?.content == "LearningResource"
+        }
+        assertEquals(hostile, learningResource.jsonObject["name"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `the double-escaped-state attack inside the summary parses back to the original text`() {
+        // https://html.spec.whatwg.org/multipage/scripting.html#restrictions-for-contents-of-script-elements
+        val hostile = "<!--<script>"
+        val html = render(view(summary = hostile))
+
+        val parsed = ldJson(html)
+        val learningResource = parsed.jsonObject["@graph"]!!.jsonArray.first {
+            it.jsonObject["@type"]?.jsonPrimitive?.content == "LearningResource"
+        }
+        assertEquals(hostile, learningResource.jsonObject["description"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `the JSON-LD block carries a LearningResource and a two-item BreadcrumbList`() {
+        val parsed = ldJson(render(view()))
+
+        val graph = parsed.jsonObject["@graph"]!!.jsonArray
+        assertTrue(graph.any { it.jsonObject["@type"]?.jsonPrimitive?.content == "LearningResource" })
+        val breadcrumb = graph.first { it.jsonObject["@type"]?.jsonPrimitive?.content == "BreadcrumbList" }
+        assertEquals(2, breadcrumb.jsonObject["itemListElement"]!!.jsonArray.size)
+    }
 }
 ```
+
+(Add `import kotlin.test.assertEquals` alongside the imports already shown.)
 
 - [ ] **Step 3: Run the tests. Confirm the failure**
 
@@ -532,10 +726,13 @@ import kotlinx.html.link
 import kotlinx.html.meta
 import kotlinx.html.p
 import kotlinx.html.script
-import kotlinx.html.span
 import kotlinx.html.title
 import kotlinx.html.ul
 import kotlinx.html.unsafe
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 /** One related topic, shown as a plain link under the seed. */
 data class RelatedTopicView(val slug: String, val title: String)
@@ -562,9 +759,8 @@ private const val SITE_URL = "https://mytetz.com"
  *
  * Every text value below reaches the page through `+value` or an attribute assignment, and never
  * through `unsafe { }` — `kotlinx.html`'s stream writer escapes both by default. The one `unsafe`
- * block in this function writes the JSON-LD payload, which is not HTML and must not be escaped as
- * HTML; [jsonLdScriptSafe] is what makes that block safe, by removing the one sequence, `</script`,
- * that HTML's own parser would otherwise treat as markup before any JSON parser runs. See
+ * block in this function wraps [jsonLdGraph]'s own output, which is JSON and must not be escaped as
+ * HTML; [jsonLdGraph] is what makes that block safe, per `JsonLd.kt`'s own KDoc. See
  * `docs/superpowers/specs/2026-09-19-public-surface-design.md` section 4.6.
  */
 fun HTML.topicPageHtml(view: TopicPageView) {
@@ -579,7 +775,9 @@ fun HTML.topicPageHtml(view: TopicPageView) {
         meta(name = "og:title", content = pageTitle)
         meta(name = "og:description", content = view.summary)
         meta(name = "og:image", content = "$SITE_URL/og-image.png")
-        script(type = "application/ld+json") { unsafe { +jsonLdScriptSafe(jsonLdFor(view, canonical)) } }
+        script(type = "application/ld+json") {
+            unsafe { +jsonLdGraph(listOf(learningResourceJsonLd(view, canonical), breadcrumbListJsonLd(view, canonical))) }
+        }
     }
     body {
         h1 { +view.title }
@@ -601,38 +799,36 @@ private fun pageTitleFor(topicTitle: String): String {
     return if (full.length <= 60) full else "$topicTitle | mytetz"
 }
 
-private fun jsonLdFor(view: TopicPageView, canonical: String): String =
-    """
-    {
-      "@context": "https://schema.org",
-      "@graph": [
-        {
-          "@type": "LearningResource",
-          "@id": "$canonical#resource",
-          "name": ${jsonString(view.title)},
-          "description": ${jsonString(view.summary)},
-          "url": "$canonical"
-        },
-        {
-          "@type": "BreadcrumbList",
-          "itemListElement": [
-            {"@type": "ListItem", "position": 1, "name": "mytetz", "item": "$SITE_URL"},
-            {"@type": "ListItem", "position": 2, "name": ${jsonString(view.title)}, "item": "$canonical"}
-          ]
-        }
-      ]
-    }
-    """.trimIndent()
+/**
+ * `LearningResource` (https://schema.org/LearningResource), built with `buildJsonObject` and never
+ * with a string template — see `JsonLd.kt`'s own KDoc (Task 1.1) for why. This is a page-specific
+ * node object, built here rather than in `JsonLd.kt`, because it needs [TopicPageView]; `JsonLd.kt`
+ * still owns the one substitution function ([jsonLdScriptSafe]) and the one graph-assembling
+ * function ([jsonLdGraph]) that this function's caller uses.
+ */
+private fun learningResourceJsonLd(view: TopicPageView, canonical: String): JsonObject = buildJsonObject {
+    put("@type", "LearningResource")
+    put("@id", "$canonical#resource")
+    put("name", view.title)
+    put("description", view.summary)
+    put("url", canonical)
+}
 
-/** A minimal, dependency-free JSON string literal: escapes only `"` and `\`. */
-private fun jsonString(value: String): String =
-    "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+/** `BreadcrumbList` (https://schema.org/BreadcrumbList), with the two required `ListItem` entries
+ * per spec section 11: home, then this topic. */
+private fun breadcrumbListJsonLd(view: TopicPageView, canonical: String): JsonObject = buildJsonObject {
+    put("@type", "BreadcrumbList")
+    put("itemListElement", buildJsonArray {
+        add(buildJsonObject { put("@type", "ListItem"); put("position", 1); put("name", "mytetz"); put("item", SITE_URL) })
+        add(buildJsonObject { put("@type", "ListItem"); put("position", 2); put("name", view.title); put("item", canonical) })
+    })
+}
 ```
 
 - [ ] **Step 5: Run the tests. Confirm they pass**
 
 Run: `./gradlew :backend:api:test --tests "com.mytetz.api.TopicPageHtmlTest"`
-Expected: PASS, all five tests.
+Expected: PASS, all seven tests.
 
 - [ ] **Step 6: Commit**
 
@@ -1473,21 +1669,34 @@ reuse of `Explanation.createdAtEpochMillis` — a model migration resets that va
 on the same day, whether or not a person reviewed the new text, and this page's whole purpose is
 to state honestly how the text was reviewed.
 
-- [ ] **Step 1: Confirm the project's migration convention before writing code**
+**No migration needed for the field itself, confirmed by reading the code.** A bare additive
+nullable field (`reviewedAt: Long? = null`) needs no registered migration:
+`CatalogService`'s own `Json { ignoreUnknownKeys = true }` (`CatalogService.kt:7`) and
+kotlinx.serialization's own default-decoding rule already give a stored document with no
+`reviewedAt` key the value `null` when it is read back as a `Topic`. The `Media`-field precedent in
+`docs/superpowers/plans/2026-09-19-visualize.md` Task 1 relies on the same rule, and its own test,
+`` `a document stored before this field existed decodes with media null` ``, pins it. Step 2 below
+carries the same test for `reviewedAt`.
 
-Read `docs/superpowers/skills` or the `scaffold-mongo-migrations` skill's own guidance, and read
-`Components.migrateOnBoot`/`MIGRATE_ON_BOOT_ENV` in `Components.kt` for the project's existing
-migration mechanism (referenced at `docs/superpowers/specs/2026-08-07-monetization-design.md:569-583`
-for an earlier migration). **Confirm before use:** whether a bare additive nullable field
-(`reviewedAt: Long? = null`) needs a registered migration at all, given that `kotlinx.serialization`
-already decodes a missing field to its default — the `Media`-field precedent in
-`docs/superpowers/plans/2026-09-19-visualize.md` Task 1 adds a nullable field with **no** migration,
-relying on the same default-decoding behaviour, and its own test,
-`` `a document stored before this field existed decodes with media null` ``, pins exactly this. If
-the project's migration convention requires a registered step regardless (for example to backfill
-an index), follow that convention instead of this note.
+**A real hazard exists, and it is not the field's decoding — it is `upsertPreservingStatus`.**
+`CatalogService.seedFromResource` runs `TopicRepository.upsertPreservingStatus` for every topic in
+`topics.json`, on **every boot**, including a scale-from-zero wake. Read
+`TopicRepository.upsertPreservingStatus` (`TopicRepository.kt:55-58`):
 
-- [ ] **Step 2: Write the failing test**
+```kotlin
+suspend fun upsertPreservingStatus(topic: Topic) {
+    val storedStatus = findBySlug(topic.slug)?.status
+    upsert(if (storedStatus == null) topic else topic.copy(status = storedStatus))
+}
+```
+
+`topic` here is freshly decoded from `topics.json`, which carries no `reviewedAt` field, so its
+`reviewedAt` is always `null`. `upsertPreservingStatus` copies across only `status`. Left as it is,
+the very next boot after a curator sets `reviewedAt` would overwrite it back to `null` — a boot
+must not erase a review date, and today's code does exactly that. This task widens
+`upsertPreservingStatus` to preserve `reviewedAt` the same way it already preserves `status`.
+
+- [ ] **Step 1: Write the failing tests**
 
 ```kotlin
 @Test
@@ -1516,15 +1725,33 @@ fun `setReviewedAt stores the epoch value and findBySlug reads it back`() = runT
 
     assertEquals(1_700_000_000_000L, repository.findBySlug("t1")?.reviewedAt)
 }
+
+@Test
+fun `upsertPreservingStatus does not erase an existing reviewedAt`() = runTest {
+    // The regression this exists for: CatalogService.seedFromResource calls
+    // upsertPreservingStatus on every boot, with a Topic freshly decoded from topics.json, whose
+    // reviewedAt is always null. A boot must not erase a curator's review date.
+    repository.upsert(Topic(slug = "t2", title = "T2", category = "Physics", summary = "s"))
+    repository.setReviewedAt("t2", 1_700_000_000_000L)
+
+    val fromSeedFile = Topic(slug = "t2", title = "T2 (refreshed summary)", category = "Physics", summary = "s2")
+    repository.upsertPreservingStatus(fromSeedFile)
+
+    val stored = repository.findBySlug("t2")
+    assertEquals("T2 (refreshed summary)", stored?.title, "the content refresh itself must still apply")
+    assertEquals(1_700_000_000_000L, stored?.reviewedAt, "a boot erased an existing review date")
+}
 ```
 
-- [ ] **Step 3: Run the tests. Confirm the failure**
+- [ ] **Step 2: Run the tests. Confirm the failure**
 
 Run: `./gradlew :backend:catalog:test --tests "com.mytetz.catalog.TopicRepositoryTest"`
-Expected failure: a compile error — `Topic.reviewedAt` and `TopicRepository.setReviewedAt` are
-unresolved.
+Expected failure: the first two tests fail to compile (`Topic.reviewedAt` and
+`TopicRepository.setReviewedAt` are unresolved). Once Step 3 below adds them, the third test still
+fails on its own: `stored?.reviewedAt` reads `null`, because `upsertPreservingStatus` does not yet
+carry it across.
 
-- [ ] **Step 4: Add the field and the setter**
+- [ ] **Step 3: Add the field, the setter, and widen `upsertPreservingStatus`**
 
 In `Topic.kt`, add `val reviewedAt: Long? = null` as the last constructor parameter. In
 `TopicRepository.kt`, add:
@@ -1535,34 +1762,50 @@ suspend fun setReviewedAt(slug: String, epochMillis: Long) {
 }
 ```
 
-- [ ] **Step 5: Run the tests. Confirm they pass**
+Widen `upsertPreservingStatus` to also preserve `reviewedAt`, the same way it already preserves
+`status`:
+
+```kotlin
+suspend fun upsertPreservingStatus(topic: Topic) {
+    val stored = findBySlug(topic.slug)
+    upsert(
+        if (stored == null) topic
+        else topic.copy(status = stored.status, reviewedAt = stored.reviewedAt)
+    )
+}
+```
+
+- [ ] **Step 4: Run the tests. Confirm they pass**
 
 Run: `./gradlew :backend:catalog:test --tests "com.mytetz.catalog.TopicRepositoryTest"`
-Expected: PASS, including every pre-existing test in the file.
+Expected: PASS, including every pre-existing test in the file — in particular the existing test
+that pins `upsertPreservingStatus`'s `status`-preserving behaviour must still pass unchanged.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add backend/catalog/src/main/kotlin/com/mytetz/catalog/Topic.kt \
         backend/catalog/src/main/kotlin/com/mytetz/catalog/TopicRepository.kt \
         backend/catalog/src/test/kotlin/com/mytetz/catalog/TopicRepositoryTest.kt
-git commit -m "feat(catalog): add Topic.reviewedAt, decoded null for a document written before it existed"
+git commit -m "feat(catalog): add Topic.reviewedAt; a boot no longer erases it"
 ```
 
 ---
 
-## Task 3.2: `GET /how-it-works` and the `Organization` JSON-LD
+## Task 3.2: `GET /how-it-works`, reusing the `Organization` JSON-LD from Task 1.1
 
 **Files:**
-- Create: `backend/api/src/main/kotlin/com/mytetz/api/OrganizationJsonLd.kt`
 - Create: `backend/api/src/main/kotlin/com/mytetz/api/HowItWorksRoutes.kt`
 - Create: `backend/api/src/test/kotlin/com/mytetz/api/HowItWorksRoutesTest.kt`
 - Modify: `backend/api/src/main/kotlin/com/mytetz/api/Application.kt`
 - Modify: `frontend/src/app/ui/app-shell.component.ts`
 
 **Interfaces:**
-- Produces: `fun organizationJsonLd(): String` (the `Organization` fragment, spec section 11);
-  `fun Route.howItWorksRoutes(modelId: () -> String)`.
+- Consumes: `organizationJsonLd`, `jsonLdDocument` (Task 1.1, `JsonLd.kt`).
+- Produces: `fun Route.howItWorksRoutes(modelId: () -> String)`.
+
+No new JSON-LD file this phase. `organizationJsonLd()` already exists from Task 1.1, in the one
+file every JSON-LD builder in this plan lives in; this task only calls it.
 
 Confirmed against Google's own gallery
 (https://developers.google.com/search/docs/appearance/structured-data/search-gallery):
@@ -1588,12 +1831,21 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.routing.routing
 import io.ktor.server.testing.testApplication
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class HowItWorksRoutesTest {
+
+    private fun ldJson(html: String) = Json.parseToJsonElement(
+        Regex("""<script type="application/ld\+json">(.*?)</script>""", RegexOption.DOT_MATCHES_ALL)
+            .find(html)!!.groupValues[1]
+    )
 
     @Test
     fun `the page states which model writes the text, with no javascript`() = testApplication {
@@ -1608,12 +1860,18 @@ class HowItWorksRoutesTest {
     }
 
     @Test
-    fun `the page carries the Organization JSON-LD`() = testApplication {
+    fun `the Organization JSON-LD block parses, and names the project's GitHub repository`() = testApplication {
         application { routing { howItWorksRoutes(modelId = { "claude-sonnet-5" }) } }
 
-        val body = client.get("/how-it-works").bodyAsText()
-        assertTrue("\"@type\": \"Organization\"" in body || "\"@type\":\"Organization\"" in body)
-        assertTrue("https://github.com/xamcross/mytetz" in body)
+        val parsed = ldJson(client.get("/how-it-works").bodyAsText())
+
+        val organization = parsed.jsonObject["@graph"]!!.jsonArray.first {
+            it.jsonObject["@type"]?.jsonPrimitive?.content == "Organization"
+        }
+        assertEquals(
+            "https://github.com/xamcross/mytetz",
+            organization.jsonObject["sameAs"]!!.jsonArray[0].jsonPrimitive.content,
+        )
     }
 
     @Test
@@ -1630,31 +1888,7 @@ class HowItWorksRoutesTest {
 Run: `./gradlew :backend:api:test --tests "com.mytetz.api.HowItWorksRoutesTest"`
 Expected failure: a compile error — `howItWorksRoutes` is unresolved.
 
-- [ ] **Step 3: Write `OrganizationJsonLd.kt` and `HowItWorksRoutes.kt`**
-
-```kotlin
-package com.mytetz.api
-
-/**
- * The `Organization` JSON-LD fragment, shared by `/` and `/how-it-works` (spec section 11).
- *
- * `sameAs` carries one entry: the project's GitHub repository. Spec section 17 question 2 asks the
- * owner for any further public profile; ship with one entry until an answer arrives — `sameAs`
- * accepts a list, so a later addition is additive.
- */
-fun organizationJsonLd(): String = jsonLdScriptSafe(
-    """
-    {
-      "@context": "https://schema.org",
-      "@type": "Organization",
-      "name": "mytetz",
-      "url": "https://mytetz.com",
-      "logo": "https://mytetz.com/icon.svg",
-      "sameAs": ["https://github.com/xamcross/mytetz"]
-    }
-    """.trimIndent()
-)
-```
+- [ ] **Step 3: Write `HowItWorksRoutes.kt`**
 
 ```kotlin
 package com.mytetz.api
@@ -1676,13 +1910,16 @@ import kotlinx.html.unsafe
  * that a person reviews each seed before publication, the known limits, and a contact — the
  * transparency signals Google's own guidance on AI-generated content names:
  * https://developers.google.com/search/blog/2023/02/google-search-and-ai-content
+ *
+ * The `Organization` JSON-LD reuses `organizationJsonLd()` and `jsonLdDocument()` from `JsonLd.kt`
+ * (Task 1.1) — the same node `/` uses — rather than building a second copy.
  */
 fun Route.howItWorksRoutes(modelId: () -> String) {
     get("/how-it-works") {
         call.respondHtml(HttpStatusCode.OK) {
             head {
                 title { +"How mytetz writes an explanation" }
-                script(type = "application/ld+json") { unsafe { +organizationJsonLd() } }
+                script(type = "application/ld+json") { unsafe { +jsonLdDocument(organizationJsonLd()) } }
             }
             body {
                 h1 { +"How mytetz writes an explanation" }
@@ -1705,17 +1942,16 @@ Task 1.6).
 - [ ] **Step 5: Run the tests. Confirm they pass**
 
 Run: `./gradlew :backend:api:test --tests "com.mytetz.api.HowItWorksRoutesTest"`
-Expected: PASS.
+Expected: PASS, all three tests.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add backend/api/src/main/kotlin/com/mytetz/api/OrganizationJsonLd.kt \
-        backend/api/src/main/kotlin/com/mytetz/api/HowItWorksRoutes.kt \
+git add backend/api/src/main/kotlin/com/mytetz/api/HowItWorksRoutes.kt \
         backend/api/src/test/kotlin/com/mytetz/api/HowItWorksRoutesTest.kt \
         backend/api/src/main/kotlin/com/mytetz/api/Application.kt \
         frontend/src/app/ui/app-shell.component.ts
-git commit -m "feat(api): add GET /how-it-works and the shared Organization JSON-LD"
+git commit -m "feat(api): add GET /how-it-works, reusing the Organization JSON-LD"
 ```
 
 ---
@@ -1762,9 +1998,10 @@ Expected failure: a compile error — `TopicPageView.copy(reviewedAt = ...)` has
 
 Add `val reviewedAt: Long? = null` to `TopicPageView`. In `topicPageHtml`, render, after the seed
 paragraph: `view.reviewedAt?.let { p { +"Last reviewed ${formatDate(it)}" } }`, using a small
-`java.time.Instant`-based formatter. Add `"dateModified": "${isoDate(it)}"` to the
-`LearningResource` JSON-LD object when `reviewedAt` is not null. In `TopicPageRoutes.kt`, pass
-`reviewedAt = topic.reviewedAt` when building the `TopicPageView`.
+`java.time.Instant`-based formatter. In `learningResourceJsonLd` (Task 1.3), add, inside the
+`buildJsonObject { }` block: `view.reviewedAt?.let { put("dateModified", isoDate(it)) }` — a plain
+`put` call, the same as every other field in that function, and not a string template. In
+`TopicPageRoutes.kt`, pass `reviewedAt = topic.reviewedAt` when building the `TopicPageView`.
 
 - [ ] **Step 4: Run the tests. Confirm they pass**
 
@@ -2010,6 +2247,14 @@ git commit -m "feat(graph): add the short-key range lookup for a public explanat
 because the interactive reader can link to any node a learner reaches, published or not, and a
 `404` would break that stable link.
 
+**Interfaces (JSON-LD):** consumes `jsonLdGraph` (Task 1.1). Spec section 11 gives this page
+`BreadcrumbList` JSON-LD (a Google Search rich-result type, confirmed at
+https://developers.google.com/search/docs/appearance/structured-data/search-gallery), the same
+type Task 1.3 builds for the topic page. This task builds its own three-item trail (home, topic,
+explanation) with `buildJsonObject`, in this file, for the same reason `TopicPageHtml.kt` builds
+its own node objects rather than putting them in `JsonLd.kt`: the trail needs this page's own view
+data, which `JsonLd.kt` does not know about.
+
 - [ ] **Step 1: Write the failing tests**
 
 ```kotlin
@@ -2102,8 +2347,35 @@ class ExplanationPageRoutesTest {
 
         assertEquals(HttpStatusCode.NotFound, client.get("/topics/quantum-physics/explain/000000000000").status)
     }
+
+    @Test
+    fun `a span with a double quote and a line break round-trips through the BreadcrumbList JSON-LD`() = testApplication {
+        val database = Mongo(MongoConfig(TestFixtures.connectionString, "test_api_explain_ldjson_${System.nanoTime()}")).database
+        val topics = TopicRepository(database)
+        val explanations = ExplanationRepository(database)
+        val hostileSpan = "a \"quoted\" span\nwith a line break"
+        val key = "abcdef0123456789" + "0".repeat(48)
+        runBlocking {
+            topics.upsert(Topic(slug = "quantum-physics", title = "Quantum Physics", category = "Physics", summary = "s"))
+            explanations.insertIfAbsent(explanation(key, published = true).copy(span = hostileSpan))
+        }
+        application { routing { explanationPageRoutes(com.mytetz.catalog.CatalogService(topics), explanations) } }
+
+        val html = client.get("/topics/quantum-physics/explain/${key.take(12)}").bodyAsText()
+        val block = Regex("""<script type="application/ld\+json">(.*?)</script>""", RegexOption.DOT_MATCHES_ALL)
+            .find(html)!!.groupValues[1]
+        val parsed = kotlinx.serialization.json.Json.parseToJsonElement(block)
+        val breadcrumb = parsed.jsonObject["@graph"]!!.jsonArray.first {
+            it.jsonObject["@type"]?.jsonPrimitive?.content == "BreadcrumbList"
+        }
+        val lastItem = breadcrumb.jsonObject["itemListElement"]!!.jsonArray.last()
+        assertEquals(hostileSpan, lastItem.jsonObject["name"]!!.jsonPrimitive.content)
+    }
 }
 ```
+
+(The last test needs `import kotlinx.serialization.json.jsonArray`, `.jsonObject` and
+`.jsonPrimitive` alongside the imports already shown.)
 
 - [ ] **Step 2: Run the tests. Confirm the failure**
 
@@ -2129,10 +2401,17 @@ import kotlinx.html.h1
 import kotlinx.html.head
 import kotlinx.html.link
 import kotlinx.html.p
+import kotlinx.html.script
 import kotlinx.html.title
+import kotlinx.html.unsafe
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.slf4j.LoggerFactory
 
 private val log = LoggerFactory.getLogger("com.mytetz.api.ExplanationPageRoutes")
+private const val SITE_URL = "https://mytetz.com"
 
 /**
  * `GET /topics/{slug}/explain/{shortKey}`. A pure read, on the same "no cookie, no generation"
@@ -2171,11 +2450,14 @@ fun Route.explanationPageRoutes(catalog: CatalogService, explanations: Explanati
             call.response.header(X_ROBOTS_TAG, NOINDEX)
         }
 
-        val canonical = "https://mytetz.com/topics/${topic.slug}/explain/$shortKey"
+        val canonical = "$SITE_URL/topics/${topic.slug}/explain/$shortKey"
         call.respondHtml(HttpStatusCode.OK) {
             head {
                 title { +"${explanation.span} explained | mytetz" }
                 if (explanation.published) link(rel = "canonical", href = canonical)
+                script(type = "application/ld+json") {
+                    unsafe { +jsonLdGraph(listOf(explanationBreadcrumbJsonLd(topic.slug, topic.title, explanation.span, canonical))) }
+                }
             }
             body {
                 h1 { +(explanation.span ?: topic.title) }
@@ -2183,6 +2465,31 @@ fun Route.explanationPageRoutes(catalog: CatalogService, explanations: Explanati
             }
         }
     }
+}
+
+/**
+ * `BreadcrumbList` (https://schema.org/BreadcrumbList), the three-item trail spec section 11
+ * requires: home, the topic, then this explanation. Built with `buildJsonObject`, in this file, for
+ * the same reason `TopicPageHtml.kt`'s own node builders are: it needs this page's own data, which
+ * `JsonLd.kt` does not know about.
+ */
+private fun explanationBreadcrumbJsonLd(
+    topicSlug: String,
+    topicTitle: String,
+    span: String?,
+    canonical: String,
+): JsonObject = buildJsonObject {
+    put("@type", "BreadcrumbList")
+    put("itemListElement", buildJsonArray {
+        add(buildJsonObject { put("@type", "ListItem"); put("position", 1); put("name", "mytetz"); put("item", SITE_URL) })
+        add(
+            buildJsonObject {
+                put("@type", "ListItem"); put("position", 2); put("name", topicTitle)
+                put("item", "$SITE_URL/topics/$topicSlug")
+            }
+        )
+        add(buildJsonObject { put("@type", "ListItem"); put("position", 3); put("name", span ?: topicTitle); put("item", canonical) })
+    })
 }
 ```
 
@@ -2194,7 +2501,7 @@ components.explanations)`, registered ahead of `spaRoutes()`, next to `topicPage
 - [ ] **Step 5: Run the tests. Confirm they pass**
 
 Run: `./gradlew :backend:api:test --tests "com.mytetz.api.ExplanationPageRoutesTest"`
-Expected: PASS, all four tests.
+Expected: PASS, all five tests.
 
 - [ ] **Step 6: Commit**
 
@@ -2202,7 +2509,7 @@ Expected: PASS, all four tests.
 git add backend/api/src/main/kotlin/com/mytetz/api/ExplanationPageRoutes.kt \
         backend/api/src/test/kotlin/com/mytetz/api/ExplanationPageRoutesTest.kt \
         backend/api/src/main/kotlin/com/mytetz/api/Application.kt
-git commit -m "feat(api): add the public explanation page, noindex until published"
+git commit -m "feat(api): add the public explanation page, with its BreadcrumbList JSON-LD"
 ```
 
 ---
@@ -2220,6 +2527,10 @@ Confirmed: `DefinedTerm` does not appear in Google's rich-result gallery
 JSON-LD adds machine-readable value for an answer engine, not a promise of a Google Search rich
 result (spec section 11).
 
+**Interfaces (JSON-LD):** consumes `jsonLdGraph` (Task 1.1). Builds one `DefinedTerm` node per
+published explanation with `buildJsonObject`, in this file — the same pattern Task 1.3 and Task 4.3
+use, and never a hand-written string template.
+
 - [ ] **Step 1: Write the failing tests**
 
 ```kotlin
@@ -2236,12 +2547,21 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.server.routing.routing
 import io.ktor.server.testing.testApplication
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class GlossaryRoutesTest {
+
+    private fun ldJson(html: String) = Json.parseToJsonElement(
+        Regex("""<script type="application/ld\+json">(.*?)</script>""", RegexOption.DOT_MATCHES_ALL)
+            .find(html)!!.groupValues[1]
+    )
 
     @Test
     fun `the glossary is empty on a fresh database`() = testApplication {
@@ -2288,6 +2608,30 @@ class GlossaryRoutesTest {
         assertFalse("superposition" in body)
         assertTrue("DefinedTerm" in body)
     }
+
+    @Test
+    fun `a span with a quote and a backslash round-trips through the DefinedTerm JSON-LD`() = testApplication {
+        val explanations = ExplanationRepository(
+            Mongo(MongoConfig(TestFixtures.connectionString, "test_api_glossary_hostile_${System.nanoTime()}")).database
+        )
+        val hostileSpan = "a \"quoted\" span with a \\ backslash"
+        runBlocking {
+            explanations.insertIfAbsent(
+                Explanation(
+                    key = "k3", topicSlug = "quantum-physics", parentKey = "p", span = hostileSpan,
+                    spanSentence = "s", verb = Verb.EXPLAIN, variant = 0, depth = 1, body = "b",
+                    grounded = false, sources = emptyList(), promptVersion = "v1", modelFamily = "fake-model",
+                    modelId = "fake-model", inputTokens = 1, outputTokens = 1, costMicros = 0,
+                    requestCount = 0, createdAtEpochMillis = 0, published = true,
+                )
+            )
+        }
+        application { routing { glossaryRoutes(explanations) } }
+
+        val parsed = ldJson(client.get("/glossary").bodyAsText())
+        val term = parsed.jsonObject["@graph"]!!.jsonArray.first()
+        assertEquals(hostileSpan, term.jsonObject["name"]!!.jsonPrimitive.content)
+    }
 }
 ```
 
@@ -2301,6 +2645,7 @@ Expected failure: a compile error — `glossaryRoutes` is unresolved.
 ```kotlin
 package com.mytetz.api
 
+import com.mytetz.graph.Explanation
 import com.mytetz.graph.ExplanationRepository
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.html.respondHtml
@@ -2315,6 +2660,11 @@ import kotlinx.html.script
 import kotlinx.html.title
 import kotlinx.html.ul
 import kotlinx.html.unsafe
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+
+private const val SITE_URL = "https://mytetz.com"
 
 /**
  * `GET /glossary`. Lists every published `EXPLAIN` node by its span. A pure read: no cookie, no
@@ -2329,14 +2679,16 @@ fun Route.glossaryRoutes(explanations: ExplanationRepository) {
         call.respondHtml(HttpStatusCode.OK) {
             head {
                 title { +"Glossary | mytetz" }
-                script(type = "application/ld+json") { unsafe { +jsonLdScriptSafe(glossaryJsonLd(published)) } }
+                script(type = "application/ld+json") {
+                    unsafe { +jsonLdGraph(published.map { definedTermJsonLd(it) }) }
+                }
             }
             body {
                 h1 { +"Glossary" }
                 ul {
                     published.forEach { explanation ->
                         li {
-                            a(href = "https://mytetz.com/topics/${explanation.topicSlug}/explain/${explanation.key.take(12)}") {
+                            a(href = "$SITE_URL/topics/${explanation.topicSlug}/explain/${explanation.key.take(12)}") {
                                 +(explanation.span ?: explanation.key)
                             }
                         }
@@ -2347,14 +2699,15 @@ fun Route.glossaryRoutes(explanations: ExplanationRepository) {
     }
 }
 
-private fun glossaryJsonLd(published: List<com.mytetz.graph.Explanation>): String {
-    val terms = published.joinToString(",") { e ->
-        """{"@type":"DefinedTerm","name":${jsonEscape(e.span ?: e.key)},"url":"https://mytetz.com/topics/${e.topicSlug}/explain/${e.key.take(12)}"}"""
-    }
-    return """{"@context":"https://schema.org","@graph":[$terms]}"""
+/**
+ * `DefinedTerm` (https://schema.org/DefinedTerm), built with `buildJsonObject` — the same pattern
+ * `TopicPageHtml.kt`'s node builders use, and never a hand-written string template.
+ */
+private fun definedTermJsonLd(explanation: Explanation): JsonObject = buildJsonObject {
+    put("@type", "DefinedTerm")
+    put("name", explanation.span ?: explanation.key)
+    put("url", "$SITE_URL/topics/${explanation.topicSlug}/explain/${explanation.key.take(12)}")
 }
-
-private fun jsonEscape(value: String): String = "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 ```
 
 - [ ] **Step 4: Register the route. Wire the nav link**
@@ -2366,7 +2719,7 @@ gets a plain `<a href="/glossary">`, per spec section 9.3's last paragraph.
 - [ ] **Step 5: Run the tests. Confirm they pass**
 
 Run: `./gradlew :backend:api:test --tests "com.mytetz.api.GlossaryRoutesTest"`
-Expected: PASS, both tests.
+Expected: PASS, all three tests.
 
 - [ ] **Step 6: Commit**
 
@@ -2375,7 +2728,7 @@ git add backend/api/src/main/kotlin/com/mytetz/api/GlossaryRoutes.kt \
         backend/api/src/test/kotlin/com/mytetz/api/GlossaryRoutesTest.kt \
         backend/api/src/main/kotlin/com/mytetz/api/Application.kt \
         frontend/src/app/ui/app-shell.component.ts
-git commit -m "feat(api): add GET /glossary, listing only published EXPLAIN nodes"
+git commit -m "feat(api): add GET /glossary, its DefinedTerm JSON-LD built with kotlinx.serialization"
 ```
 
 ---
