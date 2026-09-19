@@ -77,7 +77,7 @@ internal fun faqEntries(billingConfig: BillingConfig): List<FaqEntry> = listOf(
         id = "what-is-mytetz",
         question = "What is mytetz?",
         answer = "Mytetz is a web app that explains a topic in short, plain text. A reader " +
-            "picks a topic, reads it, and highlights any phrase for more detail.",
+            "picks a topic and reads it. A highlight on any phrase gives more detail.",
     ),
     FaqEntry(
         id = "how-does-a-session-work",
@@ -94,15 +94,15 @@ internal fun faqEntries(billingConfig: BillingConfig): List<FaqEntry> = listOf(
     FaqEntry(
         id = "how-much-does-mytetz-cost",
         question = "How much does mytetz cost?",
-        answer = "Mytetz costs €$FAQ_PRICE_EUR_PER_MONTH each month, billed through Freemius, " +
-            "once the trial ends.",
+        answer = "Mytetz costs €$FAQ_PRICE_EUR_PER_MONTH each month. Freemius bills the " +
+            "subscriber, once the trial ends.",
         link = FaqLink(href = "/terms", label = "Terms"),
     ),
     FaqEntry(
         id = "how-many-explanations-does-a-subscriber-get",
         question = "How many explanations does a subscriber get?",
         answer = "A subscriber gets ${billingConfig.subscriberDailyExplains} explanations each " +
-            "day, and the count resets every day.",
+            "day. The count resets every day.",
     ),
     FaqEntry(
         id = "how-does-a-learner-cancel",
@@ -114,21 +114,20 @@ internal fun faqEntries(billingConfig: BillingConfig): List<FaqEntry> = listOf(
         id = "does-a-reader-need-an-account",
         question = "Does a reader need an account?",
         answer = "A reader reads the catalogue, a topic page and its seed text with no " +
-            "account; a highlight in the reader needs a sign-in. A learner signs in with an " +
+            "account. A highlight in the reader needs a sign-in. A learner signs in with an " +
             "email magic link or with Google.",
     ),
     FaqEntry(
         id = "who-writes-the-explanations",
         question = "Who writes the explanations? Can an explanation be wrong?",
-        answer = "A language model writes every explanation, and it can make a mistake.",
+        answer = "A language model writes every explanation. It can make a mistake.",
         link = FaqLink(href = "/how-it-works", label = "How it works"),
     ),
     FaqEntry(
         id = "what-happens-to-the-data-of-a-learner",
         question = "What happens to the data of a learner, and how does a learner delete the account?",
         answer = "A learner deletes their account, their sessions and their quiz attempts from " +
-            "the account page. An explanation stays in the catalogue because it holds no " +
-            "personal data.",
+            "the account page. An explanation stays in the catalogue. It holds no personal data.",
         link = FaqLink(href = "/privacy", label = "Privacy policy"),
     ),
     FaqEntry(
