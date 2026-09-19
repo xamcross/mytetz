@@ -297,6 +297,112 @@ fly machine list --app mytetz
 
 ---
 
+## Log drain, alert rules, and uptime check
+
+No drain, alert, or uptime check exists yet. This section names the alert rule for each operator
+token, the catch-all for an ERROR line with no token, and the uptime check. `<owner: provider>`,
+`<owner: retention>`, and `<owner: channel>` mark the three choices below that only the owner can
+make.
+
+**A logged magic-link token cannot be replayed from the drain.** `GET /api/auth/magic-link/{token}`
+consumes the token — `AccountRepository.consumeToken` deletes it from Mongo — before the route
+responds. A second `consume` call on the same token returns null;
+`MagicLinkServiceTest`'s own test `consume a second time gives null` pins this. So the token that
+the access log carries for this request is already spent by the time the drain, or anyone else,
+reads that line. This is true whether the drain provider logs the line before or after the
+response completes.
+
+**One caution stays with the owner.** `LoggingMailSender` writes a full sign-in link, not only a
+token, under `MAGIC_LINK_LOGGED`, whenever `MYTETZ_MAIL_MODE` is `log`. An operator confirms the
+value of `MYTETZ_MAIL_MODE` on fly, and sets it to `resend`, before the drain is attached.
+
+### The drain
+
+`<owner: provider>`. Set the retention to 30 days or more. Set the drain to keep a multi-line
+event, such as a stack trace, as one event — several rows below span more than one line.
+
+### The alert channel
+
+`<owner: channel>`. Connect it to the drain provider.
+
+### The alert rules
+
+Each row is one alert rule. The match string is the exact text the log line holds.
+
+`<owner: confirm or change this urgency policy>` — a `High` token pages the channel at once, and a
+`Medium` token can wait for a person to read it on the next work day. This is a proposal, not a
+decision the owner has made. An `Info` token needs no alert; the table lists it only so every
+token the codebase writes has one row somewhere in this document.
+
+| Token | Match string | Level | Urgency | Threshold |
+| --- | --- | --- | --- | --- |
+| `SPEND_UNRECORDED` | `SPEND_UNRECORDED` | ERROR | High | any occurrence |
+| `CORRUPT_SESSION` | `CORRUPT_SESSION` | ERROR | High | any occurrence |
+| unrecognised stop reason | `unrecognised stop reason` | WARN | High | any occurrence |
+| `MAIL_SEND_FAILED` | `MAIL_SEND_FAILED` | ERROR | High | any occurrence |
+| `ACCOUNT_LINK_CONFLICT` | `ACCOUNT_LINK_CONFLICT` | WARN | High | any occurrence |
+| `CONFIG_MISSING` | `CONFIG_MISSING` | ERROR | High | any occurrence |
+| `WEBHOOK_SIGNATURE_MISMATCH` | `WEBHOOK_SIGNATURE_MISMATCH` | WARN | High | more than 20 in one hour |
+| `BOOTSTRAP_FAILED` | `BOOTSTRAP_FAILED` | ERROR | Medium | any occurrence |
+| `BILLING_DRIFT` | `BILLING_DRIFT` | WARN | Medium | any occurrence |
+| `BILLING_UNKNOWN_EVENT` | `BILLING_UNKNOWN_EVENT` | WARN | Medium | any occurrence |
+| `BILLING_UNKNOWN_USER` | `BILLING_UNKNOWN_USER` | WARN | Medium | any occurrence |
+| `BILLING_STALE_EVENT` | `BILLING_STALE_EVENT` | WARN | Medium | any occurrence |
+| `BILLING_NO_PERIOD_END` | `BILLING_NO_PERIOD_END` | WARN | Medium | any occurrence |
+| `RECONCILE_SKIPPED` | `RECONCILE_SKIPPED` | WARN | Medium | any occurrence |
+| `TRIAL_CAP_REACHED` | `TRIAL_CAP_REACHED` | INFO | Info | no alert; a rate signal only |
+| `MIGRATION`, the INFO lines | `MIGRATION removed` or `MIGRATION pre-warmed` | INFO | Info | no alert; read by hand, see "The B0 model migration" |
+| `MIGRATION`, the WARN lines | `MIGRATION stopped early` or `MIGRATION failed to pre-warm` | WARN | Medium, only while `MYTETZ_MIGRATE_ON_BOOT` is set | any occurrence during a migration run |
+
+### The catch-all for an ERROR line with no token
+
+Three ERROR lines carry no token today. A rule that alerts on level ERROR, and excludes the
+tokens above, also catches these three:
+
+| Match string | Source |
+| --- | --- |
+| `unhandled error` | `ErrorMapping.kt:269`, the `Throwable` catch-all for a plain HTTP response |
+| `unhandled error mid-stream` | `ErrorMapping.kt:388`, the same catch-all for a response that is already streaming |
+| `the quota check could not be evaluated` | `SessionRoutes.kt:785`; the caller still gets an answer, from the cache only |
+
+`<owner: confirm the provider can filter on log level>`. A provider that cannot filter on level
+must match each of the three strings above by hand instead.
+
+### The uptime check
+
+Check `GET https://mytetz.com/api/health` every minute. Use `GET`, and not `HEAD` — a `HEAD`
+answer has no body to check. Alert after two consecutive failures, or on a body that does not
+contain `"ready":true`.
+
+`<owner: confirm mytetz.com is not challenged by Bot Fight Mode>`. If it is, point the check at
+`https://mytetz.fly.dev/api/health` instead. Issue #68 plans to refuse a request on
+`mytetz.fly.dev` to every `/api/*` path that does not come through Cloudflare, but its own
+implementation steps keep `/api/health` open on that host, so the fallback stays reachable after
+that change lands.
+
+**A note for the `fly machine stop` acceptance check.** `fly.toml:50` sets
+`auto_start_machines = true`. A probe through the fly proxy can therefore start the stopped
+machine again before the uptime alert fires. Record this in this document if it happens.
+
+### What the drain receives
+
+- **Every request path.** The call log writes the path of each request, so the drain receives it
+  too. This is how a magic-link token reaches the drain, in the way described above.
+- **A user id, in a `BILLING_*` line.** For example, `BILLING_DRIFT` logs `user={}` with
+  `subscription.userId` — `backend/billing/src/main/kotlin/com/mytetz/billing/Reconciliation.kt:126-127`.
+- **An email address, in an `ACCOUNT_LINK_CONFLICT` line.** `AccountService.linkGoogle` throws
+  `AccountLinkConflictException` with the message `the account for <email> is already linked to a
+  different Google account` at
+  `backend/account/src/main/kotlin/com/mytetz/account/AccountService.kt:73-75`. `AuthRoutes.kt:332`
+  logs `e.message` for that exception, so the `ACCOUNT_LINK_CONFLICT` line carries the caller's own
+  email address.
+
+**The consequence.** The drain provider receives personal data: an email address, and a user id.
+The provider is therefore a data processor for this product, and the privacy policy must name it
+once the owner selects it. Issue #24 holds the privacy policy text.
+
+---
+
 ## 5. Cloudflare
 
 DNS for `mytetz.com` is on Cloudflare. **These steps are done in the Cloudflare
@@ -552,8 +658,9 @@ no code change.
 
 ### Operator alert tokens
 
-Each row below is a `log.warn` or a `log.error` line. Each line is greppable in `fly logs`. Each
-line is for an operator, and no line ever reaches a learner.
+Most rows below are a `log.warn` or a `log.error` line. Two rows, `TRIAL_CAP_REACHED` and
+`MIGRATION`, also write an INFO line. Each line is greppable in `fly logs`. Each line is for an
+operator, and no line ever reaches a learner.
 
 | Token | Logged in | Meaning | Operator action |
 | --- | --- | --- | --- |
@@ -569,6 +676,12 @@ line is for an operator, and no line ever reaches a learner.
 | `ACCOUNT_LINK_CONFLICT` | `AuthRoutes` | a Google sign-in's email is already linked to a different Google account | a real conflict, not a bug; the learner needs the sign-in method their account already used |
 | `MAIL_SEND_FAILED` | `MailSender` | a magic-link email could not be sent | check the mail provider's status and `MYTETZ_MAIL_API_KEY`; a learner is currently unable to sign in by email |
 | `CONFIG_MISSING` | `ConfigGate`, from `AuthRoutes` and `BillingRoutes` | a route needs an environment variable that is not set, so it answers `503` rather than `500`. One line names only the first missing variable in that route's own chain; a second variable, if one is also missing, only appears after the first is set | set the named variable. The next request retries on its own. No restart is needed |
+| `SPEND_UNRECORDED` | `SessionRoutes.recordSpend` | a generation was paid for, but the quota ledger did not record the cost | read the principal and the cost in the line; the daily spend ceiling in section 2.1 is understating the true spend by that amount |
+| `CORRUPT_SESSION` | `ErrorMapping.logCorruptSession` | a stored session no longer describes a tree; no retry fixes it | read the session id in the line; a person must read the document by hand |
+| `unrecognised stop reason` | `ExplanationValidator.validate`, through `ErrorMapping.installErrorMapping` and `ErrorMapping.sseErrorFor` | the model answered with a stop reason the validator does not know; the validator rejects every such answer, and keeps rejecting until a person acts | read the exact reason in the line under `generation failed`; add the new reason to the validator's allowlist if it is a real success case |
+| `BOOTSTRAP_FAILED` | `Application.bootstrap` | the boot did not finish the database indexes or the catalogue seed. `ready.set(true)` at `Application.kt:224` never runs on this path, so `/api/health` reports `"ready":false` for the whole life of the machine, not only during the cold-start window | read the stack trace under the line; the uptime check on `"ready":true` also alerts, because the field never turns `true`; restart the machine, or wait for the next boot to retry on its own |
+| `TRIAL_CAP_REACHED` | `BillingService.startTrialIfAbsent` | one IP bucket already started the day's cap of trials; the caller still signs in, with checkout offered instead | no action; this is a rate signal, not a fault |
+| `MIGRATION` | `Components.migrate` | two INFO lines report a normal migration step; two WARN lines report that the spend breaker refused a topic, or that one seed failed to pre-warm | read section "The B0 model migration" below; act on a WARN line only while `MYTETZ_MIGRATE_ON_BOOT` is set |
 
 ### Reading a `BILLING_DRIFT` line
 
