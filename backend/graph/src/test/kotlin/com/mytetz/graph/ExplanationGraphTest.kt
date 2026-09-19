@@ -697,6 +697,26 @@ class ExplanationGraphTest {
     }
 
     @Test
+    fun `a Commons failure stores the diagram only, and the flow still ends with Done`() = runTest {
+        // No MockEngine and no CommonsClient here: the port is a plain function, on Decision 6's
+        // own model of Reconciliation.reconcile's fetchState, so a test can supply one directly.
+        llm.nextStructuredJson = """{"explanation":"A short valid sentence about the span.","svg":"<svg><circle cx=\"1\" cy=\"1\" r=\"1\"/></svg>"}"""
+        val graphWithFailingCommons = ExplanationGraph(
+            repository = repository,
+            llm = llm,
+            validator = ExplanationValidator(),
+            config = config,
+            commonsLookup = { _, _ -> throw java.io.IOException("down") },
+        )
+
+        val chunks = graphWithFailingCommons.getOrGenerate(request(verb = Verb.VISUALIZE)).toList()
+
+        val done = chunks.filterIsInstance<GraphChunk.Done>().single()
+        assertNotNull(done.explanation.media?.diagram)
+        assertNull(done.explanation.media?.image)
+    }
+
+    @Test
     fun `a generation that is billed and then rejected announces its cost before it raises`() = runTest {
         // The property GraphChunk.Spent exists for, asserted in the module that owns it.
         //
