@@ -282,7 +282,8 @@ export class FocusCardComponent {
   readonly isStreaming = input.required<boolean>();
   /** True when the stream that just ended did not succeed. The reader page binds this from
    * `SessionStore.error() !== null`, read at the same point `isStreaming()` turns false — see the
-   * class doc comment on `SessionStore.explain` for why the write order makes that safe. A failed
+   * comment in the `finally` block of `SessionStore.explain` for the write order that makes this
+   * safe. A failed
    * stream must not say "The explanation is ready.", because it is not. The learner already reads
    * why, from the reader page's own error banner, sign-in panel, or subscribe wall. */
   readonly explainFailed = input.required<boolean>();
