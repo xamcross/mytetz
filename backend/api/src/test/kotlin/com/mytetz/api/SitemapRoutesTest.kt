@@ -160,6 +160,68 @@ class SitemapRoutesTest {
         }
 
     @Test
+    fun `a review date later than the seed date wins as lastmod`() = testApplication {
+        // Both times sit near midnight UTC, the same guard the other lastmod tests use.
+        val seedCreatedAt = Instant.parse("2026-01-02T00:15:00Z").toEpochMilli()
+        val reviewedAt = Instant.parse("2026-03-04T00:15:00Z").toEpochMilli()
+        val fx = SitemapFixture(
+            Topic(
+                slug = "topic-a", title = "Topic A", category = "Physics", summary = "s",
+                reviewedAt = reviewedAt,
+            ),
+        )
+        runBlocking { fx.seed("topic-a", seedCreatedAt) }
+        application { routing { sitemapRoutes(fx.catalog, fx.explanations, FAKE_MODEL_FAMILY) } }
+
+        val body = client.get("/sitemap.xml").bodyAsText()
+
+        assertTrue(
+            "<url><loc>https://mytetz.com/topics/topic-a</loc><lastmod>2026-03-04</lastmod></url>" in body,
+            "expected the later review date as lastmod, body was: $body",
+        )
+    }
+
+    @Test
+    fun `a review date earlier than the seed date keeps the seed date as lastmod`() = testApplication {
+        val seedCreatedAt = Instant.parse("2026-03-04T00:15:00Z").toEpochMilli()
+        val reviewedAt = Instant.parse("2026-01-02T00:15:00Z").toEpochMilli()
+        val fx = SitemapFixture(
+            Topic(
+                slug = "topic-a", title = "Topic A", category = "Physics", summary = "s",
+                reviewedAt = reviewedAt,
+            ),
+        )
+        runBlocking { fx.seed("topic-a", seedCreatedAt) }
+        application { routing { sitemapRoutes(fx.catalog, fx.explanations, FAKE_MODEL_FAMILY) } }
+
+        val body = client.get("/sitemap.xml").bodyAsText()
+
+        assertTrue(
+            "<url><loc>https://mytetz.com/topics/topic-a</loc><lastmod>2026-03-04</lastmod></url>" in body,
+            "expected the later seed date to survive an earlier review date, body was: $body",
+        )
+    }
+
+    @Test
+    fun `a review date with no stored seed gets the review date as lastmod`() = testApplication {
+        val reviewedAt = Instant.parse("2026-05-06T00:15:00Z").toEpochMilli()
+        val fx = SitemapFixture(
+            Topic(
+                slug = "reviewed-no-seed", title = "Reviewed No Seed", category = "Physics", summary = "s",
+                reviewedAt = reviewedAt,
+            ),
+        )
+        application { routing { sitemapRoutes(fx.catalog, fx.explanations, FAKE_MODEL_FAMILY) } }
+
+        val body = client.get("/sitemap.xml").bodyAsText()
+
+        assertTrue(
+            "<url><loc>https://mytetz.com/topics/reviewed-no-seed</loc><lastmod>2026-05-06</lastmod></url>" in body,
+            "expected the review date as lastmod with no stored seed, body was: $body",
+        )
+    }
+
+    @Test
     fun `the home page and every guide path get no lastmod`() = testApplication {
         val fx = SitemapFixture()
         application { routing { sitemapRoutes(fx.catalog, fx.explanations, FAKE_MODEL_FAMILY) } }
@@ -175,6 +237,21 @@ class SitemapRoutesTest {
                 "$path must carry no lastmod: $body",
             )
         }
+    }
+
+    @Test
+    fun `how-it-works is in the sitemap once, with no lastmod`() = testApplication {
+        val fx = SitemapFixture()
+        application { routing { sitemapRoutes(fx.catalog, fx.explanations, FAKE_MODEL_FAMILY) } }
+
+        val body = client.get("/sitemap.xml").bodyAsText()
+
+        val occurrences = Regex("<loc>https://mytetz\\.com/how-it-works</loc>").findAll(body).count()
+        assertEquals(1, occurrences, "expected /how-it-works exactly once, body was: $body")
+        assertTrue(
+            "<url><loc>https://mytetz.com/how-it-works</loc></url>" in body,
+            "/how-it-works must carry no lastmod: $body",
+        )
     }
 
     // ------------------------------------------------------------- hostile input

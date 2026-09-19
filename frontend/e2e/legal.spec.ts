@@ -17,12 +17,12 @@ import {
 const ROUTES = ['/privacy', '/terms', '/imprint'];
 
 /**
- * Every href the footer carries, in order. Issue #63 added the guide hub, which is a static HTML
- * file and not a legal route, so it stays out of ROUTES: that constant drives the legal-page
- * checks below. The assertions stay an exact match, and not a subset, so that a legal link cannot
- * disappear without a failure here.
+ * Every href the footer carries, in order. Issue #63 added the guide hub, and issue #47 added
+ * `/how-it-works` — both are static or Ktor-rendered pages and not a legal route, so neither
+ * stays in ROUTES: that constant drives the legal-page checks below. The assertions stay an exact
+ * match, and not a subset, so that a legal link cannot disappear without a failure here.
  */
-const FOOTER_LINKS = ['/guides', ...ROUTES];
+const FOOTER_LINKS = ['/guides', '/how-it-works', ...ROUTES];
 
 /** Issue #35's own acceptance criteria: the tab names the page, not the generic title
  * `index.html` sets for every route. */

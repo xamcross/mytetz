@@ -99,4 +99,16 @@ describe('AppShellComponent', () => {
     expect(hrefs).toContain('/terms');
     expect(hrefs).toContain('/imprint');
   });
+
+  it('carries a plain link to the how-it-works page in the footer', () => {
+    fixture.detectChanges();
+
+    // A plain href, and not a routerLink — /how-it-works is a Ktor-rendered page, and
+    // app.routes.ts has no 'how-it-works' path, the same reasoning the /guides link states.
+    const link = fixture.nativeElement.querySelector(
+      'a.foot__link[href="/how-it-works"]',
+    ) as HTMLAnchorElement;
+    expect(link).toBeTruthy();
+    expect(link.textContent?.trim()).toBe('How it works');
+  });
 });
