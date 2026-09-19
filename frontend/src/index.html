@@ -28,12 +28,31 @@
     <meta property="og:image" content="https://mytetz.com/og-image.png" />
     <meta name="twitter:card" content="summary_large_image" />
 
+    <!--
+      One @graph, and not two separate script tags: the WebSite node is issue #34's own, and the
+      Organization node is the same node /how-it-works carries (HowItWorksRoutes.kt), with the
+      same @id, so an answer engine reads one Organization for the whole site. See
+      backend/api/src/main/kotlin/com/mytetz/api/JsonLd.kt's own organizationJsonLd() for the one
+      other place these values come from.
+    -->
     <script type="application/ld+json">
       {
         "@context": "https://schema.org",
-        "@type": "WebSite",
-        "name": "mytetz",
-        "url": "https://mytetz.com/"
+        "@graph": [
+          {
+            "@type": "WebSite",
+            "name": "mytetz",
+            "url": "https://mytetz.com/"
+          },
+          {
+            "@type": "Organization",
+            "@id": "https://mytetz.com/#organization",
+            "name": "mytetz",
+            "url": "https://mytetz.com",
+            "logo": "https://mytetz.com/icon.svg",
+            "sameAs": ["https://github.com/xamcross/mytetz"]
+          }
+        ]
       }
     </script>
   </head>
