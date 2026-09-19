@@ -166,7 +166,7 @@ process is starting and a typo must not take the site down.
 | `MYTETZ_COOKIE_SIGNING_KEY` | none — required | signs the principal cookie. The app refuses to boot without it. 32 characters minimum. |
 | `MYTETZ_COOKIE_SECURE` | `true` | whether the cookie carries `Secure`. Only an explicit `false`, `0`, `no` or `off` turns it off. |
 | `MYTETZ_CLIENT_IP_HEADER` | `Fly-Client-IP` | which header the rate limiters key on. See section 2. |
-| `MYTETZ_MIGRATE_ON_BOOT` | off | whether the B0 migration runs at boot. Only the exact word `true` turns it on. Section "The B0 model migration" explains it. |
+| `MYTETZ_MIGRATE_ON_BOOT` | off | whether the app deletes an explanation stranded by a model family change, at boot. Only the exact word `true` turns it on. It does **not** control the pre-warm of a missing seed: that step runs on every boot, with no flag. Section "The B0 model migration" explains both. |
 
 ### Atlas network access — known constraint
 
@@ -356,22 +356,30 @@ not in the app.
 ## The B0 model migration
 
 **Warning: this release orphans the store.** `modelFamily` is part of every content key. The new
-model changes that key. Every stored explanation becomes unreachable when this image boots. This
-is true whether or not `MYTETZ_MIGRATE_ON_BOOT` is set.
+model changes that key. Every stored explanation becomes unreachable when this image boots.
 
-The migration below removes the orphaned documents. The migration then regenerates a seed for
-each published topic. A learner may open a topic before the migration runs. That learner still
-gets an explanation. The app generates it fresh, for that topic, at the ordinary cost of one
-generation.
+Two separate steps now run at boot, and only one of them needs a flag.
 
-Do this one time, after the deployment that carries the `claude-sonnet-5` default.
+- **The pre-warm step runs on every boot, with no flag.** It generates a fresh seed for every
+  published topic that has no seed under the current model family. It stops early if the $50
+  daily spend breaker trips. A learner must never pay for a live generation because a topic's
+  seed is missing, so this step does not wait for an operator.
+- **The delete step runs only when `MYTETZ_MIGRATE_ON_BOOT` is `true`.** It removes an
+  explanation stranded under the old model family. It is cleanup, not correctness: a stranded
+  document costs storage, and nothing else, until an operator deletes it.
 
-1. Confirm the Anthropic account holds credit. Step 2 of the migration makes about 29 model calls.
+A learner may still open a topic in the short window before the pre-warm step finishes on the
+very first boot after the deploy. That learner gets an explanation regardless: the app generates
+it fresh, for that topic, at the ordinary cost of one generation.
 
-2. Turn the migration on and deploy.
+Do the following one time, after the deployment that carries the `claude-sonnet-5` default.
+
+1. Confirm the Anthropic account holds credit. The pre-warm step makes about 29 model calls, one
+   for each published topic with no seed under the new family.
+
+2. Deploy. The pre-warm step needs no flag.
 
    ```
-   fly secrets set MYTETZ_MIGRATE_ON_BOOT=true --app mytetz
    fly deploy --local-only --ha=false --app mytetz
    ```
 
@@ -383,44 +391,66 @@ Do this one time, after the deployment that carries the `claude-sonnet-5` defaul
 
    The answer must be `{"status":"ok","mongo":true,"ready":true}`.
 
-4. Read what the migration did.
+4. Read what the pre-warm step did.
 
    **In bash.**
 
    ```bash
-   fly logs --app mytetz --no-tail | grep MIGRATION
+   fly logs --app mytetz --no-tail | grep PREWARM
    ```
 
    **In PowerShell.**
 
    ```powershell
-   fly logs --app mytetz --no-tail | Select-String MIGRATION
+   fly logs --app mytetz --no-tail | Select-String PREWARM
    ```
 
-   You must see two lines: one count of removed explanations and one count of pre-warmed seeds.
-   The `--no-tail` flag is necessary, because the lines are already in the past.
+   You must see one line: `PREWARM pre-warmed <count> seed(s), <count> failed, at a cost of
+   <count> micro-dollars`. The `--no-tail` flag is necessary, because the line is already in the
+   past.
 
-5. Turn the migration off immediately after step 4. Do not wait until later.
+5. Confirm every published topic has a seed under the current family.
 
    ```
+   mongosh "$MONGODB_URI" --quiet --eval '
+     const family = "claude-sonnet-5";
+     const published = db.topics.countDocuments({ status: "PUBLISHED" });
+     const seeded = db.explanations.countDocuments({ verb: "SEED", modelFamily: family });
+     print("published=" + published + " seeded=" + seeded);
+   '
+   ```
+
+   The two counts must match. A lower `seeded` count means the spend breaker stopped the loop
+   early; see below.
+
+6. Only if you also want to remove the stranded documents from the old family now, rather than
+   later, turn the delete on and deploy again.
+
+   ```
+   fly secrets set MYTETZ_MIGRATE_ON_BOOT=true --app mytetz
+   fly deploy --local-only --ha=false --app mytetz
+   fly logs --app mytetz --no-tail | grep MIGRATION
    fly secrets unset MYTETZ_MIGRATE_ON_BOOT --app mytetz
    ```
 
-   The flag is not run-once. `fly.toml` sets `auto_stop_machines = "off"`, so the machine no
-   longer stops when it is idle. A deploy, a crash or a manual restart still boots it. Every
-   boot between step 2 and this step re-runs the whole migration.
+   Turn the flag off immediately after you read the `MIGRATION removed <count> explanation(s)`
+   line. Do not wait until later. The flag is not run-once: `fly.toml` sets
+   `auto_stop_machines = "off"`, so the machine no longer stops when it is idle, and a deploy, a
+   crash or a manual restart still boots it. Every boot between setting the flag and clearing it
+   deletes the same stranded family again — a no-op after the first run, but still a needless
+   database round trip.
 
-   A topic can fail after its model call. That topic still spent money. The migration does not
-   persist a failed generation. The next cold start spends money on that topic again. The real
-   ceiling on that cost is the $50 daily spend breaker in section 2.1. One full run costs about
-   $0.30.
+A topic can fail after its model call. That topic still spent money. The pre-warm step does not
+persist a failed generation. The next boot spends money on that topic again. The real ceiling on
+that cost is the $50 daily spend breaker in section 2.1. One full pre-warm run, from an empty
+store, costs about $0.30.
 
-**If the second log line reports fewer seeds than the catalogue holds,** the spend breaker stopped
-the loop. The existing seeds remain. Do the following:
+**If the log line reports fewer seeds than the catalogue holds,** the spend breaker stopped the
+loop. The existing seeds remain. Do the following:
 
 1. Check the day's ledger.
 2. Raise `MYTETZ_GLOBAL_DAILY_COST_CEILING_USD_MICROS`, only if that is the correct action.
-3. Run the migration again tomorrow.
+3. Restart the machine, or wait for the next boot, so the pre-warm step runs again tomorrow.
 
 ---
 
@@ -503,11 +533,14 @@ operator to read and apply by hand; the stored row is never touched on that word
 end never shortens either, for the same reason. `Reconciliation.reconcile`'s own KDoc states this
 rule as "the fail-safe rule."
 
-**This flag is safe to leave set. `MYTETZ_MIGRATE_ON_BOOT` is not.** The difference is in what
-each flag does, not in how often either one runs. The migration deletes documents and calls a
-metered model API. Every migration run costs real money, so section "The B0 model migration"
-above tells you to turn that flag off again right after the run. Reconciliation only reads Mongo
-and asks Freemius. It spends nothing, so there is nothing here to turn off in a hurry.
+**This flag is safe to leave set. `MYTETZ_MIGRATE_ON_BOOT` is not — though the reason changed
+with the pre-warm split above.** `migrate()` only deletes a document stranded under an old model
+family now. It no longer calls the model itself, and a second run finds nothing to delete. So
+leaving the flag on spends no money any more, only a needless Mongo round trip on every boot.
+Turn it off anyway, right after you read the delete's log line, the same as section "The B0
+model migration" above says: a flag with one job stays clearest when it runs only for that job.
+Reconciliation only reads Mongo and asks Freemius. It spends nothing, so there is nothing here to
+turn off in a hurry.
 
 **How often "every boot" happens today.** `fly.toml` currently sets `auto_stop_machines = "off"`.
 The machine never scales to zero, because of the 2026-08-16 outage section 4 above records. A boot
