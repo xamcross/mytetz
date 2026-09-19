@@ -115,9 +115,30 @@
   --mt-lift-teal: 0 4px 0 var(--mt-teal-deep);
   --mt-float: 0 16px 40px rgb(18 49 42 / 16%);
 
+  /* press and hover shadows, named once so a component can stop repeating the raw value */
+  --mt-press: 0 2px 0 var(--mt-border);
+  --mt-press-coral: 0 2px 0 var(--mt-coral-deep);
+  --mt-press-teal: 0 2px 0 var(--mt-teal-deep);
+  --mt-lift-hover: 0 5px 0 var(--mt-border);
+
   /* type */
   --mt-display: 'Fredoka', 'Figtree', system-ui, sans-serif;
   --mt-body: 'Figtree', system-ui, sans-serif;
+
+  /* motion — the durations step with the 4px lift, and nothing travels further than 8px */
+  --mt-dur-press: 90ms; /* a press, a hover */
+  --mt-dur-state: 160ms; /* a chip, a row, a swap of state */
+  --mt-dur-panel: 240ms; /* a sheet, a panel, a card */
+  --mt-dur-route: 320ms; /* a change of route */
+
+  --mt-ease-out: cubic-bezier(0.22, 0.85, 0.3, 1); /* a thing arrives */
+  --mt-ease-in: cubic-bezier(0.55, 0, 0.9, 0.3); /* a thing leaves */
+  --mt-ease-press: cubic-bezier(0.2, 0, 0, 1); /* a control answers a finger */
+  --mt-ease-settle: cubic-bezier(0.34, 1.4, 0.5, 1); /* a small overshoot, for an arrival */
+
+  --mt-move-press: 2px;
+  --mt-move-near: 4px;
+  --mt-move-far: 8px;
 }
 
 /* ── Reset ─────────────────────────────────────────────────────────────────── */
@@ -206,6 +227,17 @@ button:disabled {
   box-shadow: none;
 }
 
+/* The screen-reader-only helper. Four components each held their own copy of these six
+   declarations; this is the one copy every one of them now uses. */
+.mt-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 .mt-pill {
   display: inline-flex;
   align-items: center;
@@ -221,12 +253,18 @@ button:disabled {
   line-height: 1;
   box-shadow: var(--mt-lift);
   transition:
-    transform 80ms ease-out,
-    box-shadow 80ms ease-out;
+    transform var(--mt-dur-press) var(--mt-ease-press),
+    box-shadow var(--mt-dur-press) var(--mt-ease-press);
+}
+/* A learner sees this before they press it. The hover rule always sits above the matching active
+   rule below it, so a press still wins when a pointer hovers and presses at once. */
+.mt-pill:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: var(--mt-lift-hover);
 }
 .mt-pill:active:not(:disabled) {
   transform: translateY(2px);
-  box-shadow: 0 2px 0 var(--mt-border);
+  box-shadow: var(--mt-press);
 }
 /* Coral fills with --mt-coral-press, not --mt-coral: a pill's label is 14px, and white on
    --mt-coral measures 3.01:1 and fails AA. */
@@ -236,8 +274,19 @@ button:disabled {
   color: var(--mt-surface);
   box-shadow: var(--mt-lift-coral);
 }
+.mt-pill--coral:hover:not(:disabled) {
+  box-shadow: 0 5px 0 var(--mt-coral-deep);
+}
 .mt-pill--coral:active:not(:disabled) {
-  box-shadow: 0 2px 0 var(--mt-coral-deep);
+  box-shadow: var(--mt-press-coral);
+}
+/* The ring is 1.01:1 against this fill (design review, section 3.3), so a coral pill also keeps
+   its lift while it has the keyboard focus. The two shadows sit in one list: a plain
+   `:focus-visible` rule would replace the lift instead of adding a ring next to it. */
+.mt-pill--coral:focus-visible {
+  box-shadow:
+    var(--mt-lift-coral),
+    0 0 0 2px var(--mt-surface);
 }
 .mt-pill--teal {
   background: var(--mt-teal);
@@ -245,14 +294,28 @@ button:disabled {
   color: var(--mt-surface);
   box-shadow: var(--mt-lift-teal);
 }
+.mt-pill--teal:hover:not(:disabled) {
+  box-shadow: 0 5px 0 var(--mt-teal-deep);
+}
 .mt-pill--teal:active:not(:disabled) {
-  box-shadow: 0 2px 0 var(--mt-teal-deep);
+  box-shadow: var(--mt-press-teal);
+}
+/* The ring is 1.00:1 against this fill, the same reason as the coral rule above. */
+.mt-pill--teal:focus-visible {
+  box-shadow:
+    var(--mt-lift-teal),
+    0 0 0 2px var(--mt-surface);
 }
 /* There is no .mt-pill--amber. A pill is a control, and §3.3 says amber means "look at this" and
    never "click this". The amber tone belongs to .mt-card--amber and .mt-chip--amber. */
 .mt-pill--ghost {
   box-shadow: none;
   color: var(--mt-teal);
+}
+.mt-pill--ghost:hover:not(:disabled) {
+  transform: none;
+  box-shadow: none;
+  background: var(--mt-sunk);
 }
 /* A ghost pill has no shadow at rest, so it must stay flat on a press too. Without this rule,
    `.mt-pill:active:not(:disabled)` wins on specificity and draws a shadow. The pill then appears
@@ -265,6 +328,11 @@ button:disabled {
 .mt-pill:disabled {
   opacity: 0.55;
   box-shadow: none;
+}
+/* Three links carry this class and keep the browser's default underline: "Terms" on the account
+   page, "Continue with Google" in the sign-in panel, and "Back to topics" on the not-found page. */
+a.mt-pill {
+  text-decoration: none;
 }
 
 .mt-chip {
@@ -327,14 +395,29 @@ button:disabled {
   }
 }
 
-/* A reader who asks for less motion still needs every change of state. Motion goes; state
-   stays. */
+/* A learner who asks for less motion still needs every change of state. The distance goes to zero
+   and the duration goes to 1ms. The state stays, and so does the opacity cross-fade.
+   1ms and not 0: `animate.leave` waits for `animationend` before it removes an element, and an
+   animation of zero duration can leave that element in the DOM. */
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
+  :root {
+    --mt-dur-press: 1ms;
+    --mt-dur-state: 1ms;
+    --mt-dur-panel: 1ms;
+    --mt-dur-route: 1ms;
+    --mt-move-press: 0px;
+    --mt-move-near: 0px;
+    --mt-move-far: 0px;
+  }
+  .mt-skeleton {
+    animation: none;
+  }
+  .focus__caret {
+    animation: none;
+    opacity: 1;
+  }
+  .focus__band {
+    animation: none;
+    transform: none;
   }
 }
