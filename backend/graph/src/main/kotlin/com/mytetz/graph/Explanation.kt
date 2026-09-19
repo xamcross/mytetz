@@ -33,4 +33,12 @@ data class Explanation(
      * default and the driver does not require a stored key to be present.
      */
     val media: Media? = null,
+    /**
+     * True only once a person has read this text and approved it for a public page. The default
+     * is `false`, for a new document and for a document a model wrote before this field existed:
+     * a stored document with no `published` key decodes with `published == false`, the same way
+     * [media] already decodes `null` for an old document. Only [ExplanationRepository.setPublished]
+     * ever sets this to `true` — see issue #48's own safety rule.
+     */
+    val published: Boolean = false,
 )

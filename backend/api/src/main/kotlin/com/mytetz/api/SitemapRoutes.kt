@@ -23,13 +23,16 @@ import java.time.ZoneOffset
  * catalogue the moment an editor adds a topic, and #18 grows the catalogue past the 29 topics it
  * held on 2026-09-15.
  *
- * Lists the home page, one `<url>` for each published topic, and one `<url>` for each path in
- * [GuidePages.paths] — the one list [GuidePagesTest] already holds the shipped guide pages to. A
- * pure read: this function calls [CatalogService.listPublished] and [ExplanationRepository.findByKey]
- * only, the same rule [topicPageRoutes] follows for the same reason. Spec section 13.2's
- * shared-cache rule needs a response with no `Set-Cookie` header, so this route never calls
- * `Principals.resolve` and never touches a lazy model client. [SitemapRoutesTest] proves both with
- * a real test.
+ * Lists the home page, one `<url>` for each published topic, one `<url>` for each path in
+ * [GuidePages.paths] — the one list [GuidePagesTest] already holds the shipped guide pages to —
+ * one `<url>` for each path in [PublicPages.paths] (`/how-it-works`), one `<url>` for each
+ * published explanation page, from [publicExplanationSitemapEntries] (issue #48), and `/glossary`
+ * itself once one published explanation exists (issue #48, round 2 — see this function's own body
+ * for why `/glossary` is not in [PublicPages.paths]). A pure read: this function calls
+ * [CatalogService.listPublished] and [ExplanationRepository.findByKey] only, the same rule
+ * [topicPageRoutes] follows for the same reason. Spec section 13.2's shared-cache rule needs a
+ * response with no `Set-Cookie` header, so this route never calls `Principals.resolve` and never
+ * touches a lazy model client. [SitemapRoutesTest] proves both with a real test.
  *
  * Follows https://www.sitemaps.org/protocol.html: `<loc>` is required, `<lastmod>` is optional, and
  * one file may hold up to 50,000 URLs. The catalogue stays far below that limit even at the
@@ -69,11 +72,32 @@ fun Route.sitemapRoutes(
             )
         }
 
+        // Issue #48: one <url> per published explanation page, capped hard at
+        // MAX_PUBLISHED_EXPLANATIONS by publicExplanationSitemapEntries itself — see that
+        // function's own KDoc for why the cap is enforced there and not repeated here.
+        val publicExplanations = publicExplanationSitemapEntries(explanations)
+        val explanationUrls = publicExplanations.map { entry ->
+            SitemapUrl(
+                loc = SITE_URL + entry.path,
+                lastmod = lastModifiedFor(entry.createdAtEpochMillis, reviewedAtEpochMillis = null),
+            )
+        }
+
         val urls = buildList {
             add(SitemapUrl(loc = "$SITE_URL/"))
             addAll(topicUrls)
             addAll(GuidePages.paths.map { SitemapUrl(loc = SITE_URL + it) })
             addAll(PublicPages.paths.map { SitemapUrl(loc = SITE_URL + it) })
+            addAll(explanationUrls)
+            // Round 2: /glossary joins the sitemap only once it has one entry or more. An empty
+            // glossary is a real page (see GlossaryHtml.kt's own empty state), but it names
+            // nothing yet, so a crawler gains nothing from indexing it before then. The list this
+            // route already read above (`publicExplanations`) answers the question at no extra
+            // database read. /glossary stays out of PublicPages.paths (issue #47's fixed list) for
+            // the same reason: that list has no way to say "only sometimes".
+            if (publicExplanations.isNotEmpty()) {
+                add(SitemapUrl(loc = "$SITE_URL/glossary"))
+            }
         }
 
         call.response.header(HttpHeaders.CacheControl, "public, max-age=3600")
