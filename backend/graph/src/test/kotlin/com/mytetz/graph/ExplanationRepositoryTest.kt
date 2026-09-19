@@ -67,6 +67,64 @@ class ExplanationRepositoryTest {
     }
 
     @Test
+    fun `a document with media round-trips through insertIfAbsent and findByKey`() = runTest {
+        val withMedia = explanation("k-media", "A diagram of the phrase.").copy(
+            media = Media(
+                diagram = DiagramMedia(DiagramKind.SVG, "<svg viewBox=\"0 0 10 10\"></svg>"),
+                image = ImageMedia(
+                    imageUrl = "https://upload.wikimedia.org/example.jpg",
+                    title = "Example.jpg",
+                    license = "CC BY-SA 4.0",
+                    attributionHtml = "By Example Author, CC BY-SA 4.0",
+                    commonsPageUrl = "https://commons.wikimedia.org/wiki/File:Example.jpg",
+                ),
+            )
+        )
+
+        repository.insertIfAbsent(withMedia)
+
+        val found = repository.findByKey("k-media")
+        assertEquals(DiagramKind.SVG, found?.media?.diagram?.kind)
+        assertEquals("CC BY-SA 4.0", found?.media?.image?.license)
+    }
+
+    @Test
+    fun `a document stored before this field existed decodes with media null`() = runTest {
+        // This simulates every explanation this project has stored so far: a raw document with
+        // no "media" key at all, not a document whose "media" key is explicitly null.
+        database.getCollection<org.bson.Document>("explanations").insertOne(
+            org.bson.Document(
+                mapOf(
+                    "_id" to "k-legacy",
+                    "topicSlug" to "quantum-physics",
+                    "parentKey" to null,
+                    "span" to null,
+                    "spanSentence" to null,
+                    "verb" to "SEED",
+                    "variant" to 0,
+                    "depth" to 0,
+                    "body" to "Quantum mechanics is…",
+                    "grounded" to false,
+                    "sources" to emptyList<org.bson.Document>(),
+                    "promptVersion" to "v1",
+                    "modelFamily" to "claude-opus-5",
+                    "modelId" to "claude-opus-5",
+                    "inputTokens" to 10L,
+                    "outputTokens" to 20L,
+                    "costMicros" to 550L,
+                    "requestCount" to 0L,
+                    "createdAtEpochMillis" to 1_700_000_000_000L,
+                )
+            )
+        )
+
+        val found = repository.findByKey("k-legacy")
+
+        assertNotNull(found)
+        assertNull(found?.media)
+    }
+
+    @Test
     fun `insertIfAbsent returns the winner and never overwrites`() = runTest {
         repository.insertIfAbsent(explanation("k2", "first"))
 
