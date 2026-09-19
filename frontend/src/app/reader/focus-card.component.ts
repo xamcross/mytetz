@@ -199,12 +199,6 @@ const READY_STATUS_MILLIS = 4000;
         display: flex;
         flex-direction: column;
         gap: 16px;
-        /* Finding F11 moved Test me out of this card, so a one-sentence body (the shortest a
-           session ever renders) now makes the card shorter than the picker's own 264px height
-           cap. anchorFor's own comment explains the picker's flip-above math; this keeps the card
-           tall enough for that math to place a flipped picker without its bottom edge running
-           past the card's, whatever the body's length. */
-        min-height: 280px;
       }
       .focus__head {
         display: flex;
@@ -376,6 +370,17 @@ const READY_STATUS_MILLIS = 4000;
         background: var(--mt-err-bg);
         border: var(--mt-border-w) solid var(--mt-err-border);
         color: var(--mt-err-ink);
+      }
+      /* Finding F11 moved Test me out of this card, so a one-sentence body (the shortest a
+         session ever renders) can make the card shorter than the picker's own 264px height cap.
+         anchorFor's own comment explains the picker's flip-above math; this keeps the card tall
+         enough for that math to place a flipped picker without its bottom edge running past the
+         card's. 768px and above only: below that width the picker is a bottom sheet, anchor()
+         is unused, and this rule would only leave an empty gap under a short answer. */
+      @media (min-width: 768px) {
+        .focus {
+          min-height: 280px;
+        }
       }
       @media (max-width: 767px) {
         .focus {

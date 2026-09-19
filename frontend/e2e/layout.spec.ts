@@ -660,6 +660,23 @@ test('the picker flips above a phrase near the bottom, and stays inside the card
   }
 });
 
+/**
+ * Below 768px the picker is a bottom sheet and anchor() is unused (see the test above's own
+ * counterpart), so the card's min-height — which exists only to give an anchored, flipped
+ * picker room above 768px — must not apply there. A short answer must not leave an empty area
+ * under the hint on a phone.
+ */
+test('the card has no min-height at 390px, so a short answer leaves no empty area', async ({
+  page,
+}) => {
+  await stubCatalogueAndSession(page);
+  await page.setViewportSize(WIDTHS.narrow);
+  await gotoReader(page);
+
+  const minHeight = await page.locator('.focus').evaluate((el) => getComputedStyle(el).minHeight);
+  expect(['0px', 'auto'], 'the card is as tall as its content at 390px').toContain(minHeight);
+});
+
 test('the picker is a bottom sheet at 390px and an anchored popover at 1360px', async ({
   page,
 }) => {
