@@ -13,6 +13,9 @@ import com.mytetz.billing.BillingService
 import com.mytetz.billing.FreemiusConfig
 import com.mytetz.billing.SubscriptionStatus
 import io.ktor.client.HttpClient
+import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.respond
+import io.ktor.client.engine.mock.respondError
 import io.ktor.client.plugins.cookies.HttpCookies
 import io.ktor.client.request.get
 import io.ktor.client.request.header
@@ -21,12 +24,15 @@ import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
+import io.ktor.http.headersOf
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.install
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.routing.routing
+import io.ktor.server.testing.ApplicationTestBuilder
 import io.ktor.server.testing.testApplication
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -34,12 +40,14 @@ import org.bson.Document
 import org.slf4j.LoggerFactory
 import java.net.URLEncoder
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicInteger
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -155,6 +163,7 @@ class BillingRoutesTest {
     }
 
     private class Scope(
+        private val builder: ApplicationTestBuilder,
         val client: HttpClient,
         val account: AccountService,
         val mailSender: CapturingMailSender,
@@ -162,6 +171,17 @@ class BillingRoutesTest {
         val billingRepository: BillingRepository,
         val freemiusConfig: FreemiusConfig,
     ) {
+        /**
+         * A second learner: its own cookie jar and its own signed-in session. The portal rate
+         * limiter keys on the learner's own id, so this is how a test proves that one learner's
+         * limit does not spend a different learner's own allowance.
+         */
+        suspend fun anotherLearner(): HttpClient {
+            val http = builder.createClient { install(HttpCookies); followRedirects = false }
+            signIn(http)
+            return http
+        }
+
         /** Completes a real magic-link sign-in for [http], and returns the address it signed in as. */
         suspend fun signIn(http: HttpClient = client, email: String = "learner-${UUID.randomUUID()}@example.com"): String {
             val requested = http.post("/api/auth/magic-link") {
@@ -212,6 +232,15 @@ class BillingRoutesTest {
         // fallback to the real `freemiusConfig` below. A config-missing test overrides this to a
         // throwing lambda, the same shape `AuthRoutesTest`'s own `magicLinkFactory` uses.
         freemiusConfigFactory: (() -> FreemiusConfig)? = null,
+        // Null keeps every existing test on a portal client that answers a fixed link. No test
+        // outside the "portal" group below ever calls the portal route, so that default never
+        // actually runs. A portal test overrides this the same way a config-missing test
+        // overrides `freemiusConfigFactory` above.
+        freemiusApiClientFactory: (() -> FreemiusApiClient)? = null,
+        // Null keeps every existing test on the production limit — five calls per ten minutes,
+        // far more than one ordinary test needs. A rate-limiter test overrides this to a small
+        // limiter, so it does not need to send many requests to reach it.
+        portalLimiter: FixedWindowRateLimiter? = null,
         block: suspend Scope.() -> Unit,
     ) = testApplication {
         val stack = TestFixtures.sessionApp()
@@ -222,6 +251,7 @@ class BillingRoutesTest {
         val billingRepository = BillingRepository(stack.database)
         val billing = BillingService(billingRepository, config = BillingConfig())
         val freemiusConfig = FreemiusConfig(secretKey = SECRET_KEY, productId = "prod-1", planId = "plan-1")
+        val freemiusApiClient = portalClient(link = "https://example.freemius.com/portal?token=default")
 
         application {
             install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) }
@@ -252,13 +282,63 @@ class BillingRoutesTest {
                     account = account,
                     billing = billing,
                     freemiusConfig = freemiusConfigFactory ?: { freemiusConfig },
+                    freemiusApiClient = freemiusApiClientFactory ?: { freemiusApiClient },
                     cookies = TestFixtures.cookieConfig,
+                    portalLimiter = portalLimiter ?: FixedWindowRateLimiter(
+                        limit = PORTAL_REQUESTS_PER_LEARNER,
+                        windowMillis = PORTAL_WINDOW_MILLIS,
+                    ),
                 )
             }
         }
 
         val client = createClient { install(HttpCookies); followRedirects = false }
-        Scope(client, account, mailSender, stack, billingRepository, freemiusConfig).block()
+        Scope(this, client, account, mailSender, stack, billingRepository, freemiusConfig).block()
+    }
+
+    /**
+     * A [FreemiusApiClient] wired to a [MockEngine] that answers a fixed portal login response,
+     * for one test's own use of `POST /api/billing/portal`.
+     *
+     * [link] set answers `201` with that link, the shape a real subscriber gets. [link] null
+     * answers `404`, the shape `products/generate-portal-login-link`'s own schema documents for a
+     * learner with nothing to manage — see [FreemiusApiClient.fetchPortalLink]'s own KDoc.
+     */
+    private fun portalClient(link: String?): FreemiusApiClient {
+        val engine = MockEngine {
+            if (link != null) {
+                respond(
+                    content = """{"link": "$link"}""",
+                    status = HttpStatusCode.Created,
+                    headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                )
+            } else {
+                respondError(HttpStatusCode.NotFound)
+            }
+        }
+        return FreemiusApiClient(HttpClient(engine), FreemiusApiConfig(apiKey = "test-api-key", productId = "prod-1"))
+    }
+
+    /**
+     * Same as [portalClient], and it also counts each request the mock engine receives, into
+     * [calls]. `BillingRoutes.kt` builds a fresh [FreemiusApiClient] from `freemiusApiClient` on
+     * every request — see `buildConfiguredOrNull` — so [calls] is a plain counter passed in from
+     * the test, and not a field on this client, or a later request would start counting from zero.
+     */
+    private fun portalClientCounting(link: String?, calls: AtomicInteger): FreemiusApiClient {
+        val engine = MockEngine {
+            calls.incrementAndGet()
+            if (link != null) {
+                respond(
+                    content = """{"link": "$link"}""",
+                    status = HttpStatusCode.Created,
+                    headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                )
+            } else {
+                respondError(HttpStatusCode.NotFound)
+            }
+        }
+        return FreemiusApiClient(HttpClient(engine), FreemiusApiConfig(apiKey = "test-api-key", productId = "prod-1"))
     }
 
     private suspend fun HttpResponse.apiError(): ApiError = wireJson.decodeFromString(bodyAsText())
@@ -296,6 +376,122 @@ class BillingRoutesTest {
 
         val body: CheckoutResponse = wireJson.decodeFromString(response.bodyAsText())
         assertTrue(body.url.contains("readonly_user=true"), "the url must mark the address read-only: ${body.url}")
+    }
+
+    // ------------------------------------------------------------------ the customer portal
+
+    @Test
+    fun `portal answers 401 when signed out`() = app {
+        val response = client.post("/api/billing/portal")
+
+        assertEquals(HttpStatusCode.Unauthorized, response.status)
+        assertEquals("SIGN_IN_REQUIRED", response.apiError().code)
+    }
+
+    @Test
+    fun `portal returns the vendor's own link for a signed-in learner`() = app(
+        freemiusApiClientFactory = { portalClient(link = "https://example.freemius.com/portal?token=live") },
+    ) {
+        signIn()
+
+        val response = client.post("/api/billing/portal")
+
+        assertEquals(HttpStatusCode.OK, response.status)
+        val body: PortalResponse = wireJson.decodeFromString(response.bodyAsText())
+        assertEquals("https://example.freemius.com/portal?token=live", body.url)
+    }
+
+    @Test
+    fun `portal answers NO_SUBSCRIPTION when the vendor gives no link`() = app(
+        freemiusApiClientFactory = { portalClient(link = null) },
+    ) {
+        signIn()
+
+        val response = client.post("/api/billing/portal")
+
+        assertEquals(HttpStatusCode.NotFound, response.status)
+        assertEquals("NO_SUBSCRIPTION", response.apiError().code)
+    }
+
+    @Test
+    fun `portal answers BILLING_UNAVAILABLE when the freemius api credential is missing`() = app(
+        freemiusApiClientFactory = { error("FREEMIUS_API_KEY is not set") },
+    ) {
+        signIn()
+
+        val response = client.post("/api/billing/portal")
+
+        assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
+        assertEquals("BILLING_UNAVAILABLE", response.apiError().code)
+    }
+
+    // ------------------------------------------------------------------ the portal rate limiter
+
+    @Test
+    fun `a learner can call the portal up to the limit, then is refused`() = app(
+        portalLimiter = FixedWindowRateLimiter(limit = 2, windowMillis = 600_000),
+    ) {
+        signIn()
+
+        assertEquals(HttpStatusCode.OK, client.post("/api/billing/portal").status)
+        assertEquals(HttpStatusCode.OK, client.post("/api/billing/portal").status)
+        val refused = client.post("/api/billing/portal")
+
+        assertEquals(HttpStatusCode.TooManyRequests, refused.status)
+        assertEquals("RATE_LIMITED", refused.apiError().code)
+        // Same shape `QuizRoutes.kt`'s own 429 uses: a `retryAfter` field, and the same value on
+        // the `Retry-After` header — a proxy, a client library and a crawler all read the header,
+        // and none of them reads our JSON.
+        val retryAfter = assertNotNull(refused.apiError().retryAfter, "a 429 with no retryAfter tells the client to guess")
+        assertEquals(retryAfter.toString(), refused.headers[HttpHeaders.RetryAfter])
+    }
+
+    @Test
+    fun `a refused portal call makes no vendor request`() {
+        val calls = AtomicInteger(0)
+        app(
+            portalLimiter = FixedWindowRateLimiter(limit = 1, windowMillis = 600_000),
+            freemiusApiClientFactory = {
+                portalClientCounting(link = "https://example.freemius.com/portal?token=count", calls)
+            },
+        ) {
+            signIn()
+
+            assertEquals(HttpStatusCode.OK, client.post("/api/billing/portal").status)
+            assertEquals(1, calls.get(), "fixture error: the allowed call must reach the vendor")
+
+            val refused = client.post("/api/billing/portal")
+
+            assertEquals(HttpStatusCode.TooManyRequests, refused.status)
+            assertEquals(1, calls.get(), "a refused call must not reach the vendor")
+        }
+    }
+
+    @Test
+    fun `the portal limit of one learner does not spend a second learner's own allowance`() = app(
+        portalLimiter = FixedWindowRateLimiter(limit = 1, windowMillis = 600_000),
+    ) {
+        signIn()
+        assertEquals(HttpStatusCode.OK, client.post("/api/billing/portal").status)
+        assertEquals(HttpStatusCode.TooManyRequests, client.post("/api/billing/portal").status)
+
+        val other = anotherLearner()
+
+        assertEquals(HttpStatusCode.OK, other.post("/api/billing/portal").status)
+    }
+
+    @Test
+    fun `a signed-out portal call answers 401 and spends no learner's allowance`() = app(
+        portalLimiter = FixedWindowRateLimiter(limit = 1, windowMillis = 600_000),
+    ) {
+        val signedOutResponse = client.post("/api/billing/portal")
+        assertEquals(HttpStatusCode.Unauthorized, signedOutResponse.status)
+
+        // The limiter keys on the signed-in learner's own id. A signed-out call resolves no such
+        // id, so it must never reach `tryAcquire` at all — proven here by a learner who signs in
+        // right after, and still gets the full limit.
+        signIn()
+        assertEquals(HttpStatusCode.OK, client.post("/api/billing/portal").status)
     }
 
     // ------------------------------------------------------------------ the webhook and email resolution

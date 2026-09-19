@@ -1,8 +1,11 @@
 import {
   Component,
+  DestroyRef,
   ElementRef,
   afterRenderEffect,
   computed,
+  effect,
+  inject,
   input,
   output,
   signal,
@@ -17,6 +20,16 @@ import {
 } from '../ui/verb-picker.component';
 import { MediaRendererComponent } from './media-renderer.component';
 import { rootTextMatchesBody, selectionToSpan } from './selection';
+
+/**
+ * How long the status paragraph keeps "The explanation is ready." before it goes quiet again.
+ *
+ * Four seconds gives a screen reader time to read the whole sentence at an ordinary rate, with a
+ * margin for a slower voice or a queue of other announcements. After this time the element goes
+ * back to empty text. So a later stream's "on its way" text is always a real change, and not a
+ * repeat of text that happens to still be there.
+ */
+const READY_STATUS_MILLIS = 4000;
 
 /**
  * The card the learner actually reads, and the only place a selection is turned into a span.
@@ -86,13 +99,22 @@ import { rootTextMatchesBody, selectionToSpan } from './selection';
       >{{ body() }}</p>
 
       @if (isStreaming() || streamingText().length > 0) {
-        <p class="focus__streaming" role="status" aria-live="polite">
+        <p class="focus__streaming" aria-live="off">
           {{ streamingText() }}
           @if (isStreaming()) {
             <span class="focus__caret" aria-hidden="true">▍</span>
           }
         </p>
       }
+      <!--
+        One role="status" element for the whole card, changed twice per stream: once when a
+        stream starts, once when it ends. It never binds streamingText(), so a token never
+        touches it - that is what keeps it to two changes and not one per token. It sits outside
+        the @if above, so it is in the DOM, with no text, before a learner's first stream ever
+        starts. A screen reader ignores a live region that gets its text the same moment it joins
+        the DOM, so the empty element has to be there first.
+      -->
+      <p class="visually-hidden focus__stream-status" role="status">{{ streamStatus() }}</p>
 
       @if (media(); as m) {
         <app-media-renderer [media]="m" />
@@ -219,6 +241,18 @@ import { rootTextMatchesBody, selectionToSpan } from './selection';
           opacity: 0;
         }
       }
+      /* Copied from reader-page.component.ts's own .visually-hidden rule, on purpose, and not
+         shared. Issue #102 later replaces every copy - catalog-page.component.ts,
+         reader-page.component.ts, account-page.component.ts, and this one - with one class.
+         This issue does not do that. */
+      .visually-hidden {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip-path: inset(50%);
+        white-space: nowrap;
+      }
       .focus__hint {
         margin: 0;
         font-size: 13px;
@@ -254,6 +288,13 @@ export class FocusCardComponent {
   /** The diagram and image for the node in focus, or `null` when it carries none — every verb but
    * `VISUALIZE`, and a `VISUALIZE` node before the page supplies the field. */
   readonly media = input<Media | null>(null);
+  /** True when the stream that just ended did not succeed. The reader page binds this from
+   * `SessionStore.error() !== null`, read at the same point `isStreaming()` turns false — see the
+   * comment in the `finally` block of `SessionStore.explain` for the write order that makes this
+   * safe. A failed
+   * stream must not say "The explanation is ready.", because it is not. The learner already reads
+   * why, from the reader page's own error banner, sign-in panel, or subscribe wall. */
+  readonly explainFailed = input.required<boolean>();
   /** The step number and the verb of the node in focus, for the eyebrow. The reader page supplies
    * both from `NodeView`. */
   readonly step = input<number | null>(null);
@@ -286,6 +327,15 @@ export class FocusCardComponent {
   protected readonly bodyMatches = signal(true);
   /** The body the last post-render check ran against, so a change can be told from a re-render. */
   private checkedBody: string | null = null;
+  /** The text the status paragraph shows. A signal of its own, and not `streamStatus` itself,
+   * because the constructor's effect below writes it from a timer, well after the render that
+   * first read `isStreaming()`. */
+  private readonly streamAnnouncement = signal('');
+  /** [isStreaming] on the previous run of the effect below, so that effect can tell "a stream just
+   * started" and "a stream just ended" apart from "isStreaming stayed the same". */
+  private wasStreaming = false;
+  /** The pending clear of "The explanation is ready.", or `null` when none is pending. */
+  private readyStatusTimer: ReturnType<typeof setTimeout> | null = null;
 
   readonly canExplain = computed(
     () =>
@@ -316,6 +366,10 @@ export class FocusCardComponent {
     return 'Highlight a phrase, then choose how to go deeper.';
   });
 
+  /** The text of the one `role="status"` element that tells a screen reader about a stream. See
+   * the constructor's effect below for the two moments this changes. */
+  protected readonly streamStatus = computed(() => this.streamAnnouncement());
+
   constructor() {
     afterRenderEffect({
       // `read`, not `mixedReadWrite`: this reads `textContent` and writes only signals. It re-runs
@@ -333,6 +387,45 @@ export class FocusCardComponent {
         }
       },
     });
+
+    // The screen reader announcement for a stream. This effect reads only [isStreaming], and
+    // never [streamingText], so one appended token never runs it — that is what keeps the status
+    // paragraph to two changes per stream. It also acts only on an *edge* of [isStreaming]: true
+    // right after false, or false right after true. The steady value in between changes nothing.
+    effect(() => {
+      const streaming = this.isStreaming();
+      const wasStreaming = this.wasStreaming;
+      this.wasStreaming = streaming;
+
+      if (streaming && !wasStreaming) {
+        // A new stream starts. Any "ready" text a previous stream left waiting to clear is now
+        // stale, so its timer goes too.
+        this.clearReadyStatusTimer();
+        this.streamAnnouncement.set('The explanation is on its way.');
+      } else if (!streaming && wasStreaming) {
+        if (this.explainFailed()) {
+          // The stream ended, but it did not succeed. "Ready" would be false, so the element goes
+          // quiet instead. See [explainFailed]'s own comment for where the learner reads why.
+          this.streamAnnouncement.set('');
+          return;
+        }
+        this.streamAnnouncement.set('The explanation is ready.');
+        // See [READY_STATUS_MILLIS] for how long this text stays. Cleared on destroy below, so a
+        // card the learner has already left never writes to a signal nobody reads any more.
+        this.readyStatusTimer = setTimeout(() => {
+          this.readyStatusTimer = null;
+          this.streamAnnouncement.set('');
+        }, READY_STATUS_MILLIS);
+      }
+    });
+
+    inject(DestroyRef).onDestroy(() => this.clearReadyStatusTimer());
+  }
+
+  private clearReadyStatusTimer(): void {
+    if (this.readyStatusTimer === null) return;
+    clearTimeout(this.readyStatusTimer);
+    this.readyStatusTimer = null;
   }
 
   /**

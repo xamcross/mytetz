@@ -23,6 +23,13 @@ export interface CheckoutResponse {
   url: string;
 }
 
+/** The body of `POST /api/billing/portal`. The url points to the learner's own Freemius customer
+ * portal page. The server reads the learner's email from the session. The browser sends no email
+ * and no id on this call. */
+export interface PortalResponse {
+  url: string;
+}
+
 @Injectable({ providedIn: 'root' })
 export class ApiService {
   private readonly http = inject(HttpClient);
@@ -117,6 +124,17 @@ export class ApiService {
    */
   checkout(): Promise<CheckoutResponse> {
     return firstValueFrom(this.http.post<CheckoutResponse>('/api/billing/checkout', null));
+  }
+
+  /**
+   * Asks the backend for a Freemius customer portal URL for the signed-in learner.
+   *
+   * The route reads the learner's email from the session. This method sends no email and no id.
+   * The route answers `401` when the caller is not signed in, and `404 NO_SUBSCRIPTION` when the
+   * learner has no subscription to manage.
+   */
+  portal(): Promise<PortalResponse> {
+    return firstValueFrom(this.http.post<PortalResponse>('/api/billing/portal', null));
   }
 
   /**

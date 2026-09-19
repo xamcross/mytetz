@@ -63,6 +63,16 @@ class ExplanationValidator(
                 )
         }
 
+        return checkBody(rawBody)
+    }
+
+    /**
+     * The body checks alone, with no stop-reason gate in front of them. [validate] calls this
+     * after its own gate passes. [validateStructuredBody] calls this directly, because a forced
+     * tool call carries no stop-reason ambiguity for a gate to defend against — see this class's
+     * own note on [validateStructuredBody].
+     */
+    private fun checkBody(rawBody: String): ValidationResult {
         val body = rawBody.trim()
 
         if (body.isEmpty()) return ValidationResult.Invalid("empty body")
@@ -93,6 +103,17 @@ class ExplanationValidator(
 
         return ValidationResult.Valid(body)
     }
+
+    /**
+     * The `VISUALIZE` path's own gate. It skips the stop-reason check [validate] runs first,
+     * because that check defends against one thing only: a refusal or a truncation that arrives
+     * looking like a plausible, complete `end_turn` body on the streaming path. A forced tool call
+     * cannot arrive that way — `LlmClient.structured` either returns a `StructuredResult`, because
+     * the model filled the tool's required fields, or it throws
+     * `LlmStructuredOutputMissingException` before one exists. There is no silent, plausible-
+     * looking third case here for a stop-reason gate to catch.
+     */
+    fun validateStructuredBody(rawBody: String): ValidationResult = checkBody(rawBody)
 
     companion object {
 

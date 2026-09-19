@@ -1,8 +1,13 @@
 import { ErrorHandler } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { provideHttpClient } from '@angular/common/http';
+import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { FocusCardComponent } from './focus-card.component';
+import { EXPLAIN_STREAM, ExplainStreamFn, SessionStore } from './session.store';
 import { rootTextMatchesBody } from './selection';
-import { Media, SpanPayload, Verb } from '../core/models';
+import { AccountStore } from '../core/account.store';
+import { Media, SessionView, SpanPayload, Verb } from '../core/models';
+import { ExplainEvent, ExplainStreamError } from '../core/sse.client';
 
 const BODY = 'The pillars of modern physics.';
 
@@ -12,13 +17,31 @@ describe('FocusCardComponent', () => {
   /** Anything Angular reported while handling an event — a listener that throws never reaches
    * `dispatchEvent`'s caller, so this is the only place a handler crash is visible. */
   let errors: unknown[];
+  /** The event sequence `SessionStore.explain` receives, for the specs that drive the real store
+   * through an explain call. Set per spec; the default fails loudly rather than silently
+   * streaming nothing, the same guard `session.store.spec.ts` uses. */
+  let script: ExplainStreamFn;
 
   beforeEach(async () => {
     errors = [];
+    script = () => {
+      throw new Error('this spec called explain() without installing a stream script');
+    };
     TestBed.configureTestingModule({
       imports: [FocusCardComponent],
       providers: [
         { provide: ErrorHandler, useValue: { handleError: (e: unknown) => errors.push(e) } },
+        // Only a few specs below inject `SessionStore`, but the module can be configured once
+        // per test, before the first `TestBed.inject`. Adding the providers here, rather than
+        // inside those specs, keeps every test on the same setup.
+        SessionStore,
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        {
+          provide: EXPLAIN_STREAM,
+          useValue: ((sessionId, body, signal) =>
+            script(sessionId, body, signal)) satisfies ExplainStreamFn,
+        },
       ],
     });
     fixture = TestBed.createComponent(FocusCardComponent);
@@ -27,18 +50,97 @@ describe('FocusCardComponent', () => {
     fixture.componentRef.setInput('body', BODY);
     fixture.componentRef.setInput('streamingText', '');
     fixture.componentRef.setInput('isStreaming', false);
+    fixture.componentRef.setInput('explainFailed', false);
     fixture.detectChanges();
     await fixture.whenStable();
     fixture.detectChanges();
   });
 
-  afterEach(() => window.getSelection()?.removeAllRanges());
+  afterEach(() => {
+    window.getSelection()?.removeAllRanges();
+    // A test below may turn on fake timers. Real timers are the default for every other test in
+    // this file, so each test leaves the clock the way it found it.
+    vi.useRealTimers();
+    // A few specs below drive a real `SessionStore` over HTTP. This fails loudly if one of them
+    // leaves a request unanswered.
+    TestBed.inject(HttpTestingController).verify();
+  });
 
   const bodyEl = (): HTMLElement => fixture.nativeElement.querySelector('.focus__body');
+  const statusEl = (): HTMLElement => fixture.nativeElement.querySelector('.focus__stream-status');
   const verbButton = (verb: Verb): HTMLButtonElement | null =>
     fixture.nativeElement.querySelector(`button[data-verb="${verb}"]`);
   /** True when the picker is on screen, which is the only time a verb can be pressed. */
   const pickerLive = (): boolean => verbButton('EXPLAIN') !== null;
+
+  /** A one-node session, just enough for `SessionStore.explain` to run against a real
+   * `currentNodeId`. Mirrors the fixture shape `session.store.spec.ts` uses. */
+  const SESSION_VIEW: SessionView = {
+    sessionId: 's1',
+    topicSlug: 'quantum-physics',
+    rootNodeId: 'n0',
+    currentNodeId: 'n0',
+    nodes: [
+      {
+        nodeId: 'n0',
+        parentNodeId: null,
+        explanationKey: 'k0',
+        span: '',
+        verb: 'SEED',
+        variant: 0,
+        depth: 0,
+      },
+    ],
+    status: 'ACTIVE',
+    explanations: { k0: 'Quantum mechanics is…' },
+  };
+
+  /** What `GET /api/sessions/s1` returns after a successful explain under `n0`. */
+  const SESSION_VIEW_AFTER_EXPLAIN: SessionView = {
+    ...SESSION_VIEW,
+    currentNodeId: 'n1',
+    nodes: [
+      ...SESSION_VIEW.nodes,
+      {
+        nodeId: 'n1',
+        parentNodeId: 'n0',
+        explanationKey: 'k1',
+        span: 'pillars',
+        verb: 'EXPLAIN',
+        variant: 0,
+        depth: 1,
+      },
+    ],
+    explanations: { ...SESSION_VIEW.explanations, k1: 'The four pillars are…' },
+  };
+
+  const EXPLAIN_SPAN: SpanPayload = { text: 'pillars', start: 4, end: 11 };
+
+  const streamDelta = (t: string): ExplainEvent => ({ event: 'delta', data: { t } });
+  const streamDone = (contentKey: string): ExplainEvent => ({
+    event: 'done',
+    data: { contentKey, grounded: true },
+  });
+
+  /** Drains the microtask queue. `SessionStore.load` starts the topic-title read and does not
+   * await it, and this is what lets that request reach the HTTP mock — the same reason
+   * `session.store.spec.ts`'s own `tick` helper exists. */
+  const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+
+  /** Loads session `s1` into a real `SessionStore`, answering both requests a load makes, the
+   * way `session.store.spec.ts`'s own `loadSession` helper does. */
+  async function loadRealSession(store: SessionStore, http: HttpTestingController): Promise<void> {
+    const loaded = store.load('s1');
+    http.expectOne('/api/sessions/s1').flush(SESSION_VIEW);
+    await loaded;
+    http.expectOne('/api/catalog/topics/quantum-physics').flush({
+      slug: 'quantum-physics',
+      title: 'Quantum Physics',
+      category: 'Physics',
+      summary: 'A summary.',
+    });
+    await tick();
+  }
 
   function select(start: number, end: number): void {
     const range = document.createRange();
@@ -292,5 +394,296 @@ describe('FocusCardComponent', () => {
     fixture.detectChanges();
 
     expect(pickerLive()).toBe(false);
+  });
+
+  it('takes the live region off the streamed text itself, so a screen reader never reads one token', () => {
+    // The old markup put `role="status"` on this paragraph, so every appended token counted as a
+    // change. A screen reader then read fragments, or read nothing useful. The live region moves
+    // to its own element below, and this paragraph turns its own announcement off.
+    fixture.componentRef.setInput('isStreaming', true);
+    fixture.componentRef.setInput('streamingText', 'The four pillars');
+    fixture.detectChanges();
+
+    const streaming: HTMLElement = fixture.nativeElement.querySelector('.focus__streaming');
+    expect(streaming.getAttribute('role')).toBeNull();
+    expect(streaming.getAttribute('aria-live')).toBe('off');
+  });
+
+  it('holds a status element in the DOM before any stream starts, with no text in it', () => {
+    // A screen reader ignores a live region that gets its first text at the same moment it joins
+    // the DOM. The element must exist, empty, from the very first render, and not only once a
+    // stream begins.
+    const status = statusEl();
+    expect(status).not.toBeNull();
+    expect(status.getAttribute('role')).toBe('status');
+    expect(status.textContent?.trim()).toBe('');
+  });
+
+  it('says the explanation is on its way once a stream starts', () => {
+    fixture.componentRef.setInput('isStreaming', true);
+    fixture.componentRef.setInput('streamingText', 'The four');
+    fixture.detectChanges();
+
+    expect(statusEl().textContent?.trim()).toBe('The explanation is on its way.');
+  });
+
+  it('says the explanation is ready once the stream ends', () => {
+    fixture.componentRef.setInput('isStreaming', true);
+    fixture.detectChanges();
+    fixture.componentRef.setInput('isStreaming', false);
+    fixture.detectChanges();
+
+    expect(statusEl().textContent?.trim()).toBe('The explanation is ready.');
+  });
+
+  it('announces one full stream exactly two times, and not once for every token', () => {
+    // `SessionStore.isStreaming` and `SessionStore.streamingText` are the two signals the reader
+    // page binds into this component's inputs. This test drives those same signals the way
+    // `SessionStore.explain` drives them: `isStreaming` true, `streamingText` reset, one append
+    // per token, then `isStreaming` false. The proof is then about a real stream, and not about a
+    // story of one.
+    vi.useFakeTimers();
+    const store = TestBed.inject(SessionStore);
+
+    const changes: string[] = [];
+    let previousText = statusEl().textContent?.trim() ?? '';
+    const recordChange = (): void => {
+      const text = statusEl().textContent?.trim() ?? '';
+      if (text !== previousText) {
+        changes.push(text);
+        previousText = text;
+      }
+    };
+
+    // Mirrors the two opening lines of `SessionStore.explain`.
+    store.isStreaming.set(true);
+    store.streamingText.set('');
+    fixture.componentRef.setInput('isStreaming', store.isStreaming());
+    fixture.componentRef.setInput('streamingText', store.streamingText());
+    fixture.detectChanges();
+    recordChange();
+
+    const tokens = [
+      'The',
+      ' four',
+      ' pillars',
+      ' of',
+      ' modern',
+      ' physics',
+      ' are',
+      ' mass',
+      ',',
+      ' energy',
+      ',',
+      ' space',
+      ' and',
+      ' time',
+      '.',
+    ];
+    for (const token of tokens) {
+      // Mirrors `SessionStore.explain`'s `delta` branch: one append per token.
+      store.streamingText.update((text) => text + token);
+      fixture.componentRef.setInput('streamingText', store.streamingText());
+      fixture.detectChanges();
+      recordChange();
+    }
+
+    // Mirrors the `finally` block of `SessionStore.explain`.
+    store.isStreaming.set(false);
+    fixture.componentRef.setInput('isStreaming', store.isStreaming());
+    fixture.detectChanges();
+    recordChange();
+
+    expect(changes).toEqual(['The explanation is on its way.', 'The explanation is ready.']);
+  });
+
+  it('never announces "ready" when a stream fails, and clears the status text instead', async () => {
+    // A real 429, a real network drop, and `SPAN_MISMATCH` all take this shape: `meta`/`delta`
+    // events already sent, then `SessionStore.explain` throws. Mirrors
+    // `session.store.spec.ts`'s own "discards partially streamed prose" test.
+    const store = TestBed.inject(SessionStore);
+    const http = TestBed.inject(HttpTestingController);
+    vi.spyOn(TestBed.inject(AccountStore), 'load').mockResolvedValue(undefined);
+    await loadRealSession(store, http);
+
+    const changes: string[] = [];
+    let previousText = statusEl().textContent?.trim() ?? '';
+    const recordChange = (): void => {
+      const text = statusEl().textContent?.trim() ?? '';
+      if (text !== previousText) {
+        changes.push(text);
+        previousText = text;
+      }
+    };
+    // Mirrors what `ReaderPageComponent` binds: `explainFailed` follows `store.error() !== null`.
+    const pushFromStore = (): void => {
+      fixture.componentRef.setInput('isStreaming', store.isStreaming());
+      fixture.componentRef.setInput('streamingText', store.streamingText());
+      fixture.componentRef.setInput('explainFailed', store.error() !== null);
+    };
+
+    script = async function* (): AsyncGenerator<ExplainEvent> {
+      yield streamDelta('half an answer');
+      throw new ExplainStreamError(
+        'GENERATION_FAILED',
+        'the explanation could not be generated; try again',
+        null,
+        true,
+      );
+    };
+
+    const explaining = store.explain(EXPLAIN_SPAN, 'EXPLAIN');
+    pushFromStore();
+    fixture.detectChanges();
+    recordChange();
+
+    await explaining;
+    pushFromStore();
+    fixture.detectChanges();
+    recordChange();
+
+    expect(store.error()?.code).toBe('GENERATION_FAILED');
+    expect(changes).toEqual(['The explanation is on its way.', '']);
+  });
+
+  it('never announces "ready" when the wall refuses a stream', async () => {
+    // A wall refusal is a pre-stream refusal: nothing is rendered before the throw. Mirrors
+    // `session.store.spec.ts`'s own "reports a pre-stream refusal" test, with a wall code.
+    const store = TestBed.inject(SessionStore);
+    const http = TestBed.inject(HttpTestingController);
+    vi.spyOn(TestBed.inject(AccountStore), 'load').mockResolvedValue(undefined);
+    await loadRealSession(store, http);
+
+    const changes: string[] = [];
+    let previousText = statusEl().textContent?.trim() ?? '';
+    const recordChange = (): void => {
+      const text = statusEl().textContent?.trim() ?? '';
+      if (text !== previousText) {
+        changes.push(text);
+        previousText = text;
+      }
+    };
+    const pushFromStore = (): void => {
+      fixture.componentRef.setInput('isStreaming', store.isStreaming());
+      fixture.componentRef.setInput('streamingText', store.streamingText());
+      fixture.componentRef.setInput('explainFailed', store.error() !== null);
+    };
+
+    script = async function* (): AsyncGenerator<ExplainEvent> {
+      throw new ExplainStreamError('TRIAL_EXHAUSTED', 'the free trial is used up', null, false);
+    };
+
+    const explaining = store.explain(EXPLAIN_SPAN, 'EXPLAIN');
+    pushFromStore();
+    fixture.detectChanges();
+    recordChange();
+
+    await explaining;
+    pushFromStore();
+    fixture.detectChanges();
+    recordChange();
+
+    expect(store.error()?.code).toBe('TRIAL_EXHAUSTED');
+    expect(changes).toEqual(['The explanation is on its way.', '']);
+  });
+
+  it('announces a second, successful stream correctly after a failed one', async () => {
+    const store = TestBed.inject(SessionStore);
+    const http = TestBed.inject(HttpTestingController);
+    vi.spyOn(TestBed.inject(AccountStore), 'load').mockResolvedValue(undefined);
+    await loadRealSession(store, http);
+
+    const changes: string[] = [];
+    let previousText = statusEl().textContent?.trim() ?? '';
+    const recordChange = (): void => {
+      const text = statusEl().textContent?.trim() ?? '';
+      if (text !== previousText) {
+        changes.push(text);
+        previousText = text;
+      }
+    };
+    const pushFromStore = (): void => {
+      fixture.componentRef.setInput('isStreaming', store.isStreaming());
+      fixture.componentRef.setInput('streamingText', store.streamingText());
+      fixture.componentRef.setInput('explainFailed', store.error() !== null);
+    };
+
+    script = async function* (): AsyncGenerator<ExplainEvent> {
+      throw new ExplainStreamError('GENERATION_FAILED', 'could not generate', null, false);
+    };
+    let explaining = store.explain(EXPLAIN_SPAN, 'EXPLAIN');
+    pushFromStore();
+    fixture.detectChanges();
+    recordChange();
+    await explaining;
+    pushFromStore();
+    fixture.detectChanges();
+    recordChange();
+
+    // The failed attempt leaves nothing behind that could stop the next one from announcing
+    // correctly: not a stuck flag, and not a leftover timer.
+    script = async function* (): AsyncGenerator<ExplainEvent> {
+      yield streamDelta('The four pillars are…');
+      yield streamDone('k1');
+    };
+    explaining = store.explain(EXPLAIN_SPAN, 'EXPLAIN');
+    pushFromStore();
+    fixture.detectChanges();
+    recordChange();
+
+    // Drains the microtask queue, the same way `session.store.spec.ts`'s own tests do before
+    // expecting the re-fetch: the generator's two `yield`s each need their own turn before
+    // `SessionStore.explain` reaches `await this.refresh(sessionId)`.
+    await tick();
+    http.expectOne('/api/sessions/s1').flush(SESSION_VIEW_AFTER_EXPLAIN);
+    await explaining;
+    pushFromStore();
+    fixture.detectChanges();
+    recordChange();
+
+    expect(changes).toEqual([
+      'The explanation is on its way.',
+      '',
+      'The explanation is on its way.',
+      'The explanation is ready.',
+    ]);
+  });
+
+  it('clears "The explanation is ready." once it has stayed long enough to be read', () => {
+    // Four seconds — see the comment on `READY_STATUS_MILLIS` in the component for the reason.
+    // The test advances a fake clock, and it does not wait on a real one, so the test stays fast
+    // and exact.
+    vi.useFakeTimers();
+    fixture.componentRef.setInput('isStreaming', true);
+    fixture.detectChanges();
+    fixture.componentRef.setInput('isStreaming', false);
+    fixture.detectChanges();
+    expect(statusEl().textContent?.trim()).toBe('The explanation is ready.');
+
+    vi.advanceTimersByTime(4000);
+    fixture.detectChanges();
+
+    expect(statusEl().textContent?.trim()).toBe('');
+  });
+
+  it('clears its pending timer on destroy, so a card the learner has left writes to nothing', () => {
+    vi.useFakeTimers();
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+
+    fixture.componentRef.setInput('isStreaming', true);
+    fixture.detectChanges();
+    fixture.componentRef.setInput('isStreaming', false);
+    fixture.detectChanges();
+
+    // Finds the exact timer this component started for the "ready" text, by its own delay, so
+    // the assertion below cannot pass on an unrelated `clearTimeout` call from somewhere else.
+    const readyTimerCallIndex = setTimeoutSpy.mock.calls.findIndex(([, delay]) => delay === 4000);
+    expect(readyTimerCallIndex).toBeGreaterThanOrEqual(0);
+    const readyTimerId = setTimeoutSpy.mock.results[readyTimerCallIndex].value;
+
+    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout');
+    fixture.destroy();
+
+    expect(clearTimeoutSpy).toHaveBeenCalledWith(readyTimerId);
   });
 });

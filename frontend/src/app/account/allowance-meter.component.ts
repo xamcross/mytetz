@@ -1,5 +1,6 @@
-import { Component, inject } from '@angular/core';
+import { Component, inject, signal } from '@angular/core';
 import { AccountStore } from '../core/account.store';
+import { ApiService } from '../core/api.service';
 
 /** The statuses that carry a live count. Every other status — `NONE`, `EXPIRED`, or a status this
  * client does not yet know — shows a subscribe link and no count, because there is nothing true
@@ -41,9 +42,15 @@ const METERED_STATUSES: ReadonlySet<string> = new Set([
             }
           }
         } @else {
-          <!-- Present and inert, the same as the wall panel's own button: there is no checkout
-               route yet for either one to call. Task 13 wires both. -->
-          <button type="button" class="mt-pill mt-pill--coral allowance-meter__subscribe">
+          @if (subscribeError(); as message) {
+            <span class="allowance-meter__error" role="alert">{{ message }}</span>
+          }
+          <button
+            type="button"
+            class="mt-pill mt-pill--coral allowance-meter__subscribe"
+            [disabled]="subscribing()"
+            (click)="subscribe()"
+          >
             Subscribe
           </button>
         }
@@ -70,12 +77,89 @@ const METERED_STATUSES: ReadonlySet<string> = new Set([
         color: var(--mt-muted);
         white-space: nowrap;
       }
+      .allowance-meter__error {
+        color: var(--mt-err-ink);
+        font-weight: 700;
+      }
+      /*
+       * Issue #100. At a phone width, the count and the detail together are wider than the
+       * header bar. A real run measures a scroll width of 488px inside a 390px window. This rule
+       * hides the detail, and only inside the header. host-context(.bar) matches the header's own
+       * bar element. The account page renders this same component outside that element, in its
+       * own card, so the account page keeps the full detail text.
+       */
+      @media (max-width: 767px) {
+        :host-context(.bar) .allowance-meter__detail {
+          display: none;
+        }
+        /*
+         * Issue #100, round 2. The checkout error can wrap into several lines. Inside the row,
+         * a tall child does not grow the bar: the bar keeps its own fixed height of 64px, and
+         * the child overflows over the bar's other elements instead. A real run measures the
+         * error box from y=-16 to y=89, well outside the bar's own 0-to-64 range.
+         *
+         * These two rules take the error out of the row and put it as a small card below the
+         * bar. The card hangs from this component's own host element, so it moves with the
+         * header when the page scrolls, and it needs no positioned ancestor in another file. A
+         * card with position: fixed was the first attempt. The bar is not sticky, so such a card
+         * stays on the screen, away from the header, after the learner scrolls. The host is about
+         * 38px tall and sits in the middle of the 64px bar, so 16px below the host is below the
+         * bar. The layout test asserts that result, and not this arithmetic.
+         */
+        :host-context(.bar) {
+          position: relative;
+        }
+        :host-context(.bar) .allowance-meter__error {
+          position: absolute;
+          top: calc(100% + 16px);
+          right: 0;
+          z-index: 1;
+          width: max-content;
+          max-width: 260px;
+          padding: 8px 12px;
+          background: var(--mt-err-bg);
+          border: var(--mt-border-w) solid var(--mt-err-border);
+          border-radius: var(--mt-r-row);
+        }
+      }
     `,
   ],
 })
 export class AllowanceMeterComponent {
   private readonly account = inject(AccountStore);
+  private readonly api = inject(ApiService);
   readonly view = this.account.view;
+
+  /** True while a checkout request is in flight. The button stays disabled during this time.
+   * This stops a second click from sending a second request before the redirect happens. See
+   * `WallPanelComponent.subscribing`, which the same pattern comes from. */
+  readonly subscribing = signal(false);
+  /** The message for a failed checkout request, or `null` when there is no failure. */
+  readonly subscribeError = signal<string | null>(null);
+
+  /** Asks the backend for a checkout URL, then follows it. See `WallPanelComponent.subscribe`,
+   * which this method copies: the meter and the wall panel show the same button for the same
+   * reason, so both start checkout the same way. */
+  async subscribe(): Promise<void> {
+    if (this.subscribing()) return;
+    this.subscribing.set(true);
+    this.subscribeError.set(null);
+    try {
+      const { url } = await this.api.checkout();
+      this.redirect(url);
+      // This method leaves `subscribing` set to true after success. The browser is about to
+      // leave this page, so there is nothing left to re-enable.
+    } catch {
+      this.subscribeError.set('Could not start checkout. Check your connection and try again.');
+      this.subscribing.set(false);
+    }
+  }
+
+  /** Sends the browser to [url]. This method stays separate so a test can replace it. jsdom does
+   * not implement real navigation, so a test cannot check `window.location` directly. */
+  redirect(url: string): void {
+    window.location.href = url;
+  }
 
   /** True for a status that carries a live count. See [METERED_STATUSES]. */
   metered(status: string): boolean {

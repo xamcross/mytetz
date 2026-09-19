@@ -6,6 +6,7 @@ import com.mytetz.llm.LlmRequest
 import com.mytetz.llm.LlmStreamTruncatedException
 import com.mytetz.llm.LlmUsage
 import com.mytetz.llm.Pricing
+import com.mytetz.llm.StructuredRequest
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.FlowCollector
@@ -13,6 +14,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.coroutines.cancellation.CancellationException
 
@@ -166,6 +168,12 @@ class ExplanationGraph(
     private val validator: ExplanationValidator,
     private val config: GraphConfig = GraphConfig(),
     private val clock: () -> Long = System::currentTimeMillis,
+    /**
+     * The image half of `VISUALIZE`. Defaulted to "always answer no image" so every existing
+     * caller of this constructor keeps compiling unchanged, and so this module needs no HTTP
+     * client of its own — see [CommonsLookup]'s own KDoc for the rule this follows.
+     */
+    private val commonsLookup: CommonsLookup = { _, _ -> null },
 ) {
 
     private class KeyLock {
@@ -197,6 +205,11 @@ class ExplanationGraph(
      * The sentence joined this list in the final review of slices 0-1. It is a prompt input, and
      * `(parentKey, span)` does not determine it: one word can appear twice in one body, in two
      * sentences. [ContentKey] holds the full argument.
+     *
+     * The prompt version selected here is [GraphConfig.visualizePromptVersion] for a `VISUALIZE`
+     * request, and [GraphConfig.promptVersion] for every other verb. A seed request can never
+     * carry `Verb.VISUALIZE` — see `SessionService.seedRequest` — so the seed branch below needs
+     * no change for this. See the plan's own Decision 5 for why the two versions are kept apart.
      */
     fun keyFor(request: GraphRequest): String =
         if (request.verb == Verb.SEED) {
@@ -208,7 +221,11 @@ class ExplanationGraph(
                 spanSentence = request.spanSentence,
                 verb = request.verb,
                 variant = request.variant,
-                promptVersion = config.promptVersion,
+                promptVersion = if (request.verb == Verb.VISUALIZE) {
+                    config.visualizePromptVersion
+                } else {
+                    config.promptVersion
+                },
                 modelFamily = llm.modelFamily,
             )
         }
@@ -326,6 +343,10 @@ class ExplanationGraph(
         key: String,
         onEstimatedSpend: suspend (costMicros: Long, reason: String) -> Unit,
     ): GraphChunk.Done {
+        if (request.verb == Verb.VISUALIZE) {
+            return generateVisualize(request, key)
+        }
+
         val userPrompt = PromptBuilder.user(
             PromptContext(
                 topicTitle = request.topicTitle,
@@ -469,6 +490,123 @@ class ExplanationGraph(
         // test is on the body and not on object identity, because a race whose two samplings landed
         // on the same words has nothing to correct — and because reference equality would quietly
         // become "always superseded" if the repository ever re-read after a successful insert.
+        if (winner.body != explanation.body) {
+            emit(GraphChunk.Superseded(winner.body))
+        }
+
+        return GraphChunk.Done(winner)
+    }
+
+    /**
+     * The `VISUALIZE` path. A forced tool call, not a stream — see the plan's own Decision 2 for
+     * why: an SVG document is not usable until it is complete, so nothing is gained by streaming
+     * the half of the answer that cannot render early, and a delimiter-based transport carries a
+     * real risk a schema-checked tool call does not.
+     *
+     * The model answers once, with both fields the schema asks for. The prose is checked by
+     * [ExplanationValidator.validateStructuredBody] — the structured path's own gate, which skips
+     * the stop-reason check [ExplanationValidator.validate] runs first, because a forced tool call
+     * carries no stop-reason ambiguity for that check to catch. The SVG is checked by
+     * [SvgSanitizer.sanitize], then by [MediaValidator], in that order: a document too dangerous to
+     * keep is refused before its size is even measured.
+     *
+     * The Commons lookup runs last, after every other check passes, and its own failure is never a
+     * generation failure: [runCatching] turns a thrown exception, and an ordinary null answer,
+     * into the same outcome — `image = null` — so the document still persists with the diagram
+     * alone. See [CommonsLookup]'s own KDoc for the rule this follows, and Task 7's own test for
+     * the degradation this is written to guarantee.
+     */
+    private suspend fun FlowCollector<GraphChunk>.generateVisualize(
+        request: GraphRequest,
+        key: String,
+    ): GraphChunk.Done {
+        val structured = try {
+            llm.structured(
+                StructuredRequest(
+                    system = PromptBuilder.visualizeSystem(),
+                    userPrompt = PromptBuilder.visualizeUser(
+                        PromptContext(
+                            topicTitle = request.topicTitle,
+                            ancestors = request.ancestors,
+                            span = request.span,
+                            spanSentence = request.spanSentence,
+                            verb = request.verb,
+                        )
+                    ),
+                    toolName = PromptBuilder.VISUALIZE_TOOL_NAME,
+                    toolDescription = PromptBuilder.VISUALIZE_TOOL_DESCRIPTION,
+                    inputSchema = PromptBuilder.visualizeSchema(),
+                    requiredFields = listOf("explanation", "svg"),
+                    maxTokens = config.maxOutputTokens,
+                    effort = config.effort,
+                )
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw GenerationFailedException("visualize call failed for $key", e)
+        }
+
+        // The cost leaves here, before decoding, validating or sanitising — every one of which can
+        // still reject a call that already cost real tokens. See GraphChunk.Spent's own KDoc,
+        // which states the same rule for the streaming path.
+        val costMicros = Pricing.costMicros(llm.modelId, structured.usage)
+        emit(GraphChunk.Spent(costMicros))
+
+        val answer = try {
+            Json.decodeFromString<VisualizeAnswer>(structured.json)
+        } catch (e: Exception) {
+            throw GenerationFailedException("could not decode the visualize answer for $key", e)
+        }
+
+        val validatedBody = when (val result = validator.validateStructuredBody(answer.explanation)) {
+            is ValidationResult.Valid -> result.body
+            is ValidationResult.Invalid ->
+                throw GenerationFailedException("invalid visualize prose for $key: ${result.reason}")
+        }
+
+        val sanitized = when (val result = SvgSanitizer.sanitize(answer.svg)) {
+            is SvgSanitizeResult.Clean -> result.svg
+            is SvgSanitizeResult.Refused ->
+                throw GenerationFailedException("refused visualize SVG for $key: ${result.reason}")
+        }
+
+        val validatedSvg = when (val result = MediaValidator().validate(sanitized)) {
+            is ValidationResult.Valid -> result.body
+            is ValidationResult.Invalid ->
+                throw GenerationFailedException("visualize SVG too large for $key: ${result.reason}")
+        }
+
+        // Degradation, not a generation failure: a failed lookup and an empty lookup both answer
+        // null here, and the diagram-only document below is still persisted either way.
+        val image = runCatching { commonsLookup(request.span, request.ancestors) }.getOrNull()
+
+        emit(GraphChunk.Delta(validatedBody))
+
+        val explanation = Explanation(
+            key = key,
+            topicSlug = request.topicSlug,
+            parentKey = request.parentKey,
+            span = request.span,
+            spanSentence = request.spanSentence,
+            verb = request.verb,
+            variant = request.variant,
+            depth = request.depth,
+            body = validatedBody,
+            media = Media(diagram = DiagramMedia(DiagramKind.SVG, validatedSvg), image = image),
+            grounded = false,
+            sources = emptyList(),
+            promptVersion = config.visualizePromptVersion,
+            modelFamily = llm.modelFamily,
+            modelId = llm.modelId,
+            inputTokens = structured.usage.inputTokens,
+            outputTokens = structured.usage.outputTokens,
+            costMicros = costMicros,
+            requestCount = 0,
+            createdAtEpochMillis = clock(),
+        )
+
+        val winner = repository.insertIfAbsent(explanation)
         if (winner.body != explanation.body) {
             emit(GraphChunk.Superseded(winner.body))
         }

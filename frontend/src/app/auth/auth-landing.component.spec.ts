@@ -29,45 +29,69 @@ describe('AuthLandingComponent', () => {
     harness = await RouterTestingHarness.create();
   });
 
-  it('the landing reads the expired reason', async () => {
-    await harness.navigateByUrl('/auth?auth=expired', AuthLandingComponent);
+  /**
+   * Asserts the error card and the sign-in panel for one reason value.
+   *
+   * Every reason still leaves email sign-in open — see the class comment — so the panel belongs
+   * under the message for each one. The check also proves the order a screen reader needs: the
+   * alert comes first in the DOM, then the panel, and the page holds one `<main>` only.
+   */
+  async function expectAlertAboveThePanel(url: string, text: string): Promise<void> {
+    await harness.navigateByUrl(url, AuthLandingComponent);
     harness.detectChanges();
 
-    expect(harness.routeNativeElement?.textContent).toContain(
+    const root = harness.routeNativeElement;
+    const alert = root?.querySelector('[role="alert"]');
+    const panel = root?.querySelector('app-sign-in-panel');
+
+    expect(alert?.textContent).toContain(text);
+    expect(panel?.querySelector('#sign-in-email')).toBeTruthy();
+    expect(
+      alert && panel && alert.compareDocumentPosition(panel) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(root?.querySelectorAll('main').length).toBe(1);
+  }
+
+  it('the landing reads the expired reason, with the sign-in panel below it', async () => {
+    await expectAlertAboveThePanel(
+      '/auth?auth=expired',
       'That link has expired or was already used.',
     );
   });
 
-  it('the landing shows the failed reason', async () => {
-    await harness.navigateByUrl('/auth?auth=failed', AuthLandingComponent);
-    harness.detectChanges();
-
-    expect(harness.routeNativeElement?.textContent).toContain('Sign-in did not complete.');
+  it('the landing shows the failed reason, with the sign-in panel below it', async () => {
+    await expectAlertAboveThePanel('/auth?auth=failed', 'Sign-in did not complete.');
   });
 
-  it('the landing shows the unavailable reason', async () => {
-    await harness.navigateByUrl('/auth?auth=unavailable', AuthLandingComponent);
-    harness.detectChanges();
-
-    expect(harness.routeNativeElement?.textContent).toContain(
+  it('the landing shows the unavailable reason, with the sign-in panel below it', async () => {
+    await expectAlertAboveThePanel(
+      '/auth?auth=unavailable',
       'Google sign-in is not available right now. Use email instead.',
     );
   });
 
-  it('the landing shows the sign-in panel when the reason is absent', async () => {
+  it('the landing shows the sign-in panel alone when the reason is absent', async () => {
     await harness.navigateByUrl('/auth', AuthLandingComponent);
     harness.detectChanges();
     await harness.fixture.whenStable();
 
     expect(router.url).toBe('/auth');
-    expect(harness.routeNativeElement?.querySelector('app-sign-in-panel')).toBeTruthy();
+    const root = harness.routeNativeElement;
+    expect(root?.querySelector('app-sign-in-panel')).toBeTruthy();
+    expect(root?.querySelector('[role="alert"]')).toBeNull();
+    expect(root?.querySelectorAll('main').length).toBe(1);
   });
 
-  it('the landing redirects for a reason it does not recognise', async () => {
+  it('the landing renders nothing for a reason it does not recognise, before it redirects', async () => {
     await harness.navigateByUrl('/auth?auth=something-else', AuthLandingComponent);
     harness.detectChanges();
-    await harness.fixture.whenStable();
 
+    const root = harness.routeNativeElement;
+    expect(root?.querySelector('main')).toBeNull();
+    expect(root?.querySelector('[role="alert"]')).toBeNull();
+    expect(root?.querySelector('app-sign-in-panel')).toBeNull();
+
+    await harness.fixture.whenStable();
     expect(router.url).toBe('/');
   });
 });

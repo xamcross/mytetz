@@ -472,6 +472,12 @@ export class SessionStore {
       // before any of them finishes must not fire one account read per click.
       if (this.inFlight === controller) {
         this.inFlight = null;
+        // The order of the writes matters to a reader outside this class. On each failure path,
+        // `failStream` or `refresh` writes `error` before this line, and no `await` stands between
+        // the two writes. So `error()` tells the outcome at the moment `isStreaming` turns false.
+        // `FocusCardComponent` reads it at that moment, through its `explainFailed` input, to decide
+        // if a screen reader hears "The explanation is ready.". Its spec drives this store through
+        // a failed stream, so a change of this order fails that spec.
         this.isStreaming.set(false);
         // A generation that reaches this point, win or refuse, changes the learner's remaining
         // allowance. A completed generation spends one unit. A refusal can too: TRIAL_EXHAUSTED
