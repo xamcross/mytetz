@@ -5,6 +5,7 @@ import { RouterTestingHarness } from '@angular/router/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { routes } from './app.routes';
+import { ApiService } from './core/api.service';
 
 /**
  * Issue #35's own acceptance criteria: every route names itself in the tab, not the generic
@@ -23,6 +24,15 @@ describe('app.routes titles', () => {
     });
     http = TestBed.inject(HttpTestingController);
     title = TestBed.inject(Title);
+    // `SignInPanelComponent` reads `GET /api/auth/config` on construction. Issue #101 makes
+    // `/auth?auth=failed` render that panel too, alongside the error card. Stubbed here for the
+    // same reason `reader-page.component.spec.ts` stubs it: this file is about page titles, and
+    // not the panel's own widget.
+    vi.spyOn(TestBed.inject(ApiService), 'authConfig').mockResolvedValue({
+      turnstileSiteKey: null,
+      googleEnabled: true,
+      magicLinkEnabled: true,
+    });
     harness = await RouterTestingHarness.create();
   });
 
