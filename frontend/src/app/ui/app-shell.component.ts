@@ -8,9 +8,11 @@ import { BackendState, StatusDotComponent } from './status-dot.component';
 /**
  * The 64px top bar, and the frame every page sits in.
  *
- * The design draws three nav items: Topics, Sessions and Glossary. Only Topics has a route. The
- * other two need a backend that does not exist, and a link to a dead end is worse than no link.
- * The spec's §12 lists what each one needs.
+ * The design draws three nav items: Topics, Sessions and Glossary. Sessions needs a backend that
+ * does not exist yet, and a link to a dead end is worse than no link, so it stays out. Glossary now
+ * has a route — a Ktor page at `/glossary`, not an Angular one (issue #48) — so it gets a plain
+ * `href`, not a `routerLink`: see the "Guides" footer link below for why a static page outside
+ * `app.routes.ts` needs a full document load and not a router navigation.
  *
  * Below 768px the nav item goes. The wordmark already routes to the catalog.
  *
@@ -43,6 +45,7 @@ import { BackendState, StatusDotComponent } from './status-dot.component';
             [routerLinkActiveOptions]="{ exact: true }"
             >Topics</a
           >
+          <a class="bar__link" href="/glossary">Glossary</a>
         </nav>
       </div>
       <div class="bar__right">

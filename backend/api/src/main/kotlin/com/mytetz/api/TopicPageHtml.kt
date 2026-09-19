@@ -35,10 +35,22 @@ import kotlinx.serialization.json.put
 data class RelatedTopicView(val slug: String, val title: String)
 
 /**
+ * One popular question under a topic: a published `EXPLAIN` node's span, and the twelve-character
+ * short key of its public explanation page. Issue #48, spec section 6.3.
+ */
+data class PopularQuestionView(val span: String, val shortKey: String)
+
+/**
  * Everything [topicPageHtml] needs to render one topic page.
  *
  * [seedBody] is null when the graph holds no seed for this topic yet. See `TopicPageRoutes.kt`'s
  * own KDoc for why the route falls back to the summary alone, rather than generating one.
+ *
+ * [popularQuestions] defaults to empty, so every existing caller of this data class keeps
+ * compiling with no change. `TopicPageRoutes.kt` fills it from
+ * `ExplanationRepository.findPublishedByTopic`; it stays empty until this topic has at least one
+ * published explanation (spec section 6.3), and [topicPageHtml] then renders no "Popular
+ * questions" section at all, rather than an empty one.
  */
 data class TopicPageView(
     val slug: String,
@@ -47,6 +59,7 @@ data class TopicPageView(
     val summary: String,
     val seedBody: String?,
     val relatedTopics: List<RelatedTopicView>,
+    val popularQuestions: List<PopularQuestionView> = emptyList(),
     /**
      * When a person last confirmed this topic's text, in epoch milliseconds, or null when nobody
      * has yet. Null renders no "Last reviewed" line and no `dateModified` field — a missing date
@@ -70,18 +83,31 @@ internal const val GUIDES_STYLESHEET = "/guides/guides.css"
  * title, the description, the canonical tag, the stylesheet, and the Open Graph and Twitter Card
  * tags.
  *
- * `TopicPageHtml.kt` and `HowItWorksRoutes.kt` both call this function, so one edit reaches both
- * pages. [ogType] carries the one Open Graph field that differs between the two: `"article"` for a
- * topic page, `"website"` for a page with no single author date, the same value
+ * `TopicPageHtml.kt`, `HowItWorksRoutes.kt`, `ExplanationPageHtml.kt` and `GlossaryHtml.kt` all
+ * call this function, so one edit reaches every page of this layout. [ogType] carries the one
+ * Open Graph field that differs between callers: `"article"` for a topic page or an explanation
+ * page, `"website"` for a page with no single author date, the same value
  * `frontend/src/index.html` and `frontend/public/guides/index.html` already use for a
  * non-article page.
+ *
+ * [emitCanonicalTag] defaults to `true`. `ExplanationPageRoutes.kt` passes `false` for an
+ * unpublished `EXPLAIN` node: spec section 7.3 states a page must carry `og:url` — a visitor and a
+ * crawler both still need to know this page's own address — but no `<link rel="canonical">`, so
+ * that an unreviewed text is never offered to a search index as the one true copy of the page's
+ * own URL.
  */
-internal fun HEAD.commonHeadTags(pageTitle: String, description: String, canonical: String, ogType: String) {
+internal fun HEAD.commonHeadTags(
+    pageTitle: String,
+    description: String,
+    canonical: String,
+    ogType: String,
+    emitCanonicalTag: Boolean = true,
+) {
     meta(charset = "utf-8")
     meta(name = "viewport", content = "width=device-width, initial-scale=1")
     title { +pageTitle }
     meta(name = "description", content = description)
-    link(rel = "canonical", href = canonical)
+    if (emitCanonicalTag) link(rel = "canonical", href = canonical)
     link(rel = "stylesheet", href = GUIDES_STYLESHEET)
 
     // The DSL's `meta(name = …)` writes a `name` attribute. Open Graph tags need `property`
@@ -197,6 +223,26 @@ fun HTML.topicPageHtml(view: TopicPageView) {
                 }
                 noScript {
                     p { +"The Start with this topic button needs JavaScript." }
+                }
+            }
+
+            // Spec section 6.3: this list, when it has any entry, comes before "Related topics".
+            // Issue #48's own change to this file stays this one section — see this data class's
+            // own KDoc and PublicPageChrome.kt's own note on why the rest of the file is untouched.
+            if (view.popularQuestions.isNotEmpty()) {
+                section {
+                    h2 { +"Popular questions" }
+                    ul(classes = "start__list") {
+                        view.popularQuestions.forEach { question ->
+                            li {
+                                a(href = "/topics/${view.slug}/explain/${question.shortKey}") { +question.span }
+                            }
+                        }
+                    }
+                    // Round 2: a link to the full glossary, after the list. This section only
+                    // renders when at least one question is published, so this link never leads
+                    // a visitor to the glossary's own empty state.
+                    p { a(href = "/glossary") { +"See every published answer in the glossary" } }
                 }
             }
 

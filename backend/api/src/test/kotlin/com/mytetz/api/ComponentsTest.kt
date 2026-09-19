@@ -135,6 +135,12 @@ class ComponentsTest {
         assertContains(indexNames(database, "topicRequests"), "demand")
         assertContains(indexNames(database, "explanations"), "topic_demand")
         assertContains(indexNames(database, "explanations"), "created_at")
+        // Issue #48. `ExplanationRepository.findByShortKeyPrefix` (the public explanation page's
+        // lookup) queries a range on `_id`. Unlike the `quizTemplates` note below, this is asserted
+        // on purpose: it proves the query has an index to use — MongoDB's own default `_id` index,
+        // named `_id_`, created for every collection with no call in `ensureIndexes()` — and not a
+        // full collection scan. No new index is added; see `findByShortKeyPrefix`'s own KDoc.
+        assertContains(indexNames(database, "explanations"), "_id_")
         assertContains(indexNames(database, "sessions"), "principal_recent")
         assertContains(indexNames(database, "sessions"), "by_topic")
         assertContains(indexNames(database, "sessions"), "by_explanation_key")

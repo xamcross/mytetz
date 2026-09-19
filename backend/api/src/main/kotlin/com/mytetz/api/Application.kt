@@ -186,6 +186,15 @@ fun Application.module(components: Components = Components()) {
             explanations = components.explanations,
             modelFamily = components.modelFamily,
         )
+        // `GET /topics/{slug}/explain/{shortKey}`. Ahead of the `/api/{...}` catch-all and
+        // `spaRoutes()` below, for the same routing-quality reason `topicPageRoutes` is. See
+        // ExplanationPageRoutes.kt's own KDoc.
+        explanationPageRoutes(
+            catalog = components.catalog,
+            explanations = components.explanations,
+        )
+        // `GET /glossary`. See GlossaryRoutes.kt's own KDoc.
+        glossaryRoutes(explanations = components.explanations)
         // `GET /how-it-works`. Reads the model id the same no-model-client way
         // `resolveModelForLogging`'s own boot log line above does — never `components.llm.modelId`,
         // which would force the lazy model client to build. See `HowItWorksRoutes.kt`'s own KDoc.

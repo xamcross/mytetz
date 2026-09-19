@@ -321,4 +321,185 @@ class ExplanationRepositoryTest {
         assertEquals(0, repository.deleteEvictable(emptyList(), maxRequestCount = 0))
         assertNotNull(repository.findByKey("k"))
     }
+
+    // ------------------------------------------------------------------ published (issue #48)
+
+    @Test
+    fun `a newly built Explanation defaults to published false`() {
+        assertEquals(false, explanation("k-default", "a body").published)
+    }
+
+    @Test
+    fun `insertIfAbsent stores a new document as published false`() = runTest {
+        repository.insertIfAbsent(explanation("k-new", "a body"))
+
+        assertEquals(false, repository.findByKey("k-new")?.published)
+    }
+
+    @Test
+    fun `a document stored before published existed decodes with published false`() = runTest {
+        database.getCollection<org.bson.Document>("explanations").insertOne(
+            org.bson.Document(
+                mapOf(
+                    "_id" to "k-legacy-2", "topicSlug" to "quantum-physics", "parentKey" to null,
+                    "span" to null, "spanSentence" to null, "verb" to "SEED", "variant" to 0, "depth" to 0,
+                    "body" to "…", "grounded" to false, "sources" to emptyList<org.bson.Document>(),
+                    "promptVersion" to "v1", "modelFamily" to "claude-opus-5", "modelId" to "claude-opus-5",
+                    "inputTokens" to 10L, "outputTokens" to 20L, "costMicros" to 550L, "requestCount" to 0L,
+                    "createdAtEpochMillis" to 0L,
+                )
+            )
+        )
+
+        assertEquals(false, repository.findByKey("k-legacy-2")?.published)
+    }
+
+    @Test
+    fun `setPublished flips the flag and findByKey reads it back`() = runTest {
+        repository.insertIfAbsent(explanation("k-pub", "A body."))
+
+        repository.setPublished("k-pub", true)
+
+        assertEquals(true, repository.findByKey("k-pub")?.published)
+    }
+
+    @Test
+    fun `setPublished can also unpublish`() = runTest {
+        repository.insertIfAbsent(explanation("k-unpub-again", "A body."))
+        repository.setPublished("k-unpub-again", true)
+
+        repository.setPublished("k-unpub-again", false)
+
+        assertEquals(false, repository.findByKey("k-unpub-again")?.published)
+    }
+
+    @Test
+    fun `findPublished lists only published EXPLAIN nodes`() = runTest {
+        repository.insertIfAbsent(explanation("k-pub-2", "A body.").copy(verb = Verb.EXPLAIN))
+        repository.insertIfAbsent(explanation("k-unpub", "Another body.").copy(verb = Verb.EXPLAIN))
+        // A published SEED must never appear in a glossary: only EXPLAIN nodes name a phrase.
+        repository.insertIfAbsent(explanation("k-seed", "Seed body.").copy(verb = Verb.SEED))
+        repository.setPublished("k-pub-2", true)
+        repository.setPublished("k-seed", true)
+
+        val published = repository.findPublished()
+
+        assertEquals(listOf("k-pub-2"), published.map { it.key })
+    }
+
+    @Test
+    fun `findPublished excludes a published VISUALIZE node`() = runTest {
+        // A VISUALIZE document carries an SVG in media, and this project does not render media on
+        // a public page in this issue — see Explanation.media's own KDoc and ExplanationPageRoutes.
+        repository.insertIfAbsent(explanation("k-visualize", "A body.").copy(verb = Verb.VISUALIZE))
+        repository.setPublished("k-visualize", true)
+
+        assertEquals(emptyList(), repository.findPublished())
+    }
+
+    // ------------------------------------------------------------------ the short-key range lookup
+
+    @Test
+    fun `findByShortKeyPrefix finds the one document whose key starts with the prefix`() = runTest {
+        repository.insertIfAbsent(explanation("abcdef0123456789" + "0".repeat(48), "A body."))
+
+        val found = repository.findByShortKeyPrefix("abcdef012345")
+
+        assertEquals(1, found.size)
+    }
+
+    @Test
+    fun `findByShortKeyPrefix finds nothing for an unused prefix`() = runTest {
+        val found = repository.findByShortKeyPrefix("000000000000")
+
+        assertEquals(0, found.size)
+    }
+
+    @Test
+    fun `findByShortKeyPrefix finds every document that shares a prefix, so the caller can detect a collision`() = runTest {
+        repository.insertIfAbsent(explanation("aaaaaaaaaaaa" + "1".repeat(52), "A body."))
+        repository.insertIfAbsent(explanation("aaaaaaaaaaaa" + "2".repeat(52), "Another body."))
+
+        val found = repository.findByShortKeyPrefix("aaaaaaaaaaaa")
+
+        assertEquals(2, found.size)
+    }
+
+    // ------------------------------------------------------------------ the review script's own query
+
+    @Test
+    fun `findTopByRequestCount orders EXPLAIN nodes by requestCount descending`() = runTest {
+        repository.insertIfAbsent(explanation("low", "b").copy(verb = Verb.EXPLAIN, requestCount = 1))
+        repository.insertIfAbsent(explanation("high", "b").copy(verb = Verb.EXPLAIN, requestCount = 9))
+
+        val top = repository.findTopByRequestCount(limit = 10)
+
+        assertEquals(listOf("high", "low"), top.map { it.key })
+    }
+
+    @Test
+    fun `findTopByRequestCount never returns a SEED node`() = runTest {
+        repository.insertIfAbsent(explanation("seed-top", "b").copy(verb = Verb.SEED, requestCount = 100))
+        repository.insertIfAbsent(explanation("explain-low", "b").copy(verb = Verb.EXPLAIN, requestCount = 1))
+
+        val top = repository.findTopByRequestCount(limit = 10)
+
+        assertEquals(listOf("explain-low"), top.map { it.key })
+    }
+
+    @Test
+    fun `findTopByRequestCount applies the limit`() = runTest {
+        repeat(5) { i ->
+            repository.insertIfAbsent(explanation("k-$i", "b").copy(verb = Verb.EXPLAIN, requestCount = i.toLong()))
+        }
+
+        assertEquals(2, repository.findTopByRequestCount(limit = 2).size)
+    }
+
+    // ------------------------------------------------------------------ the topic page's own popular-questions list
+
+    @Test
+    fun `findPublishedByTopic lists only published EXPLAIN nodes of the given topic, by requestCount descending`() =
+        runTest {
+            repository.insertIfAbsent(
+                explanation("qp-low", "b").copy(verb = Verb.EXPLAIN, requestCount = 1, topicSlug = "quantum-physics"),
+            )
+            repository.insertIfAbsent(
+                explanation("qp-high", "b").copy(verb = Verb.EXPLAIN, requestCount = 9, topicSlug = "quantum-physics"),
+            )
+            // Unpublished: must not appear.
+            repository.insertIfAbsent(
+                explanation("qp-unpub", "b").copy(verb = Verb.EXPLAIN, requestCount = 100, topicSlug = "quantum-physics"),
+            )
+            // A different topic: must not appear.
+            repository.insertIfAbsent(
+                explanation("other-topic", "b").copy(verb = Verb.EXPLAIN, requestCount = 100, topicSlug = "special-relativity"),
+            )
+            repository.setPublished("qp-low", true)
+            repository.setPublished("qp-high", true)
+            repository.setPublished("other-topic", true)
+
+            val popular = repository.findPublishedByTopic("quantum-physics", limit = 10)
+
+            assertEquals(listOf("qp-high", "qp-low"), popular.map { it.key })
+        }
+
+    @Test
+    fun `findPublishedByTopic on a topic with no published explanation is empty`() = runTest {
+        repository.insertIfAbsent(explanation("qp-unpub-2", "b").copy(verb = Verb.EXPLAIN, topicSlug = "quantum-physics"))
+
+        assertEquals(emptyList(), repository.findPublishedByTopic("quantum-physics", limit = 10))
+    }
+
+    @Test
+    fun `findPublishedByTopic applies the limit`() = runTest {
+        repeat(5) { i ->
+            repository.insertIfAbsent(
+                explanation("qp-$i", "b").copy(verb = Verb.EXPLAIN, requestCount = i.toLong(), topicSlug = "quantum-physics"),
+            )
+            repository.setPublished("qp-$i", true)
+        }
+
+        assertEquals(2, repository.findPublishedByTopic("quantum-physics", limit = 2).size)
+    }
 }

@@ -138,6 +138,49 @@ class TopicPageRoutesTest {
         assertEquals(0, built, "the route forced the lazy model client to build")
     }
 
+    // ------------------------------------------------------------- popular questions (spec 6.3, issue #48)
+
+    @Test
+    fun `a published explanation of this topic appears as a popular question, linked to its page`() = testApplication {
+        val c = components()
+        runBlocking {
+            TopicRepository(c.mongo.database).upsert(
+                Topic(slug = "quantum-physics", title = "Quantum Physics", category = "Physics", summary = "s")
+            )
+            val key = "abcdef0123456789" + "0".repeat(48)
+            c.explanations.insertIfAbsent(
+                Explanation(
+                    key = key, topicSlug = "quantum-physics", parentKey = "parent", span = "wave function",
+                    spanSentence = "s", verb = Verb.EXPLAIN, variant = 0, depth = 1, body = "b",
+                    grounded = false, sources = emptyList(), promptVersion = GraphConfig().promptVersion,
+                    modelFamily = c.modelFamily, modelId = "fake-model", inputTokens = 1, outputTokens = 1,
+                    costMicros = 0, requestCount = 5, createdAtEpochMillis = 0, published = true,
+                )
+            )
+        }
+        application { routing { topicPageRoutes(c.catalog, c.explanations, c.modelFamily) } }
+
+        val body = client.get("/topics/quantum-physics").bodyAsText()
+
+        assertTrue("Popular questions" in body)
+        assertTrue("""<a href="/topics/quantum-physics/explain/abcdef012345">""" in body)
+    }
+
+    @Test
+    fun `no published explanation means no Popular questions section on the route`() = testApplication {
+        val c = components()
+        runBlocking {
+            TopicRepository(c.mongo.database).upsert(
+                Topic(slug = "quantum-physics", title = "Quantum Physics", category = "Physics", summary = "s")
+            )
+        }
+        application { routing { topicPageRoutes(c.catalog, c.explanations, c.modelFamily) } }
+
+        assertFalse("Popular questions" in client.get("/topics/quantum-physics").bodyAsText())
+    }
+
+    // ------------------------------------------------------------- review date (issue #47)
+
     @Test
     fun `a topic with a review date shows it on the rendered page`() = testApplication {
         val c = components()

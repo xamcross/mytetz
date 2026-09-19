@@ -61,6 +61,25 @@ class SitemapRoutesTest {
                 )
             )
         }
+
+        /** Stores an `EXPLAIN` node under [slug], for issue #48's own explanation-page URLs. */
+        suspend fun explanation(
+            key: String,
+            slug: String,
+            published: Boolean,
+            createdAtEpochMillis: Long = 0,
+            requestCount: Long = 0,
+        ) {
+            explanations.insertIfAbsent(
+                Explanation(
+                    key = key, topicSlug = slug, parentKey = "parent", span = "span-$key", spanSentence = "s",
+                    verb = Verb.EXPLAIN, variant = 0, depth = 1, body = "b", grounded = false, sources = emptyList(),
+                    promptVersion = "v1", modelFamily = FAKE_MODEL_FAMILY, modelId = "fake-model",
+                    inputTokens = 1, outputTokens = 1, costMicros = 0, requestCount = requestCount,
+                    createdAtEpochMillis = createdAtEpochMillis, published = published,
+                )
+            )
+        }
     }
 
     @Test
@@ -267,6 +286,82 @@ class SitemapRoutesTest {
             "<url><loc>https://mytetz.com/faq</loc></url>" in body,
             "/faq must carry no lastmod: $body",
         )
+    }
+
+    // ------------------------------------------------------------- explanation pages (issue #48)
+
+    @Test
+    fun `the sitemap lists a published explanation page and omits an unpublished one`() = testApplication {
+        val fx = SitemapFixture(Topic(slug = "quantum-physics", title = "Quantum Physics", category = "Physics", summary = "s"))
+        val publishedKey = "abcdef0123456789" + "0".repeat(48)
+        val unpublishedKey = "112233445566" + "0".repeat(52)
+        runBlocking {
+            fx.explanation(publishedKey, "quantum-physics", published = true)
+            fx.explanation(unpublishedKey, "quantum-physics", published = false)
+        }
+        application { routing { sitemapRoutes(fx.catalog, fx.explanations, FAKE_MODEL_FAMILY) } }
+
+        val body = client.get("/sitemap.xml").bodyAsText()
+
+        assertTrue("<loc>https://mytetz.com/topics/quantum-physics/explain/abcdef012345</loc>" in body)
+        assertFalse("112233445566" in body, "an unpublished explanation must not appear in the sitemap")
+    }
+
+    @Test
+    fun `a published explanation gets lastmod from its own createdAtEpochMillis`() = testApplication {
+        val fx = SitemapFixture(Topic(slug = "quantum-physics", title = "Quantum Physics", category = "Physics", summary = "s"))
+        val key = "abcdef0123456789" + "0".repeat(48)
+        val createdAt = Instant.parse("2026-03-04T00:15:00Z").toEpochMilli()
+        runBlocking { fx.explanation(key, "quantum-physics", published = true, createdAtEpochMillis = createdAt) }
+        application { routing { sitemapRoutes(fx.catalog, fx.explanations, FAKE_MODEL_FAMILY) } }
+
+        val body = client.get("/sitemap.xml").bodyAsText()
+
+        assertTrue(
+            "<url><loc>https://mytetz.com/topics/quantum-physics/explain/abcdef012345</loc><lastmod>2026-03-04</lastmod></url>" in body,
+            "expected a 2026-03-04 lastmod right after the explanation's loc, body was: $body",
+        )
+    }
+
+    @Test
+    fun `at 101 published explanations, the sitemap lists no more than the 100-page cap`() = testApplication {
+        val fx = SitemapFixture(Topic(slug = "quantum-physics", title = "Quantum Physics", category = "Physics", summary = "s"))
+        runBlocking {
+            repeat(101) { i ->
+                fx.explanation("k-$i", "quantum-physics", published = true, requestCount = i.toLong())
+            }
+        }
+        application { routing { sitemapRoutes(fx.catalog, fx.explanations, FAKE_MODEL_FAMILY) } }
+
+        val body = client.get("/sitemap.xml").bodyAsText()
+
+        val explanationUrlCount = Regex("/topics/quantum-physics/explain/").findAll(body).count()
+        assertEquals(100, explanationUrlCount, "the sitemap must never list more than the 100-page cap")
+        // k-0 has the lowest requestCount, so it must be the one entry the cap leaves out.
+        assertFalse("/explain/k-0<" in body, "k-0 has the lowest demand and must be the one entry left out")
+    }
+
+    // ------------------------------------------------------------- /glossary (round 2)
+
+    @Test
+    fun `the sitemap does not list glossary on a fresh database`() = testApplication {
+        val fx = SitemapFixture()
+        application { routing { sitemapRoutes(fx.catalog, fx.explanations, FAKE_MODEL_FAMILY) } }
+
+        val body = client.get("/sitemap.xml").bodyAsText()
+
+        assertFalse("<loc>https://mytetz.com/glossary</loc>" in body, "an empty glossary must not be in the sitemap")
+    }
+
+    @Test
+    fun `the sitemap lists glossary once a published explanation exists`() = testApplication {
+        val fx = SitemapFixture(Topic(slug = "quantum-physics", title = "Quantum Physics", category = "Physics", summary = "s"))
+        runBlocking { fx.explanation("abcdef0123456789" + "0".repeat(48), "quantum-physics", published = true) }
+        application { routing { sitemapRoutes(fx.catalog, fx.explanations, FAKE_MODEL_FAMILY) } }
+
+        val body = client.get("/sitemap.xml").bodyAsText()
+
+        assertTrue("<loc>https://mytetz.com/glossary</loc>" in body)
     }
 
     // ------------------------------------------------------------- hostile input
