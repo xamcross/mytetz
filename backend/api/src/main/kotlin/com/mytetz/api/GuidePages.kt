@@ -27,5 +27,11 @@ internal object GuidePages {
         "/guides/when-to-review-what-you-read",
         "/guides/how-students-study-now",
         "/guides/why-a-person-stops-an-online-course",
+        "/guides/how-to-understand-a-difficult-text",
+        "/guides/how-to-use-ai-to-study-without-cheating",
+        "/guides/how-to-explain-a-text-to-yourself-while-you-read",
+        "/guides/how-many-times-should-you-reread-something",
+        "/guides/how-do-you-know-if-you-understand-something",
+        "/guides/how-long-should-a-study-session-be",
     )
 }
