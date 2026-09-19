@@ -186,6 +186,9 @@ fun Application.module(components: Components = Components()) {
             explanations = components.explanations,
             modelFamily = components.modelFamily,
         )
+        // `GET /sitemap.xml`. Replaces the static file #32 shipped — see SitemapRoutes.kt's own
+        // KDoc for why a static file cannot keep up with the catalogue.
+        sitemapRoutes(catalog = components.catalog)
 
         // Every unmatched `/api/**` path, answered as JSON.
         //
