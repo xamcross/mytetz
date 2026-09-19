@@ -13,6 +13,14 @@ import com.mytetz.llm.LlmEffort
 data class GraphConfig(
     val promptVersion: String = PromptBuilder.VERSION,
     /**
+     * The config-level copy of [PromptBuilder.VISUALIZE_VERSION], hashed into a `VISUALIZE`
+     * content key instead of [promptVersion]. It is a separate field, not a reuse of
+     * [promptVersion], so a change to the visualize prompt invalidates only a `VISUALIZE` document
+     * and never re-keys every other verb's already-cached explanation. See
+     * `ExplanationGraph.keyFor` and the plan's own Decision 5.
+     */
+    val visualizePromptVersion: String = PromptBuilder.VISUALIZE_VERSION,
+    /**
      * Caps thinking AND response text together on Claude Opus 5, where adaptive thinking is on by
      * default. A ceiling sized to the prose alone truncates mid-answer. Length is enforced by
      * [ExplanationValidator]; billing is on actual output, so headroom is free.

@@ -632,6 +632,115 @@ class ExplanationGraphTest {
         assertNull(repository.findByKey(graph.keyFor(request())), "a rejected body must leave no trace")
     }
 
+    // ------------------------------------------------------------------ VISUALIZE
+
+    @Test
+    fun `a malformed SVG from the model fails generation and persists nothing`() = runTest {
+        llm.nextStructuredJson = """{"explanation":"A short valid sentence about the span.","svg":"<svg><circle cx=\"1\" cy=\"1\" r=\"1\"></svg>"}"""
+        val visualizeRequest = request(verb = Verb.VISUALIZE)
+        val key = graph.keyFor(visualizeRequest)
+
+        assertFailsWith<GenerationFailedException> {
+            graph.getOrGenerate(visualizeRequest).toList()
+        }
+
+        assertNull(repository.findByKey(key))
+    }
+
+    @Test
+    fun `a malformed SVG still announces its cost before the sanitiser rejects it`() = runTest {
+        // The same property GraphChunk.Spent exists for on the streaming path
+        // (`a generation that is billed and then rejected announces its cost before it raises`),
+        // asserted here for the structured one: a refused SVG is still a paid-for model call, so
+        // the ledger must hear about it before the collector ever sees the failure.
+        llm.nextStructuredJson = """{"explanation":"A short valid sentence about the span.","svg":"<svg><circle cx=\"1\" cy=\"1\" r=\"1\"></svg>"}"""
+
+        val chunks = mutableListOf<GraphChunk>()
+        assertFailsWith<GenerationFailedException> {
+            graph.getOrGenerate(request(verb = Verb.VISUALIZE)).collect { chunks += it }
+        }
+
+        val spent = assertNotNull(
+            chunks.filterIsInstance<GraphChunk.Spent>().singleOrNull(),
+            "a visualize call was billed and raised without ever announcing its cost",
+        )
+        assertTrue(spent.costMicros > 0, "the announced cost must be the real one")
+        assertTrue(
+            chunks.none { it is GraphChunk.Done },
+            "fixture error: this path must have no terminal chunk, or it proves nothing",
+        )
+        assertNull(repository.findByKey(graph.keyFor(request(verb = Verb.VISUALIZE))))
+    }
+
+    @Test
+    fun `a VISUALIZE key moves when visualizePromptVersion changes, and not when promptVersion changes`() {
+        val visualizeRequest = request(verb = Verb.VISUALIZE)
+        val key = graph.keyFor(visualizeRequest)
+
+        assertNotEquals(
+            key,
+            graphWith(config = config.copy(visualizePromptVersion = "vNext")).keyFor(visualizeRequest),
+            "bumping visualizePromptVersion must move a VISUALIZE key",
+        )
+        assertEquals(
+            key,
+            graphWith(config = config.copy(promptVersion = "vNext")).keyFor(visualizeRequest),
+            "bumping the shared promptVersion must not move a VISUALIZE key",
+        )
+    }
+
+    @Test
+    fun `an EXPLAIN key does not move when visualizePromptVersion changes`() {
+        val explainRequest = request(verb = Verb.EXPLAIN)
+        val key = graph.keyFor(explainRequest)
+
+        assertEquals(
+            key,
+            graphWith(config = config.copy(visualizePromptVersion = "vNext")).keyFor(explainRequest),
+            "bumping visualizePromptVersion must not move any other verb's key",
+        )
+    }
+
+    @Test
+    fun `a well-formed VISUALIZE generation persists a diagram and ends with Done`() = runTest {
+        llm.nextStructuredJson = """{"explanation":"A short valid sentence about the span.","svg":"<svg><circle cx=\"1\" cy=\"1\" r=\"1\"/></svg>"}"""
+
+        val chunks = graph.getOrGenerate(request(verb = Verb.VISUALIZE)).toList()
+
+        val done = chunks.filterIsInstance<GraphChunk.Done>().single()
+        assertEquals("A short valid sentence about the span.", done.explanation.body)
+        assertEquals(DiagramKind.SVG, done.explanation.media?.diagram?.kind)
+        assertTrue(
+            done.explanation.media?.diagram?.source?.contains("circle") == true,
+            "the sanitised SVG must still carry the safe content the model drew",
+        )
+        assertEquals(
+            "A short valid sentence about the span.",
+            chunks.filterIsInstance<GraphChunk.Delta>().single().text,
+            "the whole validated prose arrives as one Delta -- see Decision 2's own consequence",
+        )
+    }
+
+    @Test
+    fun `a Commons failure stores the diagram only, and the flow still ends with Done`() = runTest {
+        // No MockEngine and no CommonsClient here: the port is a plain function, on Decision 6's
+        // own model of Reconciliation.reconcile's fetchState, so a test can supply one directly.
+        llm.nextStructuredJson = """{"explanation":"A short valid sentence about the span.","svg":"<svg><circle cx=\"1\" cy=\"1\" r=\"1\"/></svg>"}"""
+        val graphWithFailingCommons = ExplanationGraph(
+            repository = repository,
+            llm = llm,
+            validator = ExplanationValidator(),
+            config = config,
+            commonsLookup = { _, _ -> throw java.io.IOException("down") },
+        )
+
+        val chunks = graphWithFailingCommons.getOrGenerate(request(verb = Verb.VISUALIZE)).toList()
+
+        val done = chunks.filterIsInstance<GraphChunk.Done>().single()
+        assertNotNull(done.explanation.media?.diagram)
+        assertNull(done.explanation.media?.image)
+    }
+
     @Test
     fun `a generation that is billed and then rejected announces its cost before it raises`() = runTest {
         // The property GraphChunk.Spent exists for, asserted in the module that owns it.

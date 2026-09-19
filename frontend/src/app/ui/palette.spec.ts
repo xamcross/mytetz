@@ -69,6 +69,48 @@ function contrast(a: string, b: string): number {
 const AA_NORMAL = 4.5;
 const AA_LARGE = 3;
 
+/**
+ * Reads the `:root` token block of a stylesheet and returns each `--token: value` pair.
+ *
+ * `guides.css` cannot import `styles.css` (see its header comment), so a change to a coral
+ * token there can silently drift from this palette. This reader lets a test resolve the real
+ * `var(--…)` value from the shipped file, instead of a hex value copied into the test.
+ */
+function readRootTokens(css: string): Record<string, string> {
+  const root = css.match(/:root\s*\{([^}]*)\}/);
+  if (!root) throw new Error('the stylesheet must declare a :root block');
+  const tokens: Record<string, string> = {};
+  for (const [, name, value] of root[1].matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)) {
+    tokens[name] = value.trim();
+  }
+  return tokens;
+}
+
+/** Returns the body of the first CSS rule for `selector`, for example `.bar__cta`. */
+function readRule(css: string, selector: string): string {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const rule = css.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`));
+  if (!rule) throw new Error(`the stylesheet must declare a rule for ${selector}`);
+  return rule[1];
+}
+
+/** Returns the value of one declaration, for example `background`, inside a rule body. */
+function readDeclaration(rule: string, property: string): string {
+  const escaped = property.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const declaration = rule.match(new RegExp(`(?:^|;|\\{)\\s*${escaped}\\s*:\\s*([^;]+);`));
+  if (!declaration) throw new Error(`the rule must declare ${property}`);
+  return declaration[1].trim();
+}
+
+/** Resolves a declaration value to a hex colour, following one `var(--token)` reference. */
+function resolveColor(value: string, tokens: Record<string, string>): string {
+  const ref = value.match(/^var\((--[\w-]+)\)$/);
+  if (!ref) return value;
+  const resolved = tokens[ref[1]];
+  if (!resolved) throw new Error(`:root must declare ${ref[1]}`);
+  return resolved;
+}
+
 describe('the Candy palette', () => {
   it('computes a contrast ratio the way WCAG 2.2 defines it', () => {
     // Two anchors with an answer that does not depend on this palette. Without them a broken
@@ -157,4 +199,24 @@ describe('the Candy palette', () => {
     expect(hexes).toEqual(new Set([PALETTE.chip, PALETTE.coral, PALETTE.teal]));
     expect(icon).not.toContain('var(--mt-');
   });
+});
+
+describe('the guide page buttons', () => {
+  // `guides.css` cannot import `styles.css` (see its header comment), so this suite reads the
+  // real shipped file and resolves each `var(--…)` value from its own `:root` block. A test that
+  // copies the hex values into the test would prove nothing about the file that ships.
+  const css = readFileSync('public/guides/guides.css', 'utf8');
+  const tokens = readRootTokens(css);
+
+  const ctas: ReadonlyArray<string> = ['.bar__cta', '.start__cta'];
+
+  for (const selector of ctas) {
+    it(`gives ${selector} a text contrast of 4.5:1 or more against its fill`, () => {
+      const rule = readRule(css, selector);
+      const fill = resolveColor(readDeclaration(rule, 'background'), tokens);
+      const text = resolveColor(readDeclaration(rule, 'color'), tokens);
+
+      expect(contrast(text, fill)).toBeGreaterThanOrEqual(AA_NORMAL);
+    });
+  }
 });
