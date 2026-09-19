@@ -11,6 +11,15 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
+/**
+ * The LINE SEPARATOR character, code point U+2028, built here from its numeric value with [Char]
+ * and never spelled out as a source-code escape sequence in this file — see this file's own
+ * `` `the file holds no literal line separator character` `` test, which this constant helps keep
+ * honest: an editor, or a tool that generates source text, can turn such an escape sequence into
+ * the real character with no visible difference on screen.
+ */
+private val LINE_SEPARATOR = Char(0x2028)
+
 class GlossaryHtmlTest {
 
     private fun render(entries: List<GlossaryEntryView>): String = createHTML().html { glossaryHtml(entries) }
@@ -77,7 +86,7 @@ class GlossaryHtmlTest {
     fun `the file holds no literal line separator character`() {
         val source = java.io.File("src/main/kotlin/com/mytetz/api/GlossaryHtml.kt").readText()
 
-        assertFalse(' ' in source, "the file must write U+2028 as its escape text, not a literal character")
+        assertFalse(LINE_SEPARATOR in source, "the file must write U+2028 as its escape text, not a literal character")
     }
 
     // ------------------------------------------------------------- the JSON-LD block

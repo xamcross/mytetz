@@ -11,6 +11,16 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
+/**
+ * The LINE SEPARATOR character, code point U+2028, built here from its numeric value with
+ * [Char] and never spelled out as a source-code escape sequence in this file. An editor, or a tool
+ * that generates source text, can turn such an escape sequence into the real character with no
+ * visible difference on screen — exactly the defect
+ * `` `the file holds no literal line separator character` `` exists to catch in the file under
+ * test. Building the value from its number here sidesteps that same risk in this test file.
+ */
+private val LINE_SEPARATOR = Char(0x2028)
+
 class ExplanationPageHtmlTest {
 
     private fun render(view: ExplanationPageView): String = createHTML().html { explanationPageHtml(view) }
@@ -100,7 +110,7 @@ class ExplanationPageHtmlTest {
             "src/main/kotlin/com/mytetz/api/ExplanationPageHtml.kt",
         ).readText()
 
-        assertFalse(' ' in source, "the file must write U+2028 as its escape text, not a literal character")
+        assertFalse(LINE_SEPARATOR in source, "the file must write U+2028 as its escape text, not a literal character")
     }
 
     // ------------------------------------------------------------- the JSON-LD block
@@ -146,12 +156,12 @@ class ExplanationPageHtmlTest {
         // characters `<`, `>` and `&`. Inside the JSON-LD `<script>` block it must be escaped,
         // because it is illegal inside a JavaScript string — see jsonLdScriptSafe's own KDoc. This
         // test checks the script block alone, and not the whole page.
-        val hostile = "a line separator"
+        val hostile = "a line" + LINE_SEPARATOR + "separator"
         val html = render(view(span = hostile))
 
         val block = Regex("""<script type="application/ld\+json">(.*?)</script>""", RegexOption.DOT_MATCHES_ALL)
             .find(html)!!.groupValues[1]
-        assertFalse(' ' in block, "a literal U+2028 survived inside the JSON-LD block: $block")
+        assertFalse(LINE_SEPARATOR in block, "a literal U+2028 survived inside the JSON-LD block: $block")
 
         val parsed = ldJson(html)
         val breadcrumb = parsed.jsonObject["@graph"]!!.jsonArray.first {
