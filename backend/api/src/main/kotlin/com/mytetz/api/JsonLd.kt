@@ -20,9 +20,10 @@ import kotlinx.serialization.json.putJsonArray
  * https://html.spec.whatwg.org/multipage/scripting.html#restrictions-for-contents-of-script-elements
  *
  * This function removes the trigger instead. It replaces every `<` character with the six-character
- * JSON string escape `<`. No state the standard describes can start with no literal `<`
- * character. [Json.parseToJsonElement] reads this escape back as the plain character `<`, on its
- * own, with no matching un-escape step anywhere in this project.
+ * JSON string escape: a backslash, the letter u, and the four hex digits 0, 0, 3, c. No state the
+ * standard describes can start with no literal `<` character. [Json.parseToJsonElement] reads this
+ * escape back as the plain character `<`, on its own, with no matching un-escape step anywhere in
+ * this project.
  *
  * `>`, `&`, U+2028 (LINE SEPARATOR) and U+2029 (PARAGRAPH SEPARATOR) are escaped for two further
  * reasons:
@@ -51,8 +52,8 @@ fun jsonLdScriptSafe(json: String): String = buildString(json.length) {
             '<' -> append("\\u003c")
             '>' -> append("\\u003e")
             '&' -> append("\\u0026")
-            ' ' -> append("\\u2028")
-            ' ' -> append("\\u2029")
+            '\u2028' -> append("\\u2028")
+            '\u2029' -> append("\\u2029")
             else -> append(ch)
         }
     }

@@ -145,7 +145,7 @@ class TopicPageRoutesTest {
         val c = components()
         val hostileTitle = "Special </script><script>alert(1)</script> Relativity"
         val hostileSummary = "\">img src=x onerror=alert(1)>"
-        val hostileSeed = "A seed with a line separator and a closing tag </script><script>alert(2)</script>"
+        val hostileSeed = "A seed with a line separator\u2028and a closing tag </script><script>alert(2)</script>"
         runBlocking {
             TopicRepository(c.mongo.database).upsert(
                 Topic(slug = "hostile-topic", title = hostileTitle, category = "Physics", summary = hostileSummary)

@@ -110,7 +110,7 @@ class TopicPageHtmlTest {
 
     @Test
     fun `a line separator in the seed body does not break the JSON-LD block`() {
-        val html = render(view(seedBody = "Before after"))
+        val html = render(view(seedBody = "Before\u2028after"))
 
         val parsed = ldJson(html)
         assertTrue(parsed.jsonObject["@graph"]!!.jsonArray.isNotEmpty())

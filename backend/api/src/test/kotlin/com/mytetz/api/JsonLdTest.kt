@@ -50,11 +50,11 @@ class JsonLdTest {
 
     @Test
     fun `an ampersand and a line separator are escaped too`() {
-        val safe = jsonLdScriptSafe("{\"x\":\"a & b   c\"}")
+        val safe = jsonLdScriptSafe("{\"x\":\"a & b \u2028 c\"}")
 
         assertFalse("&" in safe)
-        assertFalse(" " in safe)
-        assertEquals("a & b   c", Json.parseToJsonElement(safe).jsonObject["x"]!!.jsonPrimitive.content)
+        assertFalse("\u2028" in safe)
+        assertEquals("a & b \u2028 c", Json.parseToJsonElement(safe).jsonObject["x"]!!.jsonPrimitive.content)
     }
 
     // ------------------------------------------------------------- jsonLdGraph / jsonLdDocument
