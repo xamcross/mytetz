@@ -17,7 +17,7 @@ import { NodeView } from '../core/models';
     <nav class="crumbs" aria-label="Explanation trail">
       <ol class="crumbs__list">
         @for (node of nodes(); track node.nodeId; let last = $last) {
-          <li class="crumb">
+          <li class="crumb" animate.enter="crumb--in">
             <button
               type="button"
               class="mt-chip crumb__button"
@@ -56,6 +56,21 @@ import { NodeView } from '../core/models';
         align-items: center;
         gap: 6px;
         min-width: 0;
+      }
+      /* Animation E's other half. A new crumb settles in with a small overshoot, the same
+         easing the trail row it mirrors uses, so the two arrivals read as one event. */
+      .crumb--in {
+        animation: crumb-join var(--mt-dur-state) var(--mt-ease-settle) both;
+      }
+      @keyframes crumb-join {
+        from {
+          opacity: 0;
+          transform: translateY(calc(-1 * var(--mt-move-near))) scale(0.9);
+        }
+        to {
+          opacity: 1;
+          transform: none;
+        }
       }
       .crumb__button {
         max-width: 22ch;
