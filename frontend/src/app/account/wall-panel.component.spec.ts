@@ -62,6 +62,22 @@ describe('WallPanelComponent', () => {
     );
   });
 
+  it('marks Subscribe busy, with a label that names the work, while the request runs', async () => {
+    // Finding F7, animation J.
+    const fixture = create('SUBSCRIPTION_REQUIRED');
+    vi.spyOn(fixture.componentInstance, 'redirect').mockImplementation(() => {});
+    const button = fixture.nativeElement.querySelector('button') as HTMLButtonElement;
+    button.click();
+    fixture.detectChanges();
+
+    expect(button.getAttribute('aria-busy')).toBe('true');
+    expect(button.textContent).toContain('Opening checkout…');
+    expect(button.disabled).toBe(true);
+
+    http.expectOne('/api/billing/checkout').flush({ url: 'https://example.com/checkout' });
+    await fixture.whenStable();
+  });
+
   it('the subscribe panel reports a failed checkout request', async () => {
     const fixture = create('SUBSCRIPTION_REQUIRED');
     const redirect = vi.spyOn(fixture.componentInstance, 'redirect').mockImplementation(() => {});

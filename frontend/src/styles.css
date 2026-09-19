@@ -347,6 +347,43 @@ button:disabled {
   opacity: 0.55;
   box-shadow: none;
 }
+/* Finding F7, animation J. A busy control once faded to 55% opacity, the same as a plain
+   disabled one, and said nothing about what it was doing. This keeps the label at full colour —
+   the label already carries a word for the work, for example "Sending…" — and sweeps a bar
+   along the bottom edge, where the pill's own lift already lives. */
+.mt-pill[aria-busy='true'] {
+  position: relative;
+  cursor: progress;
+  opacity: 1;
+}
+.mt-pill[aria-busy='true']::after {
+  content: '';
+  position: absolute;
+  inset: auto 0 -2px 0;
+  height: 2px;
+  border-radius: 2px;
+  background: currentColor;
+  opacity: 0.6;
+  transform-origin: left;
+  animation: pill-busy 900ms linear infinite;
+}
+@keyframes pill-busy {
+  0% {
+    transform: scaleX(0);
+  }
+  50% {
+    transform: scaleX(1);
+    transform-origin: left;
+  }
+  50.1% {
+    transform: scaleX(1);
+    transform-origin: right;
+  }
+  100% {
+    transform: scaleX(0);
+    transform-origin: right;
+  }
+}
 /* Three links carry this class and keep the browser's default underline: "Terms" on the account
    page, "Continue with Google" in the sign-in panel, and "Back to topics" on the not-found page. */
 a.mt-pill {
@@ -429,6 +466,12 @@ a.mt-pill {
   }
   .mt-skeleton {
     animation: none;
+  }
+  /* Finding F7, animation J. A static bar still says "this control is at work". */
+  .mt-pill[aria-busy='true']::after {
+    animation: none;
+    transform: scaleX(1);
+    opacity: 0.35;
   }
   /* .focus__caret and .focus__band do not have a rule here. Angular's emulated encapsulation
      writes each one's own animation rule with a component attribute, at a higher specificity

@@ -200,6 +200,24 @@ describe('AllowanceMeterComponent', () => {
     http.expectOne('/api/billing/checkout');
   });
 
+  it('marks Subscribe busy, with a label that names the work, while the request runs', async () => {
+    // Finding F7, animation J.
+    store.view.set(expired);
+    fixture.detectChanges();
+    vi.spyOn(fixture.componentInstance, 'redirect').mockImplementation(() => {});
+
+    const button = subscribeButton();
+    button.click();
+    fixture.detectChanges();
+
+    expect(button.getAttribute('aria-busy')).toBe('true');
+    expect(button.textContent).toContain('Opening checkout…');
+    expect(button.disabled).toBe(true);
+
+    http.expectOne('/api/billing/checkout').flush({ url: 'https://example.com/checkout' });
+    await fixture.whenStable();
+  });
+
   it('a failed checkout call shows a message and enables the button again', async () => {
     store.view.set(expired);
     fixture.detectChanges();

@@ -49,9 +49,10 @@ const METERED_STATUSES: ReadonlySet<string> = new Set([
             type="button"
             class="mt-pill mt-pill--coral allowance-meter__subscribe"
             [disabled]="subscribing()"
+            [attr.aria-busy]="subscribing() ? 'true' : null"
             (click)="subscribe()"
           >
-            Subscribe
+            {{ subscribing() ? 'Opening checkout…' : 'Subscribe' }}
           </button>
         }
       </div>

@@ -235,6 +235,31 @@ describe('.mt-pill answers hover, press and the disabled state', () => {
   });
 });
 
+describe('a busy .mt-pill (finding F7, animation J)', () => {
+  it('draws a sweeping bar along the bottom edge, on a 900ms linear loop', () => {
+    const rule = css.match(/\.mt-pill\[aria-busy='true'\]::after\s*\{([^}]*)\}/);
+    if (!rule) throw new Error("styles.css must declare .mt-pill[aria-busy='true']::after");
+    expect(rule[1]).toMatch(/animation:\s*pill-busy 900ms linear infinite/);
+  });
+
+  it('keeps the control at full opacity, so its label stays readable', () => {
+    const rule = css.match(/\.mt-pill\[aria-busy='true'\]\s*\{([^}]*)\}/);
+    if (!rule) throw new Error("styles.css must declare .mt-pill[aria-busy='true']");
+    expect(rule[1]).toMatch(/opacity:\s*1/);
+  });
+
+  it('stops the sweep under reduced motion, and leaves a static bar', () => {
+    const body = reducedMotionBlock(css);
+    const rule = body.match(/\.mt-pill\[aria-busy='true'\]::after\s*\{([^}]*)\}/);
+    if (!rule) {
+      throw new Error(
+        "the reduced-motion block must override .mt-pill[aria-busy='true']::after",
+      );
+    }
+    expect(rule[1]).toMatch(/animation:\s*none/);
+  });
+});
+
 describe('a link with the class .mt-pill', () => {
   it('clears the browser default underline', () => {
     const rule = css.match(/a\.mt-pill\s*\{([^}]*)\}/);

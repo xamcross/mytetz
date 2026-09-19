@@ -98,6 +98,39 @@ describe('SignInPanelComponent', () => {
     return { fixture, api: turnstileApi, solve };
   }
 
+  it('marks the submit button busy, with a label that names the work, while the request runs', async () => {
+    // Finding F7, animation J. A busy control once faded to 55% opacity and said nothing about
+    // what it was doing. It now carries aria-busy and a label naming the work while the request
+    // is in flight, and stays disabled the whole time.
+    let resolveRequest!: () => void;
+    vi.spyOn(api, 'requestMagicLink').mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveRequest = resolve;
+        }),
+    );
+    const fixture = create();
+
+    const input = fixture.nativeElement.querySelector('#sign-in-email') as HTMLInputElement;
+    input.value = 'learner@example.com';
+    input.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+
+    const form = fixture.nativeElement.querySelector('form') as HTMLFormElement;
+    const submit = fixture.nativeElement.querySelector(
+      'button[type="submit"]',
+    ) as HTMLButtonElement;
+    form.dispatchEvent(new Event('submit', { cancelable: true }));
+    fixture.detectChanges();
+
+    expect(submit.getAttribute('aria-busy')).toBe('true');
+    expect(submit.textContent).toContain('Sending…');
+    expect(submit.disabled).toBe(true);
+
+    resolveRequest();
+    await fixture.whenStable();
+  });
+
   it('the panel shows the sent state after a request', async () => {
     vi.spyOn(api, 'requestMagicLink').mockResolvedValue(undefined);
     const fixture = create();
