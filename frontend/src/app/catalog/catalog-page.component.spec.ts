@@ -32,7 +32,11 @@ describe('CatalogPageComponent', () => {
 
   afterEach(() => http.verify());
 
-  it('shows a 100-to-150-word introduction between the header and the filter row', async () => {
+  // Finding F8 of the design review. The introduction used to hold nine sentences and sit
+  // between the header and the filter row, so a learner had to read about 100 words before the
+  // search field. It now holds two sentences there, and the rest moves below the tile grid — see
+  // the next test.
+  it('shows a short, two-sentence introduction between the header and the filter row', async () => {
     const fixture = TestBed.createComponent(CatalogPageComponent);
     fixture.detectChanges();
     http.expectOne('/api/catalog/topics').flush([quantumPhysics]);
@@ -48,11 +52,34 @@ describe('CatalogPageComponent', () => {
       fixture.nativeElement.querySelector('.catalog__filter'),
     );
 
-    const wordCount = (intro!.textContent ?? '').trim().split(/\s+/).length;
-    expect(wordCount, 'the word count stays inside the acceptance range').toBeGreaterThanOrEqual(
-      100,
-    );
-    expect(wordCount, 'the word count stays inside the acceptance range').toBeLessThanOrEqual(150);
+    const text = (intro!.textContent ?? '').trim();
+    const sentenceCount = (text.match(/[.!?]+(\s|$)/g) ?? []).length;
+    expect(sentenceCount, 'the introduction keeps exactly two sentences').toBe(2);
+    const wordCount = text.split(/\s+/).length;
+    expect(wordCount, 'a two-sentence introduction stays short').toBeLessThanOrEqual(30);
+  });
+
+  it('keeps the long catalogue text on the page, below the tile grid', async () => {
+    const fixture = TestBed.createComponent(CatalogPageComponent);
+    fixture.detectChanges();
+    http.expectOne('/api/catalog/topics').flush([quantumPhysics]);
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const topics = fixture.nativeElement.querySelector('.topics') as HTMLElement | null;
+    const more = fixture.nativeElement.querySelector('.catalog__more') as HTMLElement | null;
+    expect(more, 'the rest of the introduction stays in the DOM, for a crawler').toBeTruthy();
+    expect(topics, 'the tile grid renders').toBeTruthy();
+    expect(
+      topics!.compareDocumentPosition(more!) & Node.DOCUMENT_POSITION_FOLLOWING,
+      'the long text sits after the tile grid',
+    ).toBeTruthy();
+
+    const wordCount = (more!.textContent ?? '').trim().split(/\s+/).length;
+    expect(
+      wordCount,
+      'the moved text still carries the bulk of the original introduction',
+    ).toBeGreaterThanOrEqual(60);
   });
 
   it('lists topics returned by the API', async () => {
@@ -144,6 +171,40 @@ describe('CatalogPageComponent', () => {
     // The old copy read `No topics match "{{ query() }}"`. The new copy states how large the
     // catalogue is, so the check moves to that wording rather than the old one.
     expect(fixture.nativeElement.textContent as string).toContain('Nothing under that name yet.');
+  });
+
+  // Finding F18 of the design review. Firefox draws no native clear control for `type="search"`,
+  // and the old "Clear the filters" pill showed only once the result was already empty. A
+  // learner with one match had no reset at all.
+  it('shows Clear the filters next to the pill row once a query or a category is set', async () => {
+    const fixture = TestBed.createComponent(CatalogPageComponent);
+    fixture.detectChanges();
+    http.expectOne('/api/catalog/topics').flush([quantumPhysics, microbiology]);
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const clearButton = (): HTMLButtonElement | null =>
+      fixture.nativeElement.querySelector('.catalog__row .catalog__clear');
+
+    expect(clearButton(), 'no reset shows while neither filter is set').toBeNull();
+
+    const input = fixture.nativeElement.querySelector('#topic-filter') as HTMLInputElement;
+    input.value = 'micro';
+    input.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+    expect(clearButton(), 'a query alone shows the reset').not.toBeNull();
+
+    input.value = '';
+    input.dispatchEvent(new Event('input'));
+    fixture.nativeElement.querySelector('button[data-category="Biology"]').click();
+    fixture.detectChanges();
+    expect(clearButton(), 'a category alone shows the reset').not.toBeNull();
+
+    clearButton()!.click();
+    fixture.detectChanges();
+    expect(clearButton(), 'clearing both drops the reset again').toBeNull();
+    expect(fixture.nativeElement.textContent as string).toContain('Microbiology');
+    expect(fixture.nativeElement.textContent as string).toContain('Quantum Physics');
   });
 
   it('renders each topic tile as a plain link to its topic page, not a button', async () => {

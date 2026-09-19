@@ -12,6 +12,12 @@ import { TopicSummary } from '../core/models';
  * below reads `Event.target`, which is unrelated to those globals and is available wherever the
  * event itself fires) — kept that way on purpose, per the design spec's note that the Angular
  * reader must stay SSR-safe for when spec C adds server rendering.
+ *
+ * Finding F9 of the design review, 2026-09-19, has no subject here any more. It reported that a
+ * click on a tile disabled every tile and dropped each one to 55% opacity — a `tilesLocked()`
+ * signal on a `<button>` tile. Issue #45 had already changed the tile into the plain link above,
+ * before this issue started, so a click starts no session and locks no tile. This file has no
+ * `tilesLocked` signal and no such opacity rule. Left out for that reason.
  */
 @Component({
   selector: 'app-catalog-page',
@@ -23,15 +29,16 @@ import { TopicSummary } from '../core/models';
           <h1 class="catalog__title">What do you want to understand?</h1>
         </header>
 
+        <!--
+          Finding F8 of the design review. The introduction used to hold nine sentences here, and
+          the search field sat below all of them. Two sentences stay; the rest moves below the
+          tile grid, in .catalog__more, where a crawler still reads it and a learner does not have
+          to. catalog-page.component.spec.ts asserts that .catalog__intro is the immediate sibling
+          of .catalog__filter, which is an acceptance criterion of the introduction issue.
+        -->
         <p class="catalog__intro">
           mytetz is a reading tool for a hard topic. Pick a topic below, from astronomy to
-          psychology. Each topic opens with one short passage. Read the passage. Highlight a word or
-          phrase you do not understand. mytetz writes a short explanation for that phrase. The
-          explanation opens next to the passage. You can highlight a word inside the explanation
-          too. Each highlight opens a new explanation. You choose how many times you do this. The
-          catalogue holds twelve subject areas: astronomy, biology, chemistry, computer science,
-          earth science, economics, history, linguistics, mathematics, philosophy, physics, and
-          psychology. Use the search box or a category filter to find a topic fast.
+          psychology.
         </p>
 
         <div class="catalog__filter">
@@ -59,21 +66,21 @@ import { TopicSummary } from '../core/models';
                 </button>
               }
             </div>
+            @if (query() || category() !== null) {
+              <!-- Finding F18 of the design review. Firefox draws no native clear control for
+                   type="search", and the old reset showed only once the filter already matched
+                   nothing. This one shows next to the pill row the moment either filter holds a
+                   value, so a learner with one match still has a way back to the whole catalogue. -->
+              <button
+                type="button"
+                class="mt-pill mt-pill--ghost catalog__clear"
+                (click)="clearFilters()"
+              >
+                Clear the filters
+              </button>
+            }
           </div>
         </div>
-
-        <!--
-          This link sits after the filter row, and not before it. catalog-page.component.spec.ts
-          asserts that .catalog__intro is the immediate sibling of .catalog__filter, which is an
-          acceptance criterion of the introduction issue.
-
-          A plain href, and not a routerLink: /guides is a static HTML file under
-          frontend/public/guides, and app.routes.ts has no 'guides' path, so a routerLink would
-          reach the wildcard route and open NotFoundPageComponent.
-        -->
-        <p class="catalog__guides">
-          Do you want a method first? Read the <a href="/guides">study guides</a>.
-        </p>
 
         @if (topicsLoading()) {
           <p class="mt-sr-only" role="status">Loading topics…</p>
@@ -100,8 +107,14 @@ import { TopicSummary } from '../core/models';
           </div>
         } @else {
           <ul class="topics">
-            @for (t of filteredTopics(); track t.slug) {
-              <li class="topic">
+            @for (t of filteredTopics(); track t.slug; let i = $index) {
+              <!--
+                Animation G of the design review. The tile drops in and settles, with a delay that
+                grows per tile and stops after six — a twelve-topic filter must not become a slow
+                wave. Never on .catalog__cat: layout.spec.ts compares the top edge of every pill,
+                and a vertical transform there would make that comparison flaky.
+              -->
+              <li class="topic" animate.enter="topic--in" [style.--i]="i">
                 <a
                   class="mt-card topic__tile"
                   [attr.href]="'/topics/' + t.slug"
@@ -135,6 +148,30 @@ import { TopicSummary } from '../core/models';
             }
           </ul>
         }
+
+        <!--
+          Finding F8's own second half. The rest of the introduction lands here, below the tile
+          grid, so the page still carries every sentence for a crawler that runs the script, and a
+          learner meets the search field right after two sentences instead of nine.
+        -->
+        <p class="catalog__more">
+          Each topic opens with one short passage. Read the passage. Highlight a word or phrase you
+          do not understand. mytetz writes a short explanation for that phrase. The explanation
+          opens next to the passage. You can highlight a word inside the explanation too. Each
+          highlight opens a new explanation. You choose how many times you do this. The catalogue
+          holds twelve subject areas: astronomy, biology, chemistry, computer science, earth
+          science, economics, history, linguistics, mathematics, philosophy, physics, and
+          psychology. Use the search box or a category filter to find a topic fast.
+        </p>
+
+        <!--
+          A plain href, and not a routerLink: /guides is a static HTML file under
+          frontend/public/guides, and app.routes.ts has no 'guides' path, so a routerLink would
+          reach the wildcard route and open NotFoundPageComponent.
+        -->
+        <p class="catalog__guides">
+          Do you want a method first? Read the <a href="/guides">study guides</a>.
+        </p>
       </div>
     </main>
   `,
@@ -157,7 +194,8 @@ import { TopicSummary } from '../core/models';
         font-size: 34px;
         line-height: 1.15;
       }
-      .catalog__intro {
+      .catalog__intro,
+      .catalog__more {
         margin: 0;
         max-width: 62ch;
         font-size: 16px;
@@ -172,6 +210,11 @@ import { TopicSummary } from '../core/models';
         line-height: 1.6;
         font-weight: 500;
         color: var(--mt-muted);
+      }
+      /* F18. The button sits right after the pill row, inside the same column, so it reads as
+         part of the filter and not as a second, separate action. */
+      .catalog__clear {
+        align-self: flex-start;
       }
       /* The search takes its own line, and the categories take the next one.
          The design draws the two side by side, because its sample data has four categories. The
@@ -220,6 +263,34 @@ import { TopicSummary } from '../core/models';
       .topic {
         display: flex;
         min-width: 0;
+      }
+      /* Animation G of the design review. A tile drops in and settles on load and on every
+         filter change, with a delay that grows per tile and stops after six — a twelve-topic
+         filter must not turn into a slow wave. Never on .catalog__cat: two layout tests compare
+         the top edge of every pill, and a vertical transform there would make both flaky. */
+      .topic--in {
+        animation: tile-in var(--mt-dur-state) var(--mt-ease-out) both;
+        animation-delay: calc(min(var(--i), 5) * 24ms);
+      }
+      @keyframes tile-in {
+        from {
+          opacity: 0;
+          transform: translateY(var(--mt-move-far));
+        }
+        to {
+          opacity: 1;
+          transform: none;
+        }
+      }
+      /* A learner who asks for less motion still sees each tile arrive, with no stagger left to
+         wait through. --mt-dur-state is already 1ms under reduced motion (styles.css), but the
+         24ms-per-tile delay above is a literal value and not a token, so it needs its own
+         override here — in this file, because #102 found a component's own rule always outranks
+         a same-class rule in the global stylesheet. */
+      @media (prefers-reduced-motion: reduce) {
+        .topic--in {
+          animation-delay: 0ms;
+        }
       }
       .topic__tile {
         position: relative;
@@ -325,7 +396,14 @@ import { TopicSummary } from '../core/models';
       }
       @media (max-width: 767px) {
         .catalog {
-          padding: 24px 20px;
+          /* F8. Less air above the question, so the search field lands sooner on a phone. */
+          padding: 8px 20px 24px;
+        }
+        .catalog__inner {
+          /* F8. Every gap in this column tightens on a phone, so the header, the short
+             introduction and the filter row sit closer together and a learner reaches the search
+             field sooner. 16px above 768px, at every width. */
+          gap: 6px;
         }
         .catalog__title {
           font-size: 26px;
