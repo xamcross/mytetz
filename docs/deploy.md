@@ -17,7 +17,7 @@ browser -> Cloudflare (proxied, Full (strict)) -> fly.io Anycast -> machine in f
 | --- | --- |
 | fly app | `mytetz`, org `personal` |
 | fly primary region | `fra` (Frankfurt) |
-| fly VM | 1 x `shared-cpu-1x`, 512 MB, scales to zero when idle |
+| fly VM | 1 x `shared-cpu-1x`, 512 MB, stays up — see section 4 |
 | fly hostname | `https://mytetz.fly.dev` |
 | fly IPv6 | `2a09:8280:1::15c:3d15:0` — **dedicated** |
 | fly IPv4 | `66.241.125.121` — **shared** |
@@ -138,7 +138,7 @@ they reset whenever the machine cold-starts.
 
 ### 2.2 Every variable the backend reads
 
-20 variables, and each one is listed here and in `.env.example`. Everything
+33 variables, and each one is listed here and in `.env.example`. Everything
 except the three secrets above has a default in code, and the defaults are the
 values shown. **An unset, unparseable or non-positive value falls back to its
 default rather than stopping the server**, because these are read while the
@@ -167,6 +167,19 @@ process is starting and a typo must not take the site down.
 | `MYTETZ_COOKIE_SECURE` | `true` | whether the cookie carries `Secure`. Only an explicit `false`, `0`, `no` or `off` turns it off. |
 | `MYTETZ_CLIENT_IP_HEADER` | `Fly-Client-IP` | which header the rate limiters key on. See section 2. |
 | `MYTETZ_MIGRATE_ON_BOOT` | off | whether the B0 migration runs at boot. Only the exact word `true` turns it on. Section "The B0 model migration" explains it. |
+| `GOOGLE_CLIENT_ID` | none | the Google OAuth client ID. Sign-in with Google answers `503` until this and `GOOGLE_CLIENT_SECRET` are both set. |
+| `GOOGLE_CLIENT_SECRET` | none | the Google OAuth client secret. Sign-in with Google answers `503` until this and `GOOGLE_CLIENT_ID` are both set. |
+| `MYTETZ_MAIL_MODE` | none | selects the mail adapter: `resend` or `log`. Sign-in by email answers `503` until this holds one of the two words. |
+| `MYTETZ_MAIL_FROM` | none | the sender address for a magic-link email. `MYTETZ_MAIL_MODE=resend` needs it. |
+| `MYTETZ_TRIAL_GENERATIONS` | `40` | how many generations a new trial grants in total. |
+| `MYTETZ_TRIAL_DAYS` | `7` | how many days a new trial lasts. |
+| `MYTETZ_GRACE_DAYS` | `3` | how many days access continues after a cancelled subscription's period ends. |
+| `MYTETZ_SUBSCRIBER_DAILY_EXPLAINS` | `25` | explanations per day for a paying subscriber. |
+| `MYTETZ_QUIZ_EFFORT` | `LOW` | thinking effort for a quiz: `LOW`, `MEDIUM` or `HIGH`. An unknown name falls back to `LOW`. |
+| `MYTETZ_QUIZ_MAX_OUTPUT_TOKENS` | `2000` | caps thinking and response text together, for one quiz generation call. |
+| `MYTETZ_TEST_ME_MAX_QUESTIONS` | `3` | how many questions one "test me" quiz holds. |
+| `MYTETZ_EXAM_MAX_QUESTIONS` | `8` | how many questions one exam holds. |
+| `MYTETZ_EXAM_MAX_SOURCES` | `20` | how many of a session's most recent nodes an exam may draw from. |
 
 ### Atlas network access — known constraint
 
