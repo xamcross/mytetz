@@ -10,6 +10,7 @@ import {
   SEED,
   accountView,
   explainedView,
+  mockExplainRefusal,
   mockExplainStream,
   mockQuiz,
   openQuantumPhysicsSession,
@@ -714,6 +715,30 @@ test.describe('with a reduced-motion preference', () => {
       'rgb(15, 118, 110)',
     );
     await expect(page.locator('.crumb')).toHaveCount(2);
+  });
+
+  test('the sign-in panel replaces the focus card and settles at full opacity', async ({
+    page,
+  }) => {
+    // Animation M. The panel's own entrance is token-driven, so this is the proof that it still
+    // renders, in the slot the focus card would occupy, and ends up fully visible.
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await stubCatalogueAndSession(page);
+    await mockExplainRefusal(page, 's1', {
+      status: 401,
+      body: { code: 'SIGN_IN_REQUIRED', message: 'sign in to keep going' },
+    });
+    await openQuantumPhysicsSession(page);
+    await selectPhrase(page, 'focus-body', 'fundamental physical theory');
+    await verb(page, 'Explain it').click();
+
+    // The host, app-sign-in-panel, and not the .sign-in-panel div inside it: animate.enter's
+    // class and its opacity animation sit on the host, and a child's own computed opacity stays
+    // "1" regardless of what its ancestor's opacity is doing.
+    const host = page.locator('app-sign-in-panel');
+    await expect(host).toBeVisible();
+    await expect(host).toHaveCSS('opacity', '1');
+    await expect(page.locator('app-focus-card')).toHaveCount(0);
   });
 });
 
