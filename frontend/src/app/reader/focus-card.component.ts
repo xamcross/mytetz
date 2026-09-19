@@ -92,14 +92,16 @@ const READY_STATUS_MILLIS = 4000;
       <p
         #bodyEl
         class="focus__body"
+        [class.focus__body--landed]="landed()"
         data-testid="focus-body"
         tabindex="-1"
         (mouseup)="onSelectionChanged()"
         (touchend)="onSelectionChanged()"
+        (animationend)="onBodyAnimationEnd($event)"
       >{{ body() }}</p>
 
       @if (isStreaming() || streamingText().length > 0) {
-        <p class="focus__streaming" aria-live="off">
+        <p class="focus__streaming" animate.leave="focus__streaming--out" aria-live="off">
           {{ streamingText() }}
           @if (isStreaming()) {
             <span class="focus__caret" aria-hidden="true">▍</span>
@@ -213,6 +215,25 @@ const READY_STATUS_MILLIS = 4000;
         background: var(--mt-amber);
         color: var(--mt-amber-ink);
       }
+      /* Animation A. The bare .focus__body rule above carries no animation and no transition —
+         nothing must move the text under a learner's pointer, per the design review's own rule.
+         This modifier class is bound for one render only, after the paragraph has a new answer,
+         and a class attribute changes no text node, so the offsets selectionToSpan reads are
+         exactly the same while it is present. focus-card.component.spec.ts proves both halves of
+         that claim. */
+      .focus__body--landed {
+        animation: focus-land var(--mt-dur-panel) var(--mt-ease-settle) both;
+      }
+      @keyframes focus-land {
+        from {
+          opacity: 0.25;
+          transform: translateY(var(--mt-move-near));
+        }
+        to {
+          opacity: 1;
+          transform: none;
+        }
+      }
       .focus__streaming {
         margin: 0;
         padding: 16px;
@@ -226,6 +247,35 @@ const READY_STATUS_MILLIS = 4000;
         border-radius: var(--mt-r-panel);
         border-left: 3px solid var(--mt-coral-press);
         user-select: none;
+        /* Animation B. The box enters once, when the stream starts, and never per token: a
+           per-word animation would need a wrapper for every word, and a wrapper here breaks the
+           text selection the class comment above documents. The streamingText binding itself
+           carries no animation of its own, so the first token is on screen the instant it
+           arrives. */
+        animation: focus-open var(--mt-dur-state) var(--mt-ease-out) both;
+      }
+      @keyframes focus-open {
+        from {
+          opacity: 0;
+          transform: translateY(var(--mt-move-near)) scaleY(0.98);
+          transform-origin: top;
+        }
+        to {
+          opacity: 1;
+          transform: none;
+        }
+      }
+      /* Animation A's other half: the stream box hands off to the settled body, rather than
+         simply vanishing. animate.leave keeps it in the DOM, playing this animation, for the one
+         render where isStreaming and streamingText have both gone false-and-empty. */
+      .focus__streaming--out {
+        animation: focus-hand-off var(--mt-dur-state) var(--mt-ease-in) both;
+      }
+      @keyframes focus-hand-off {
+        to {
+          opacity: 0;
+          transform: translateY(calc(-1 * var(--mt-move-near)));
+        }
       }
       .focus__caret {
         color: var(--mt-coral-text);
@@ -328,8 +378,16 @@ export class FocusCardComponent {
   protected readonly anchor = signal<PickerAnchor | null>(null);
   /** False when the rendered root and the stored body have diverged — see the class comment. */
   protected readonly bodyMatches = signal(true);
-  /** The body the last post-render check ran against, so a change can be told from a re-render. */
+  /** The body the last post-render check ran against, so a change can be told from a re-render.
+   * Also what tells animation A's first arrival from every later one: it starts `null`, and a
+   * real body is never `null`, so `checkedBody === null` means no check has happened yet. */
   private checkedBody: string | null = null;
+  /** True for the one render after a new answer replaces the one on screen — see animation A's
+   * class binding on `.focus__body` above. Cleared by [onBodyAnimationEnd], not by a timer: a
+   * timer in a zoneless component needs its own destroy guard, and `animationend` needs none,
+   * because the class carries no consequence once its own animation has already reached its
+   * final frame. */
+  protected readonly landed = signal(false);
   /** The text the status paragraph shows. A signal of its own, and not `streamStatus` itself,
    * because the constructor's effect below writes it from a timer, well after the render that
    * first read `isStreaming()`. */
@@ -382,11 +440,16 @@ export class FocusCardComponent {
         const matches = rootTextMatchesBody(this.bodyRef().nativeElement, body);
         this.bodyMatches.set(matches);
         if (body !== this.checkedBody) {
+          // A real body is never `null`, so this is true for one call only: the very first one,
+          // for the session's first body. Animation A answers an arrival the learner watched
+          // happen, and the first render of a card is not that — see [landed]'s own comment.
+          const isFirstBody = this.checkedBody === null;
           this.checkedBody = body;
           // The offsets held here index the body that was on screen a moment ago. Against the new
           // one they name a phrase the learner never highlighted.
           this.selectedSpan.set(null);
           this.anchor.set(null);
+          if (!isFirstBody) this.landed.set(true);
         }
       },
     });
@@ -423,6 +486,17 @@ export class FocusCardComponent {
     });
 
     inject(DestroyRef).onDestroy(() => this.clearReadyStatusTimer());
+  }
+
+  /**
+   * Ends animation A's landed state, on the animation's own last frame rather than on a timer.
+   *
+   * `animationName` is checked because Angular's own animation guide warns that a callback bound
+   * this way can see an event bubbled up from an unrelated animation; `.focus__body` has none
+   * today, but the check costs one line and stays correct if that ever changes.
+   */
+  protected onBodyAnimationEnd(event: AnimationEvent): void {
+    if (event.animationName === 'focus-land') this.landed.set(false);
   }
 
   private clearReadyStatusTimer(): void {

@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { ErrorHandler } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
@@ -10,6 +11,30 @@ import { Media, SessionView, SpanPayload, Verb } from '../core/models';
 import { ExplainEvent, ExplainStreamError } from '../core/sse.client';
 
 const BODY = 'The pillars of modern physics.';
+
+/**
+ * Rule 3 of the design review: nothing may animate the paragraph under a learner's drag. This
+ * reads the component's own shipped source, the way `palette.spec.ts` and `styles.spec.ts` read
+ * theirs, rather than trusting that a later edit leaves the rule alone.
+ */
+describe('the bare .focus__body style rule', () => {
+  const source = readFileSync('src/app/reader/focus-card.component.ts', 'utf8');
+
+  /** The body of the one rule whose selector is exactly `.focus__body` — not `--landed`, not
+   * `:focus-visible`, not `::selection`. The match requires only whitespace between the selector
+   * and its opening brace, which the modifier and pseudo-selector forms all fail. */
+  function bareFocusBodyBlock(): string {
+    const match = source.match(/\.focus__body\s*\{([^}]*)\}/);
+    if (!match) throw new Error('the component must declare a bare .focus__body rule');
+    return match[1];
+  }
+
+  it('has no transition and no animation', () => {
+    const block = bareFocusBodyBlock();
+    expect(block).not.toMatch(/\btransition\b/);
+    expect(block).not.toMatch(/\banimation\b/);
+  });
+});
 
 describe('FocusCardComponent', () => {
   let fixture: ComponentFixture<FocusCardComponent>;
@@ -664,6 +689,70 @@ describe('FocusCardComponent', () => {
     fixture.detectChanges();
 
     expect(statusEl().textContent?.trim()).toBe('');
+  });
+
+  it('shows the first streamed token in the DOM the instant it arrives, with no wait for an animation', () => {
+    // Animation B enters the stream box once, and the box must never hold the token back while it
+    // does. No `await fixture.whenStable()` runs here on purpose: the token has to be on screen
+    // straight after the render that follows the first `delta` event, and not only after any
+    // animation has had time to run.
+    fixture.componentRef.setInput('isStreaming', true);
+    fixture.componentRef.setInput('streamingText', 'The');
+    fixture.detectChanges();
+
+    const streaming: HTMLElement = fixture.nativeElement.querySelector('.focus__streaming');
+    expect(streaming.textContent).toContain('The');
+  });
+
+  it('marks the body as landed for one animation when a new answer arrives, and not on the first render', async () => {
+    // A fresh card must not carry the class: animation A answers an arrival the learner watched
+    // happen, and the very first render of a session is not that.
+    expect(bodyEl().classList.contains('focus__body--landed')).toBe(false);
+
+    fixture.componentRef.setInput('body', 'A new pillar of the theory.');
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(bodyEl().classList.contains('focus__body--landed')).toBe(true);
+  });
+
+  it('clears the landed class once its own animation ends, and ignores an unrelated one', async () => {
+    fixture.componentRef.setInput('body', 'A new pillar of the theory.');
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(bodyEl().classList.contains('focus__body--landed')).toBe(true);
+
+    // A bubbled `animationend` from an animation this paragraph does not own must change nothing.
+    bodyEl().dispatchEvent(
+      Object.assign(new Event('animationend'), { animationName: 'some-other-animation' }),
+    );
+    fixture.detectChanges();
+    expect(bodyEl().classList.contains('focus__body--landed')).toBe(true);
+
+    bodyEl().dispatchEvent(
+      Object.assign(new Event('animationend'), { animationName: 'focus-land' }),
+    );
+    fixture.detectChanges();
+    expect(bodyEl().classList.contains('focus__body--landed')).toBe(false);
+  });
+
+  it('keeps the selection offsets correct while the landed class is still on the paragraph', async () => {
+    // The proof the class comment above the template asks for: a class binding touches no text
+    // node, so the offsets `selectionToSpan` reads must be exactly as correct while the landed
+    // class is on the paragraph as they are at any other time.
+    fixture.componentRef.setInput('body', 'A new pillar of the theory.');
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(bodyEl().classList.contains('focus__body--landed')).toBe(true);
+
+    select(6, 12); // "pillar"
+
+    expect(pickerLive()).toBe(true);
+    verbButton('EXPLAIN')!.click();
+    expect(requests).toEqual([{ span: { text: 'pillar', start: 6, end: 12 }, verb: 'EXPLAIN' }]);
   });
 
   it('clears its pending timer on destroy, so a card the learner has left writes to nothing', () => {
