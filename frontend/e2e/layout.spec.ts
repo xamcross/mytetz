@@ -744,6 +744,60 @@ test('a coral pill keeps its smaller shadow while a learner presses it', async (
   await page.mouse.up();
 });
 
+/** Finding F10. The first option is one line. The second is long enough to wrap onto a second
+ * line inside the 560px-wide panel, at 15px and a 1.45 line-height. */
+const WRAP_TEMPLATE: QuizTemplateView = {
+  attemptId: 'attempt-wrap',
+  kind: 'TEST_ME',
+  questions: [
+    {
+      questionId: 'q1',
+      stem: 'Which option is correct?',
+      options: [
+        'Short',
+        'This option carries a much longer sentence than the one above it, long enough that it must wrap onto a second line inside the panel.',
+      ],
+    },
+  ],
+};
+
+const WRAP_RESULT: QuizResultView = {
+  score: 0,
+  total: 1,
+  correctIndices: { q1: 0 },
+  rationales: { q1: '' },
+};
+
+test('a long quiz option wraps to two lines, taller than a one-line option, with no overlap', async ({
+  page,
+}) => {
+  await stubCatalogueAndSession(page);
+  await mockQuiz(page, 's1', WRAP_TEMPLATE, WRAP_RESULT);
+  await gotoReader(page);
+
+  await page.getByTestId('test-me').click();
+  const quiz = page.locator('[role="dialog"]');
+  const options = quiz.locator('.quiz-panel__option');
+  await options.first().waitFor();
+
+  const shortBox = await options.nth(0).boundingBox();
+  const longBox = await options.nth(1).boundingBox();
+  if (shortBox === null || longBox === null) throw new Error('an option has no box to measure');
+
+  // Padding and border are fixed for both options, so a wrap to a second line adds one more line
+  // of text, not a whole extra option's worth of height. 15px is well under one 15px/1.45 line
+  // (about 22px), so this margin proves a wrap happened without pinning the exact font metrics.
+  expect(
+    longBox.height,
+    'the long option wrapped to a second line, so it stands taller than a one-line option',
+  ).toBeGreaterThan(shortBox.height + 15);
+
+  expect(
+    shortBox.y + shortBox.height,
+    'the short option ends before the long, wrapped one begins: the two never overlap',
+  ).toBeLessThanOrEqual(longBox.y);
+});
+
 test('Tab and Shift+Tab cycle inside the picker and never leave it', async ({ page }) => {
   await stubCatalogueAndSession(page);
   await page.setViewportSize(WIDTHS.wide);
