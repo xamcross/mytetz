@@ -136,9 +136,10 @@ describe('AccountPageComponent', () => {
   });
 
   it('the account page offers no sign out everywhere control', async () => {
-    // Issue #88 removes the control. The owner had no reason for it, and it left the learner with
-    // an odd extra choice next to plain "Sign out". `AuthRoutes.kt` keeps the route for a later
-    // security page or an operator, but no page in this app calls it any more.
+    // Issue #88 removes the control. The monetization spec listed it in slice B4, "Hardening". The
+    // owner decided that the page is clearer without it, and accepted the cost: a learner can no
+    // longer end a session on another device from this page. `AuthRoutes.kt` keeps the route for a
+    // later security page or an operator, and no page in this app calls it.
     await mount((req) => req.flush(active));
 
     expect(fixture.nativeElement.querySelector('[data-action="sign-out-everywhere"]')).toBeNull();
