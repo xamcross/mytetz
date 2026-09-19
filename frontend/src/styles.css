@@ -120,6 +120,8 @@
   --mt-press-coral: 0 2px 0 var(--mt-coral-deep);
   --mt-press-teal: 0 2px 0 var(--mt-teal-deep);
   --mt-lift-hover: 0 5px 0 var(--mt-border);
+  --mt-lift-hover-coral: 0 5px 0 var(--mt-coral-deep);
+  --mt-lift-hover-teal: 0 5px 0 var(--mt-teal-deep);
 
   /* type */
   --mt-display: 'Fredoka', 'Figtree', system-ui, sans-serif;
@@ -257,10 +259,15 @@ button:disabled {
     box-shadow var(--mt-dur-press) var(--mt-ease-press);
 }
 /* A learner sees this before they press it. The hover rule always sits above the matching active
-   rule below it, so a press still wins when a pointer hovers and presses at once. */
-.mt-pill:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: var(--mt-lift-hover);
+   rule below it, so a press still wins when a pointer hovers and presses at once.
+   `(hover: hover)` and not a plain `:hover`: a touch screen keeps a `:hover` match after a tap,
+   until the learner taps somewhere else, so a tapped pill would stay lifted with no pointer on
+   it. `(hover: hover)` asks whether the pointer itself can hover, which a finger cannot. */
+@media (hover: hover) {
+  .mt-pill:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: var(--mt-lift-hover);
+  }
 }
 .mt-pill:active:not(:disabled) {
   transform: translateY(2px);
@@ -274,8 +281,10 @@ button:disabled {
   color: var(--mt-surface);
   box-shadow: var(--mt-lift-coral);
 }
-.mt-pill--coral:hover:not(:disabled) {
-  box-shadow: 0 5px 0 var(--mt-coral-deep);
+@media (hover: hover) {
+  .mt-pill--coral:hover:not(:disabled) {
+    box-shadow: var(--mt-lift-hover-coral);
+  }
 }
 .mt-pill--coral:active:not(:disabled) {
   box-shadow: var(--mt-press-coral);
@@ -294,8 +303,10 @@ button:disabled {
   color: var(--mt-surface);
   box-shadow: var(--mt-lift-teal);
 }
-.mt-pill--teal:hover:not(:disabled) {
-  box-shadow: 0 5px 0 var(--mt-teal-deep);
+@media (hover: hover) {
+  .mt-pill--teal:hover:not(:disabled) {
+    box-shadow: var(--mt-lift-hover-teal);
+  }
 }
 .mt-pill--teal:active:not(:disabled) {
   box-shadow: var(--mt-press-teal);
@@ -312,10 +323,12 @@ button:disabled {
   box-shadow: none;
   color: var(--mt-teal);
 }
-.mt-pill--ghost:hover:not(:disabled) {
-  transform: none;
-  box-shadow: none;
-  background: var(--mt-sunk);
+@media (hover: hover) {
+  .mt-pill--ghost:hover:not(:disabled) {
+    transform: none;
+    box-shadow: none;
+    background: var(--mt-sunk);
+  }
 }
 /* A ghost pill has no shadow at rest, so it must stay flat on a press too. Without this rule,
    `.mt-pill:active:not(:disabled)` wins on specificity and draws a shadow. The pill then appears
@@ -412,12 +425,8 @@ a.mt-pill {
   .mt-skeleton {
     animation: none;
   }
-  .focus__caret {
-    animation: none;
-    opacity: 1;
-  }
-  .focus__band {
-    animation: none;
-    transform: none;
-  }
+  /* .focus__caret and .focus__band do not have a rule here. Angular's emulated encapsulation
+     writes each one's own animation rule with a component attribute, at a higher specificity
+     than a plain class here can reach. Their reduced-motion override lives in
+     focus-card.component.ts, next to the rule it silences. */
 }

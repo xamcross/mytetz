@@ -241,6 +241,21 @@ const READY_STATUS_MILLIS = 4000;
           opacity: 0;
         }
       }
+      /* A learner who asks for less motion still sees that a stream runs: the caret stays
+         visible, and the band stops moving. This rule stays here, and not in styles.css: Angular
+         gives this component's own .focus__caret and .focus__band rules a higher specificity
+         than a plain class in the global stylesheet can reach, so a global override there would
+         never win. */
+      @media (prefers-reduced-motion: reduce) {
+        .focus__caret {
+          animation: none;
+          opacity: 1;
+        }
+        .focus__band {
+          animation: none;
+          transform: none;
+        }
+      }
       .focus__hint {
         margin: 0;
         font-size: 13px;
