@@ -1747,6 +1747,17 @@ test.describe('the footer keeps every link on one line at a phone width', () => 
       expect(doc.scroll, `the page does not scroll sideways at ${width}px`).toBeLessThanOrEqual(
         doc.client,
       );
+
+      // The phone rule of .foot has the same specificity as the base rule, so it applies only
+      // when it stands after the base rule. The first version stood before it and never applied.
+      const foot = await page.locator('.foot').evaluate((el) => {
+        const style = getComputedStyle(el);
+        return { paddingLeft: style.paddingLeft, rowGap: style.rowGap };
+      });
+      expect(foot, `the phone padding and the row gap apply at ${width}px`).toEqual({
+        paddingLeft: '20px',
+        rowGap: '12px',
+      });
     });
   }
 

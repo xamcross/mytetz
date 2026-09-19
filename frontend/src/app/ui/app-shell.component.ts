@@ -147,13 +147,6 @@ import { BackendState, StatusDotComponent } from './status-dot.component';
         .bar__nav {
           display: none;
         }
-        /* Issue #132: six links do not fit in one row below about 480px. flex-wrap moves the
-           overflow link to a new row instead of shrinking every link, and the smaller side
-           padding matches .bar's own mobile padding above. */
-        .foot {
-          padding: 24px 20px;
-          gap: 12px 20px;
-        }
       }
       .foot {
         display: flex;
@@ -177,6 +170,16 @@ import { BackendState, StatusDotComponent } from './status-dot.component';
       }
       .foot__link:hover {
         color: var(--mt-teal);
+      }
+      /* Issue #132: six links do not fit in one row below about 480px. flex-wrap on .foot moves
+         a link to a new row, and the smaller side padding matches the phone padding of .bar.
+         This block stands after the .foot rule on purpose: the two rules have the same
+         specificity, so the later one wins. */
+      @media (max-width: 767px) {
+        .foot {
+          padding: 24px 20px;
+          gap: 12px 20px;
+        }
       }
     `,
   ],
