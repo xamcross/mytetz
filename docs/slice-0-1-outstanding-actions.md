@@ -209,11 +209,12 @@ to the console only. Each timestamp shows the date and the UTC zone.
 
 The code already writes three tokens. A person sees them today only by chance.
 
-### Step 4.1 — Add a log drain and three alerts
+### Step 4.1 — Add a log drain and the alerts
 
-1. Connect a log service to the fly.io application. Use `fly logs` shipping, or add a Logtail,
-   Datadog or Better Stack drain.
-2. Make an alert for each of these strings. Send each alert to a channel that a person reads.
+`docs/deploy.md`, section "Log drain, alert rules, and uptime check", now holds the full alert
+rule table, the catch-all for a line with no token, and the uptime check. Do the steps there
+instead of the four below. This document still names the four highest-urgency strings, so a
+reader sees the stakes without opening the other file.
 
 | String | What it means | Urgency |
 |---|---|---|
