@@ -254,6 +254,21 @@ class SitemapRoutesTest {
         )
     }
 
+    @Test
+    fun `faq is in the sitemap once, with no lastmod`() = testApplication {
+        val fx = SitemapFixture()
+        application { routing { sitemapRoutes(fx.catalog, fx.explanations, FAKE_MODEL_FAMILY) } }
+
+        val body = client.get("/sitemap.xml").bodyAsText()
+
+        val occurrences = Regex("<loc>https://mytetz\\.com/faq</loc>").findAll(body).count()
+        assertEquals(1, occurrences, "expected /faq exactly once, body was: $body")
+        assertTrue(
+            "<url><loc>https://mytetz.com/faq</loc></url>" in body,
+            "/faq must carry no lastmod: $body",
+        )
+    }
+
     // ------------------------------------------------------------- hostile input
 
     @Test
