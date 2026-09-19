@@ -181,7 +181,7 @@ needs it, until an operator sets it.
 | `MYTETZ_COOKIE_SIGNING_KEY` | none — required | signs the principal cookie. The app refuses to boot without it. 32 characters minimum. |
 | `MYTETZ_COOKIE_SECURE` | `true` | whether the cookie carries `Secure`. Only an explicit `false`, `0`, `no` or `off` turns it off. |
 | `MYTETZ_CLIENT_IP_HEADER` | `Fly-Client-IP` | which header the rate limiters key on. See section 2. |
-| `MYTETZ_MIGRATE_ON_BOOT` | off | whether the B0 migration runs at boot. Only the exact word `true` turns it on. Section "The B0 model migration" explains it. |
+| `MYTETZ_MIGRATE_ON_BOOT` | off | whether the app deletes an explanation stranded by a model family change, at boot. Only the exact word `true` turns it on. It does **not** control the pre-warm of a missing seed: that step runs on every boot, with no flag. Section "The B0 model migration" explains both. |
 | `GOOGLE_CLIENT_ID` | none | the Google OAuth client ID. Sign-in with Google answers `503` until this and `GOOGLE_CLIENT_SECRET` are both set. |
 | `GOOGLE_CLIENT_SECRET` | none | the Google OAuth client secret. Sign-in with Google answers `503` until this and `GOOGLE_CLIENT_ID` are both set. |
 | `MYTETZ_MAIL_MODE` | none | selects the mail adapter: `resend` or `log`. Sign-in by email answers `503` until this holds one of the two words. |
@@ -359,10 +359,12 @@ token the codebase writes has one row somewhere in this document.
 | `BILLING_UNKNOWN_USER` | `BILLING_UNKNOWN_USER` | WARN | Medium | any occurrence |
 | `BILLING_STALE_EVENT` | `BILLING_STALE_EVENT` | WARN | Medium | any occurrence |
 | `BILLING_NO_PERIOD_END` | `BILLING_NO_PERIOD_END` | WARN | Medium | any occurrence |
+| `BILLING_UNPARSEABLE_EVENT` | `BILLING_UNPARSEABLE_EVENT` | WARN | High | any occurrence; a signed payment event was rejected, and no row changed |
+| `BILLING_UNREADABLE_PERIOD_END` | `BILLING_UNREADABLE_PERIOD_END` | WARN | Medium | any occurrence; the event was applied, with a fall-back period end |
 | `RECONCILE_SKIPPED` | `RECONCILE_SKIPPED` | WARN | Medium | any occurrence |
 | `TRIAL_CAP_REACHED` | `TRIAL_CAP_REACHED` | INFO | Info | no alert; a rate signal only |
-| `MIGRATION`, the INFO lines | `MIGRATION removed` or `MIGRATION pre-warmed` | INFO | Info | no alert; read by hand, see "The B0 model migration" |
-| `MIGRATION`, the WARN lines | `MIGRATION stopped early` or `MIGRATION failed to pre-warm` | WARN | Medium, only while `MYTETZ_MIGRATE_ON_BOOT` is set | any occurrence during a migration run |
+| `MIGRATION` and `PREWARM`, the INFO lines | `MIGRATION removed` or `PREWARM pre-warmed` | INFO | Info | no alert; read by hand, see "The B0 model migration" |
+| `PREWARM`, the WARN lines | `PREWARM_SKIPPED`, `PREWARM stopped early` or `PREWARM failed to pre-warm` | WARN | Medium | any occurrence; the pre-warm runs on each boot, so a line can appear on each boot |
 
 ### The catch-all for an ERROR line with no token
 
@@ -499,22 +501,30 @@ not in the app.
 ## The B0 model migration
 
 **Warning: this release orphans the store.** `modelFamily` is part of every content key. The new
-model changes that key. Every stored explanation becomes unreachable when this image boots. This
-is true whether or not `MYTETZ_MIGRATE_ON_BOOT` is set.
+model changes that key. Every stored explanation becomes unreachable when this image boots.
 
-The migration below removes the orphaned documents. The migration then regenerates a seed for
-each published topic. A learner may open a topic before the migration runs. That learner still
-gets an explanation. The app generates it fresh, for that topic, at the ordinary cost of one
-generation.
+Two separate steps now run at boot, and only one of them needs a flag.
 
-Do this one time, after the deployment that carries the `claude-sonnet-5` default.
+- **The pre-warm step runs on every boot, with no flag.** It generates a fresh seed for every
+  published topic that has no seed under the current model family. It stops early if the $50
+  daily spend breaker trips. A learner must never pay for a live generation because a topic's
+  seed is missing, so this step does not wait for an operator.
+- **The delete step runs only when `MYTETZ_MIGRATE_ON_BOOT` is `true`.** It removes an
+  explanation stranded under the old model family. It is cleanup, not correctness: a stranded
+  document costs storage, and nothing else, until an operator deletes it.
 
-1. Confirm the Anthropic account holds credit. Step 2 of the migration makes about 29 model calls.
+A learner may still open a topic in the short window before the pre-warm step finishes on the
+very first boot after the deploy. That learner gets an explanation regardless: the app generates
+it fresh, for that topic, at the ordinary cost of one generation.
 
-2. Turn the migration on and deploy.
+Do the following one time, after the deployment that carries the `claude-sonnet-5` default.
+
+1. Confirm the Anthropic account holds credit. The pre-warm step makes about 29 model calls, one
+   for each published topic with no seed under the new family.
+
+2. Deploy. The pre-warm step needs no flag.
 
    ```
-   fly secrets set MYTETZ_MIGRATE_ON_BOOT=true --app mytetz
    fly deploy --local-only --ha=false --app mytetz
    ```
 
@@ -526,44 +536,71 @@ Do this one time, after the deployment that carries the `claude-sonnet-5` defaul
 
    The answer must be `{"status":"ok","mongo":true,"ready":true}`.
 
-4. Read what the migration did.
+4. Read what the pre-warm step did.
 
    **In bash.**
 
    ```bash
-   fly logs --app mytetz --no-tail | grep MIGRATION
+   fly logs --app mytetz --no-tail | grep PREWARM
    ```
 
    **In PowerShell.**
 
    ```powershell
-   fly logs --app mytetz --no-tail | Select-String MIGRATION
+   fly logs --app mytetz --no-tail | Select-String PREWARM
    ```
 
-   You must see two lines: one count of removed explanations and one count of pre-warmed seeds.
-   The `--no-tail` flag is necessary, because the lines are already in the past.
+   You must see one line: `PREWARM pre-warmed <count> seed(s), <count> failed, at a cost of
+   <count> micro-dollars`. The `--no-tail` flag is necessary, because the line is already in the
+   past.
 
-5. Turn the migration off immediately after step 4. Do not wait until later.
+5. Confirm every published topic has a seed under the current family.
 
    ```
+   mongosh "$MONGODB_URI" --quiet --eval '
+     const family = "claude-sonnet-5";
+     const version = "v3";
+     const published = db.topics.countDocuments({ status: "PUBLISHED" });
+     const seeded = db.explanations.countDocuments({ verb: "SEED", modelFamily: family, promptVersion: version });
+     print("published=" + published + " seeded=" + seeded);
+   '
+   ```
+
+   Set `family` to the value of `MYTETZ_MODEL_FAMILY`, or to its default in section 2.2. Set
+   `version` to `PromptBuilder.VERSION` in `backend/graph/src/main/kotlin/com/mytetz/graph/PromptBuilder.kt`.
+   A seed key holds the two values, so a seed from an older prompt version does not count.
+
+   The two counts must match. A lower `seeded` count means the spend breaker stopped the loop
+   early; see below.
+
+6. Only if you also want to remove the stranded documents from the old family now, rather than
+   later, turn the delete on and deploy again.
+
+   ```
+   fly secrets set MYTETZ_MIGRATE_ON_BOOT=true --app mytetz
+   fly deploy --local-only --ha=false --app mytetz
+   fly logs --app mytetz --no-tail | grep MIGRATION
    fly secrets unset MYTETZ_MIGRATE_ON_BOOT --app mytetz
    ```
 
-   The flag is not run-once. `fly.toml` sets `auto_stop_machines = "off"`, so the machine no
-   longer stops when it is idle. A deploy, a crash or a manual restart still boots it. Every
-   boot between step 2 and this step re-runs the whole migration.
+   Turn the flag off immediately after you read the `MIGRATION removed <count> explanation(s)`
+   line. Do not wait until later. The flag is not run-once: `fly.toml` sets
+   `auto_stop_machines = "off"`, so the machine no longer stops when it is idle, and a deploy, a
+   crash or a manual restart still boots it. Every boot between setting the flag and clearing it
+   deletes the same stranded family again — a no-op after the first run, but still a needless
+   database round trip.
 
-   A topic can fail after its model call. That topic still spent money. The migration does not
-   persist a failed generation. The next cold start spends money on that topic again. The real
-   ceiling on that cost is the $50 daily spend breaker in section 2.1. One full run costs about
-   $0.30.
+A topic can fail after its model call. That topic still spent money. The pre-warm step does not
+persist a failed generation. The next boot spends money on that topic again. The real ceiling on
+that cost is the $50 daily spend breaker in section 2.1. One full pre-warm run, from an empty
+store, costs about $0.30.
 
-**If the second log line reports fewer seeds than the catalogue holds,** the spend breaker stopped
-the loop. The existing seeds remain. Do the following:
+**If the log line reports fewer seeds than the catalogue holds,** the spend breaker stopped the
+loop. The existing seeds remain. Do the following:
 
 1. Check the day's ledger.
 2. Raise `MYTETZ_GLOBAL_DAILY_COST_CEILING_USD_MICROS`, only if that is the correct action.
-3. Run the migration again tomorrow.
+3. Restart the machine, or wait for the next boot, so the pre-warm step runs again tomorrow.
 
 ---
 
@@ -646,11 +683,14 @@ operator to read and apply by hand; the stored row is never touched on that word
 end never shortens either, for the same reason. `Reconciliation.reconcile`'s own KDoc states this
 rule as "the fail-safe rule."
 
-**This flag is safe to leave set. `MYTETZ_MIGRATE_ON_BOOT` is not.** The difference is in what
-each flag does, not in how often either one runs. The migration deletes documents and calls a
-metered model API. Every migration run costs real money, so section "The B0 model migration"
-above tells you to turn that flag off again right after the run. Reconciliation only reads Mongo
-and asks Freemius. It spends nothing, so there is nothing here to turn off in a hurry.
+**This flag is safe to leave set. `MYTETZ_MIGRATE_ON_BOOT` is not — though the reason changed
+with the pre-warm split above.** `migrate()` only deletes a document stranded under an old model
+family now. It no longer calls the model itself, and a second run finds nothing to delete. So
+leaving the flag on spends no money any more, only a needless Mongo round trip on every boot.
+Turn it off anyway, right after you read the delete's log line, the same as section "The B0
+model migration" above says: a flag with one job stays clearest when it runs only for that job.
+Reconciliation only reads Mongo and asks Freemius. It spends nothing, so there is nothing here to
+turn off in a hurry.
 
 **How often "every boot" happens today.** `fly.toml` currently sets `auto_stop_machines = "off"`.
 The machine never scales to zero, because of the 2026-08-16 outage section 4 above records. A boot
@@ -669,7 +709,7 @@ no code change.
 ### Operator alert tokens
 
 Most rows below are a `log.warn` or a `log.error` line. Two rows, `TRIAL_CAP_REACHED` and
-`MIGRATION`, also write an INFO line. Each line is greppable in `fly logs`. Each line is for an
+`MIGRATION`, are INFO lines, and the pre-warm also writes one INFO line, `PREWARM pre-warmed`. Each line is greppable in `fly logs`. Each line is for an
 operator, and no line ever reaches a learner.
 
 | Token | Logged in | Meaning | Operator action |
@@ -680,6 +720,8 @@ operator, and no line ever reaches a learner.
 | `BILLING_NO_PERIOD_END` | `Entitlement.resolve` | an `ACTIVE` row carries no period end | check whether the first-payment webhook for that row ever carried one; the row is granted access regardless |
 | `BILLING_DRIFT` | `Reconciliation.reconcile` | a subscription disagreed with what Freemius reports. `applied=true` means the row was corrected; `applied=false` means only a downgrade was proposed, and the row is untouched | read the log line's own fields — see "Reading a `BILLING_DRIFT` line" below, right after this table |
 | `RECONCILE_SKIPPED` | `Components.reconcile` | `MYTETZ_RECONCILE_ON_BOOT` is on but `FREEMIUS_API_KEY` or `FREEMIUS_PRODUCT_ID` is not set | set the missing variable; nothing else needs to change, the next boot retries on its own |
+| `PREWARM_SKIPPED` | `Components.prewarm` | the model client did not build at boot, usually because `ANTHROPIC_API_KEY` is not set. The catalogue still serves. No missing seed was generated on this boot | set the key. The next boot runs the pre-warm again |
+| `PREWARM stopped early` and `PREWARM failed to pre-warm` | `Components.prewarm` | the spend breaker refused a topic, or the generation of one seed failed. A published topic then has no seed, and the first visitor pays for a live generation | read the slug in the line. For the breaker, read section "The B0 model migration". For a failure, read the stack trace under the line. The next boot tries the topic again, and each try that reaches the model costs money |
 | `WEBHOOK_SIGNATURE_MISMATCH` | `BillingRoutes` | `POST /api/billing/webhook` received a body whose signature did not verify | expected from scanners and mis-configured retries; investigate only if it is frequent, or if `FREEMIUS_SECRET_KEY` was just rotated |
 | `BILLING_UNPARSEABLE_EVENT` | `BillingRoutes` | a signed webhook body had no readable `id`, `type` or `created`, or was not a JSON object. The route answers `400`, and no row changes | the line gives the event type and the event id when the body holds them. Find the event in the Freemius dashboard under Webhooks > Events, and compare it with `FreemiusWebhook.parse`. No other part of the body reaches the log line |
 | `BILLING_UNREADABLE_PERIOD_END` | `FreemiusWebhook.parse` | `objects.license.expiration` of an event was not in one of the two date forms that the parser reads. The event is still applied, with the period end from `objects.subscription.next_payment`, or with no period end | the line gives the event type and the event id. Read the real value in the Freemius dashboard, and add its date form to `parseFreemiusDate`. An `ACTIVE` row with no period end also logs `BILLING_NO_PERIOD_END` |
@@ -691,7 +733,7 @@ operator, and no line ever reaches a learner.
 | `unrecognised stop reason` | `ExplanationValidator.validate`, through `ErrorMapping.installErrorMapping` and `ErrorMapping.sseErrorFor` | the model answered with a stop reason the validator does not know; the validator rejects every such answer, and keeps rejecting until a person acts | read the exact reason in the line under `generation failed`; add the new reason to the validator's allowlist if it is a real success case |
 | `BOOTSTRAP_FAILED` | `Application.bootstrap` | the boot did not finish the database indexes or the catalogue seed. `ready.set(true)` at `Application.kt:224` never runs on this path, so `/api/health` reports `"ready":false` for the whole life of the machine, not only during the cold-start window | read the stack trace under the line; the uptime check on `"ready":true` also alerts, because the field never turns `true`; restart the machine, or wait for the next boot to retry on its own |
 | `TRIAL_CAP_REACHED` | `BillingService.startTrialIfAbsent` | one IP bucket already started the day's cap of trials; the caller still signs in, with checkout offered instead | no action; this is a rate signal, not a fault |
-| `MIGRATION` | `Components.migrate` | two INFO lines report a normal migration step; two WARN lines report that the spend breaker refused a topic, or that one seed failed to pre-warm | read section "The B0 model migration" below; act on a WARN line only while `MYTETZ_MIGRATE_ON_BOOT` is set |
+| `MIGRATION` | `Components.migrate` | one INFO line, `MIGRATION removed`, reports how many stranded explanations the delete removed. It appears only while `MYTETZ_MIGRATE_ON_BOOT` is set. The pre-warm has its own lines, in the `PREWARM` rows above | read section "The B0 model migration" above; remove the flag after you read the line |
 
 ### Reading a `BILLING_DRIFT` line
 

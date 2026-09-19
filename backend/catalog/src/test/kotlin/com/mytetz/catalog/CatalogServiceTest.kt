@@ -1,6 +1,7 @@
 package com.mytetz.catalog
 
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -12,11 +13,25 @@ class CatalogServiceTest {
     private val database = MongoTestSupport.database("catalog")
     private val repository = TopicRepository(database)
     private val service = CatalogService(repository)
+    private val json = Json { ignoreUnknownKeys = true }
 
     @BeforeTest
     fun reset() = runTest {
         database.getCollection<Topic>("topics").drop()
         repository.ensureIndexes()
+    }
+
+    /**
+     * Reads `/topics.json` straight from the classpath, the same resource [CatalogService
+     * .seedFromResource] reads. A structure test asks this file directly, and not the seeded
+     * database, so a rule such as "no blank title" fails on the source of truth and not on a
+     * side effect of the upsert.
+     */
+    private fun readTopicsResource(): List<Topic> {
+        val text = requireNotNull(javaClass.getResourceAsStream("/topics.json")) {
+            "catalogue seed resource /topics.json not found"
+        }.bufferedReader().use { it.readText() }
+        return json.decodeFromString(text)
     }
 
     @Test
@@ -142,4 +157,58 @@ class CatalogServiceTest {
         assertEquals("Quantum Physics", service.findBySlug(slug)?.title)
         assertEquals(TopicStatus.PUBLISHED, service.findBySlug(slug)?.status)
     }
+
+    /**
+     * A structure test on `topics.json` itself, ahead of the catalogue growing past 29 topics.
+     *
+     * `seedFromResource` upserts by `_id`, so a duplicate slug replaces the first entry and raises
+     * no error — see `seedFromResource creates one published topic for every entry`, below, for the
+     * test that catches that specific case. This test covers every other structural rule the
+     * catalogue must hold once the list grows: a url-safe slug, two to four aliases, no blank
+     * field, and no category over the cap of 15.
+     */
+    @Test
+    fun `topics dot json holds well-formed entries - unique slugs, url-safe ids, aliases, no blanks, category cap`() {
+        val topics = readTopicsResource()
+        val slugPattern = Regex("^[a-z0-9]+(-[a-z0-9]+)*\$")
+
+        topics.forEach { topic ->
+            assertTrue(slugPattern.matches(topic.slug), "'${topic.slug}' is not a url-safe slug")
+            assertTrue(
+                topic.aliases.size in 2..4,
+                "'${topic.slug}' has ${topic.aliases.size} alias(es), the rule is 2 to 4",
+            )
+            assertTrue(topic.title.isNotBlank(), "'${topic.slug}' has a blank title")
+            assertTrue(topic.category.isNotBlank(), "'${topic.slug}' has a blank category")
+            assertTrue(topic.summary.isNotBlank(), "'${topic.slug}' has a blank summary")
+        }
+
+        val slugs = topics.map { it.slug }
+        assertEquals(slugs.distinct().size, slugs.size, "a slug repeats in topics.json")
+
+        topics.groupingBy { it.category }.eachCount().forEach { (category, count) ->
+            assertTrue(count <= 15, "category '$category' holds $count topics, the cap is 15")
+        }
+    }
+
+    /**
+     * The one check `seedFromResource creates one published topic for every entry` above cannot
+     * make on its own: that a duplicate `_id` in `topics.json` does not silently vanish behind the
+     * upsert. `TopicRepository.upsertPreservingStatus` writes by `_id`, so two entries with the
+     * same slug leave one row in the store, and a count alone would not show which half is missing.
+     */
+    @Test
+    fun `seedFromResource creates one published topic for every entry in topics dot json, with no duplicate slug`() =
+        runTest {
+            val fileEntryCount = readTopicsResource().size
+
+            service.seedFromResource()
+
+            val published = service.listPublished(category = null, query = null)
+            assertEquals(
+                fileEntryCount,
+                published.size,
+                "the published count does not match the file; a duplicate slug may have replaced an entry",
+            )
+        }
 }
