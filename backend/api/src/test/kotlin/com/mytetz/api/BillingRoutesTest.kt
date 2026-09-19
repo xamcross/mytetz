@@ -362,14 +362,18 @@ class BillingRoutesTest {
     }
 
     @Test
-    fun `the webhook answers 400 and logs BILLING_UNPARSEABLE_EVENT for a signed body it cannot parse`() = app {
+    fun `the webhook answers 400 and logs BILLING_UNPARSEABLE_EVENT with the type and the id, and no email`() = app {
         val appender = attachAppender()
         try {
             // This body is signed, so the signature check passes. The route then reaches
             // FreemiusWebhook.parse. The body has no "id" field, so parse raises the same
             // SerializationException a wrong-typed "created" field also raises. See
-            // FreemiusWebhookTest for that second case.
-            val body = """{"type":"subscription.created","created":"2025-01-01 00:00:00"}"""
+            // FreemiusWebhookTest for that second case. The body also carries an email, under
+            // objects.user.email, the exact place a real event carries one.
+            val body = """
+                {"type":"subscription.created","created":"2025-01-01 00:00:00",
+                "objects":{"user":{"email":"secret-agent@example.com"}}}
+            """.trimIndent()
 
             val response = webhook(body)
 
@@ -378,10 +382,29 @@ class BillingRoutesTest {
                 appender.list.firstOrNull { it.formattedMessage.contains("BILLING_UNPARSEABLE_EVENT") },
             ) { "BILLING_UNPARSEABLE_EVENT was not logged: ${appender.list.map { it.formattedMessage }}" }
             assertEquals(Level.WARN, logged.level)
+            assertTrue(logged.formattedMessage.contains("type=subscription.created"), logged.formattedMessage)
             assertFalse(logged.formattedMessage.contains(body), "the log line must not carry the request body")
+            assertFalse(
+                logged.formattedMessage.contains("secret-agent@example.com"),
+                "the log line must not carry the learner's email",
+            )
         } finally {
             detachAppender(appender)
         }
+    }
+
+    @Test
+    fun `a signed license deleted event, in the SDK shape, answers 204 and not 400`() = app {
+        // license.events.ts types 'license.deleted' with objects: { license: false }. FreemiusWebhook
+        // must read this event without raising, even though this deployment maps no status to it.
+        val body = """
+            {"id":"evt-license-deleted","type":"license.deleted","created":"2025-01-01 00:00:00",
+            "objects":{"license":false},"data":{"license_id":"3001"}}
+        """.trimIndent()
+
+        val response = webhook(body)
+
+        assertEquals(HttpStatusCode.NoContent, response.status)
     }
 
     @Test
