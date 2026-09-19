@@ -39,6 +39,9 @@ class FreemiusWebhookTest {
         /** `2025-12-31 23:59:59` UTC, computed the same independent way. */
         private const val DEC_31_2025_UTC_EPOCH_MILLIS = 1_767_225_599_000L
 
+        /** `2026-01-31 23:59:59` UTC, computed the same independent way. */
+        private const val JAN_31_2026_UTC_EPOCH_MILLIS = 1_769_903_999_000L
+
         /**
          * One `subscription.created` event in the exact shape
          * `packages/sdk/src/webhook/subscription.events.ts` declares. See
@@ -394,6 +397,117 @@ class FreemiusWebhookTest {
     private fun detachAppender(appender: ListAppender<ILoggingEvent>) {
         (LoggerFactory.getLogger(FreemiusWebhook::class.java) as ch.qos.logback.classic.Logger)
             .detachAppender(appender)
+    }
+
+    // ------------------------------------------------------------------ license.extended
+    //
+    // license.events.ts types 'license.extended' with data.to as the new expiration date, and
+    // with objects.user as optional. Issue #72 adds this event for a paid renewal. Each test here
+    // proves one rule that event needs from the parser alone; BillingServiceTest proves the row
+    // this event moves.
+
+    @Test
+    fun `a license extended event reads data to as the period end`() {
+        val body = """
+            {"id":"evt-14","type":"license.extended","created":"2025-01-01 00:00:00",
+            "objects":{"license":{"user_id":"1001"}},
+            "data":{"from":"2025-01-01 00:00:00","to":"2025-02-01 00:00:00","license_id":"3001","is_renewal":true}}
+        """.trimIndent().toByteArray(Charsets.UTF_8)
+
+        val event = FreemiusWebhook.parse(body)
+
+        assertEquals(FEB_1_2025_UTC_EPOCH_MILLIS, event.periodEndsAtEpochMillis)
+    }
+
+    @Test
+    fun `data to outranks a present objects license expiration`() {
+        // A renewal event's own new date must win, even on the rare payload that also carries a
+        // license expiration. See resolvePeriodEnd's own KDoc for the reason for this order.
+        val body = """
+            {"id":"evt-15","type":"license.extended","created":"2025-01-01 00:00:00",
+            "objects":{"license":{"expiration":"2025-12-31 23:59:59","user_id":"1001"}},
+            "data":{"to":"2025-02-01 00:00:00"}}
+        """.trimIndent().toByteArray(Charsets.UTF_8)
+
+        val event = FreemiusWebhook.parse(body)
+
+        assertEquals(FEB_1_2025_UTC_EPOCH_MILLIS, event.periodEndsAtEpochMillis)
+    }
+
+    @Test
+    fun `an unreadable data to falls back to a readable expiration, and logs one warning`() {
+        val body = """
+            {"id":"evt-16","type":"license.extended","created":"2025-01-01 00:00:00",
+            "objects":{"license":{"expiration":"2025-12-31 23:59:59"}},
+            "data":{"to":"not a date"}}
+        """.trimIndent().toByteArray(Charsets.UTF_8)
+        val appender = attachAppender()
+
+        val event = try {
+            FreemiusWebhook.parse(body)
+        } finally {
+            detachAppender(appender)
+        }
+
+        assertEquals(DEC_31_2025_UTC_EPOCH_MILLIS, event.periodEndsAtEpochMillis)
+        assertNotNull(
+            appender.list.firstOrNull { it.formattedMessage.contains("id=evt-16") },
+            "the unreadable data.to was not logged: ${appender.list.map { it.formattedMessage }}",
+        )
+    }
+
+    @Test
+    fun `an event with no data to falls back to objects license expiration`() {
+        val body = """
+            {"id":"evt-17","type":"license.extended","created":"2025-01-01 00:00:00",
+            "objects":{"license":{"expiration":"2025-12-31 23:59:59"}}}
+        """.trimIndent().toByteArray(Charsets.UTF_8)
+
+        val event = FreemiusWebhook.parse(body)
+
+        assertEquals(DEC_31_2025_UTC_EPOCH_MILLIS, event.periodEndsAtEpochMillis)
+    }
+
+    @Test
+    fun `freemiusUserId falls back to objects license user_id when objects user is absent`() {
+        // A renewal event's objects.user is optional -- see FreemiusEvent's own KDoc. This body
+        // carries none, so the email-based lookup in BillingRoutes.kt has nothing to resolve.
+        val body = """
+            {"id":"evt-18","type":"license.extended","created":"2025-01-01 00:00:00",
+            "objects":{"license":{"user_id":"1001"}},
+            "data":{"to":"2025-02-01 00:00:00"}}
+        """.trimIndent().toByteArray(Charsets.UTF_8)
+
+        val event = FreemiusWebhook.parse(body)
+
+        assertEquals("1001", event.freemiusUserId)
+        assertNull(event.email, "objects.license carries no email; a renewal event with no objects.user gives none")
+    }
+
+    @Test
+    fun `freemiusUserId prefers objects user id over objects license user_id`() {
+        val body = """
+            {"id":"evt-19","type":"license.extended","created":"2025-01-01 00:00:00",
+            "objects":{"user":{"id":"1001"},"license":{"user_id":"9999"}},
+            "data":{"to":"2025-02-01 00:00:00"}}
+        """.trimIndent().toByteArray(Charsets.UTF_8)
+
+        val event = FreemiusWebhook.parse(body)
+
+        assertEquals("1001", event.freemiusUserId)
+    }
+
+    @Test
+    fun `a numeric objects license user_id is read as text`() {
+        val body = """
+            {"id":"evt-20","type":"license.extended","created":"2025-01-01 00:00:00",
+            "objects":{"license":{"user_id":1001}},
+            "data":{"to":"2025-02-01 00:00:00"}}
+        """.trimIndent().toByteArray(Charsets.UTF_8)
+
+        val event = FreemiusWebhook.parse(body)
+
+        assertEquals("1001", event.freemiusUserId)
     }
 
     // ------------------------------------------------------------------ FreemiusConfig
