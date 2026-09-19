@@ -1,6 +1,13 @@
 import { test, expect, type Page } from '@playwright/test';
 import type { SessionView, TopicSummary } from '../src/app/core/models';
-import { SEED, openQuantumPhysicsSession, selectPhrase, stubCatalogueAndSession } from './support';
+import {
+  SEED,
+  accountView,
+  openQuantumPhysicsSession,
+  selectPhrase,
+  stubAccount,
+  stubCatalogueAndSession,
+} from './support';
 
 /**
  * What only a real browser can check about the Candy design.
@@ -559,7 +566,7 @@ test('every font comes from this origin, and none from a Google Fonts host', asy
   );
 });
 
-test('the header fits on one line at 400px, with the Sign in link, the meter and the dot', async ({
+test('the header fits on one line at 400px while signed out, with the Sign in link and the dot', async ({
   page,
 }) => {
   await stubCatalogueAndSession(page);
@@ -577,6 +584,159 @@ test('the header fits on one line at 400px, with the Sign in link, the meter and
     client: document.documentElement.clientWidth,
   }));
   expect(doc.scroll, 'the page does not scroll sideways at 400px').toBeLessThanOrEqual(doc.client);
+});
+
+/**
+ * Issue #100. The design review calculated an overflow for a signed-in learner at a phone width,
+ * from the meter's declared widths and font size, but the review states plainly that no person
+ * measured it in a browser. This test is the measurement, at both widths the review names.
+ *
+ * The reset date is fixed at "September 20, 2026 at 3:00 PM" — the exact example the review
+ * itself gives for a long detail string — so the measured widths answer the review's own claim.
+ */
+test('the header fits on one line for a signed-in learner at 390px and 400px, with a long reset date', async ({
+  page,
+}) => {
+  await stubCatalogueAndSession(page);
+  await stubAccount(page, accountView());
+
+  for (const width of [390, 400]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto('/');
+    await page.locator('.topic__button').first().waitFor();
+
+    const meter = page.locator('app-allowance-meter');
+    await expect(meter, `the meter is visible at ${width}px`).toBeVisible();
+    await expect(
+      meter,
+      `the meter states the count and the reset date at ${width}px`,
+    ).toContainText('12 of 40 left today');
+    await expect(meter).toContainText('Resets September 20, 2026 at 3:00 PM.');
+
+    const bar = await page.locator('.bar').boundingBox();
+    const meterBox = await meter.boundingBox();
+    const doc = await page.evaluate(() => ({
+      scroll: document.documentElement.scrollWidth,
+      client: document.documentElement.clientWidth,
+    }));
+
+    // Printed so the issue's own record of the measurement quotes a real run, not an estimate.
+    console.log(
+      `[issue-100] width=${width} scrollWidth=${doc.scroll} clientWidth=${doc.client} ` +
+        `barHeight=${bar!.height} meterWidth=${meterBox!.width}`,
+    );
+
+    expect(bar!.height, `the bar stays 64px tall at ${width}px, not wrapped to a second line`).toBe(
+      64,
+    );
+    expect(doc.scroll, `the page does not scroll sideways at ${width}px`).toBeLessThanOrEqual(
+      doc.client,
+    );
+  }
+});
+
+/**
+ * Every new learner starts in a trial, and the trial row prints a different pair of strings —
+ * "left in your trial" instead of "left today", and "Trial ends" instead of "Resets" — so it
+ * needs its own measurement and cannot lean on the ACTIVE case above.
+ */
+test('the header fits on one line for a learner in trial at 390px, with a long trial end date', async ({
+  page,
+}) => {
+  await stubCatalogueAndSession(page);
+  await stubAccount(
+    page,
+    accountView({
+      status: 'TRIALING',
+      trialEndsAtEpochMillis: Date.UTC(2026, 8, 20),
+      resetsAtEpochMillis: null,
+    }),
+  );
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.goto('/');
+  await page.locator('.topic__button').first().waitFor();
+
+  const meter = page.locator('app-allowance-meter');
+  await expect(meter).toContainText('12 of 40 left in your trial');
+  await expect(meter).toContainText('Trial ends September 20, 2026.');
+
+  const bar = await page.locator('.bar').boundingBox();
+  expect(bar!.height, 'the bar stays 64px tall for a learner in trial').toBe(64);
+
+  const doc = await page.evaluate(() => ({
+    scroll: document.documentElement.scrollWidth,
+    client: document.documentElement.clientWidth,
+  }));
+  expect(
+    doc.scroll,
+    'the page does not scroll sideways for a learner in trial',
+  ).toBeLessThanOrEqual(doc.client);
+});
+
+/**
+ * Issue #91 adds a checkout error to the meter, for an account with no active allowance. That
+ * text also renders in the header bar, so a failed checkout at a phone width needs its own proof
+ * that the bar stays one line and the page stays inside its own width.
+ */
+test('the header stays inside the page width when Subscribe fails for an expired learner at 390px', async ({
+  page,
+}) => {
+  await stubCatalogueAndSession(page);
+  await stubAccount(page, accountView({ status: 'EXPIRED', remaining: 0 }));
+  await page.route('**/api/billing/checkout', (route) => route.fulfill({ status: 500, body: '' }));
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.goto('/');
+  await page.locator('.topic__button').first().waitFor();
+
+  await page.getByRole('button', { name: 'Subscribe' }).click();
+
+  const error = page.locator('.allowance-meter__error');
+  await expect(error).toBeVisible();
+  await expect(error).toContainText(
+    'Could not start checkout. Check your connection and try again.',
+  );
+
+  const bar = await page.locator('.bar').boundingBox();
+  expect(bar!.height, 'the bar stays 64px tall while the error shows').toBe(64);
+
+  const doc = await page.evaluate(() => ({
+    scroll: document.documentElement.scrollWidth,
+    client: document.documentElement.clientWidth,
+  }));
+  expect(doc.scroll, 'the page does not scroll sideways while the error shows').toBeLessThanOrEqual(
+    doc.client,
+  );
+});
+
+/**
+ * The account page renders the same `AllowanceMeterComponent` inside its own card, and the fix
+ * for the header must not reach it: the learner reads the full detail text there, on any width.
+ *
+ * The shell wraps every route, so a visit to `/account` renders two meters at once: the header's
+ * own, and the account page's. This test reads the account page's card, and not the header, by
+ * scoping to `.account-page__card` — the class `AccountPageComponent` gives its own card.
+ */
+test('the account page still shows the full detail text of the meter at 390px', async ({
+  page,
+}) => {
+  await stubAccount(page, accountView());
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.goto('/account');
+
+  const detail = page.locator('.account-page__card .allowance-meter__detail');
+  await expect(
+    detail,
+    'the detail stays visible in the account card, unlike in the header',
+  ).toBeVisible();
+  await expect(detail).toContainText('Resets September 20, 2026 at 3:00 PM.');
+
+  // The header's own meter, on the same page, still hides its detail — proof that the rule scopes
+  // to the header and did not simply stop applying below 768px.
+  const headerDetail = page.locator('header.bar .allowance-meter__detail');
+  await expect(
+    headerDetail,
+    'the header keeps hiding its own detail on every other page too',
+  ).toBeHidden();
 });
 
 test('the mark draws at 28px, left of the wordmark', async ({ page }) => {

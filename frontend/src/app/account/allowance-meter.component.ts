@@ -81,6 +81,18 @@ const METERED_STATUSES: ReadonlySet<string> = new Set([
         color: var(--mt-err-ink);
         font-weight: 700;
       }
+      /*
+       * Issue #100. At a phone width, the count and the detail together are wider than the
+       * header bar. A real run measures a scroll width of 488px inside a 390px window. This rule
+       * hides the detail, and only inside the header. host-context(.bar) matches the header's own
+       * bar element. The account page renders this same component outside that element, in its
+       * own card, so the account page keeps the full detail text.
+       */
+      @media (max-width: 767px) {
+        :host-context(.bar) .allowance-meter__detail {
+          display: none;
+        }
+      }
     `,
   ],
 })
