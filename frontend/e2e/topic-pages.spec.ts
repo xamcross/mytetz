@@ -162,6 +162,100 @@ test('a 429 refusal shows the backend message and how long to wait', async ({ pa
   await expect(page.getByRole('button', { name: 'Start with this topic' })).toBeEnabled();
 });
 
+test('a 503 refusal shows the backend message with no invented wait', async ({ page }) => {
+  await page.route('**/topics/quantum-physics', (route) =>
+    route.fulfill({
+      contentType: 'text/html',
+      body: topicPageFixture('quantum-physics', 'Quantum Physics'),
+    }),
+  );
+  await page.route('**/api/sessions', (route) =>
+    route.fulfill({
+      status: 503,
+      json: {
+        code: 'SPEND_LIMIT',
+        message: 'new explanations are paused for today; cached ones still work',
+        retryAfter: null,
+      },
+    }),
+  );
+
+  await page.goto('/topics/quantum-physics');
+  await page.getByRole('button', { name: 'Start with this topic' }).click();
+
+  // A rate limit says "try later"; a spend limit says the service is degraded — no invented wait
+  // is shown for the latter, since the server gave none. Same rule the removed catalogue-tile
+  // test pinned, now pinned here instead.
+  await expect(page.getByRole('alert')).toHaveText(
+    'new explanations are paused for today; cached ones still work',
+  );
+  await expect(page.getByRole('button', { name: 'Start with this topic' })).toBeEnabled();
+});
+
+test('shows a starting indicator while the request is in flight', async ({ page }) => {
+  await page.route('**/topics/quantum-physics', (route) =>
+    route.fulfill({
+      contentType: 'text/html',
+      body: topicPageFixture('quantum-physics', 'Quantum Physics'),
+    }),
+  );
+
+  let releaseResponse!: () => void;
+  const held = new Promise<void>((resolve) => {
+    releaseResponse = resolve;
+  });
+  await page.route('**/api/sessions', async (route) => {
+    await held;
+    route.fulfill({
+      json: {
+        sessionId: 's1',
+        topicSlug: 'quantum-physics',
+        rootNodeId: 'n0',
+        currentNodeId: 'n0',
+        nodes: [],
+        status: 'ACTIVE',
+        explanations: { k0: SEED },
+      },
+    });
+  });
+  await page.route('**/api/sessions/s1', (route) =>
+    route.fulfill({
+      json: {
+        sessionId: 's1',
+        topicSlug: 'quantum-physics',
+        rootNodeId: 'n0',
+        currentNodeId: 'n0',
+        nodes: [
+          {
+            nodeId: 'n0',
+            parentNodeId: null,
+            explanationKey: 'k0',
+            span: '',
+            verb: 'SEED',
+            variant: 0,
+            depth: 0,
+          },
+        ],
+        status: 'ACTIVE',
+        explanations: { k0: SEED },
+      },
+    }),
+  );
+
+  await page.goto('/topics/quantum-physics');
+  // A plain id locator, and not getByRole with a name filter: the button's own accessible name
+  // changes to "Starting…" the instant the click handler runs, so a name-filtered locator built
+  // before the click stops matching anything right after it.
+  const button = page.locator('#topic-start-button');
+  await button.click();
+
+  await expect(button).toHaveText('Starting…');
+  await expect(button).toBeDisabled();
+
+  releaseResponse();
+  await page.getByText(SEED).waitFor();
+});
+
 test('a failure with no usable body shows the general message, and re-enables the button', async ({
   page,
 }) => {
