@@ -25,19 +25,30 @@ type QuizPhase = 'loading' | 'question' | 'result';
  * this component never claims an answer is right or wrong before that call returns. A learner
  * moves through every question with Next, then Finish, and sees every result together.
  *
- * This is a dialog, and it holds the same three keyboard behaviours as `VerbPickerComponent`.
- * Escape closes it. Tab and Shift+Tab keep focus inside it. Focus moves in when it opens, and
- * back to whatever opened it once it closes. Unlike the picker, this panel's own content changes
- * over time: first loading, then a question, then a result or an error. So the focus-trap query
- * and the initial focus move both read the panel's current buttons, rather than a fixed list.
+ * Finding F12. `ReaderPageComponent` renders this panel inline, below the focus card, with no
+ * backdrop and nothing `inert` around it. `role="dialog"` with `aria-modal="true"` once told a
+ * screen reader that the rest of the page was hidden, which was never true. The WAI-ARIA
+ * Authoring Practices' landmark-regions guidance
+ * (https://www.w3.org/WAI/ARIA/apg/practices/landmark-regions/) names `region` for exactly this
+ * shape: a perceivable section of content that the named landmarks do not already describe, and
+ * that carries its own label. This panel keeps `aria-label` for that.
+ *
+ * The panel still holds the same three keyboard behaviours `VerbPickerComponent` uses for its own
+ * dialog. Escape closes it. Tab and Shift+Tab keep focus inside it. Focus moves in when it opens,
+ * and back to whatever opened it once it closes. A `region` is not modal, so keeping the trap is a
+ * choice and not a rule the role imposes — the panel replaces the whole reading view while it is
+ * open, in the same slot `WallPanelComponent` and `SignInPanelComponent` use, so the trap still
+ * matches what a sighted learner sees on screen. Unlike the picker, this panel's own content
+ * changes over time: first loading, then a question, then a result or an error. So the focus-trap
+ * query and the initial focus move both read the panel's current buttons, rather than a fixed
+ * list.
  */
 @Component({
   selector: 'app-quiz-panel',
   template: `
     <div
       class="quiz-panel mt-card mt-card--raised"
-      role="dialog"
-      aria-modal="true"
+      role="region"
       tabindex="-1"
       [attr.aria-label]="title()"
       (keydown.escape)="close.emit()"

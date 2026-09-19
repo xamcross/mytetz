@@ -59,22 +59,32 @@ describe('QuizPanelComponent', () => {
     expect(component.currentQuestion()?.questionId).toBe('q1');
   });
 
-  it('renders as a labelled dialog', async () => {
+  /**
+   * Finding F12. The panel renders inline, with no backdrop and nothing `inert` around it, so
+   * `aria-modal="true"` told a screen reader a lie: the rest of the page was never hidden. The
+   * WAI-ARIA Authoring Practices' landmark-regions guidance
+   * (https://www.w3.org/WAI/ARIA/apg/practices/landmark-regions/) names `region` for exactly this
+   * case — a perceivable section of content that named landmarks do not already describe, with a
+   * label of its own — and requires that a `region` carry a label. This panel already computes
+   * one in `title()`, so `aria-label` moves across unchanged.
+   */
+  it('renders as a labelled region, and not a modal dialog', async () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    const dialog = fixture.nativeElement.querySelector('[role="dialog"]') as HTMLElement;
-    expect(dialog).toBeTruthy();
-    expect(dialog.getAttribute('aria-modal')).toBe('true');
-    expect(dialog.getAttribute('aria-label')).toBeTruthy();
+    const region = fixture.nativeElement.querySelector('[role="region"]') as HTMLElement;
+    expect(region).toBeTruthy();
+    expect(region.getAttribute('aria-modal')).toBeNull();
+    expect(region.getAttribute('aria-label')).toBeTruthy();
+    expect(fixture.nativeElement.querySelector('[role="dialog"]')).toBeNull();
   });
 
   it('moves focus into the panel once a question loads', async () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    const dialog = fixture.nativeElement.querySelector('[role="dialog"]') as HTMLElement;
-    expect(dialog.contains(document.activeElement)).toBe(true);
+    const region = fixture.nativeElement.querySelector('[role="region"]') as HTMLElement;
+    expect(region.contains(document.activeElement)).toBe(true);
   });
 
   it('closes on Escape, the same as VerbPickerComponent', async () => {
@@ -83,8 +93,8 @@ describe('QuizPanelComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    const dialog = fixture.nativeElement.querySelector('[role="dialog"]') as HTMLElement;
-    dialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    const region = fixture.nativeElement.querySelector('[role="region"]') as HTMLElement;
+    region.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
 
     expect(closed.length).toBe(1);
   });

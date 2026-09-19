@@ -1083,7 +1083,9 @@ test('a coral pill keeps its smaller shadow while a learner presses it', async (
   await gotoReader(page);
 
   await page.getByTestId('test-me').click();
-  const quiz = page.locator('[role="dialog"]');
+  // Finding F12. QuizPanelComponent carries role="region", not role="dialog": the panel renders
+  // inline, with no backdrop, so it never claimed to be modal.
+  const quiz = page.locator('[role="region"]');
   await quiz.getByText(PRESS_TEMPLATE.questions[0].stem).waitFor();
   await quiz
     .getByRole('button', { name: PRESS_TEMPLATE.questions[0].options[0], exact: true })
@@ -1116,7 +1118,9 @@ test('a chosen quiz option keeps its amber fill under the pointer, on a press, a
   await gotoReader(page);
 
   await page.getByTestId('test-me').click();
-  const quiz = page.locator('[role="dialog"]');
+  // Finding F12. QuizPanelComponent carries role="region", not role="dialog": the panel renders
+  // inline, with no backdrop, so it never claimed to be modal.
+  const quiz = page.locator('[role="region"]');
   await quiz.getByText(PRESS_TEMPLATE.questions[0].stem).waitFor();
   const chosen = quiz.getByRole('button', { name: PRESS_TEMPLATE.questions[0].options[0] });
   await chosen.click();
@@ -1169,7 +1173,9 @@ test('a quiz option carries the Candy lift, and presses like a pill', async ({ p
   await gotoReader(page);
 
   await page.getByTestId('test-me').click();
-  const quiz = page.locator('[role="dialog"]');
+  // Finding F12. QuizPanelComponent carries role="region", not role="dialog": the panel renders
+  // inline, with no backdrop, so it never claimed to be modal.
+  const quiz = page.locator('[role="region"]');
   await quiz.getByText(PRESS_TEMPLATE.questions[0].stem).waitFor();
   const other = quiz.getByRole('button', { name: PRESS_TEMPLATE.questions[0].options[1] });
 
@@ -1220,7 +1226,9 @@ test('a long quiz option wraps to two lines, taller than a one-line option, with
   await gotoReader(page);
 
   await page.getByTestId('test-me').click();
-  const quiz = page.locator('[role="dialog"]');
+  // Finding F12. QuizPanelComponent carries role="region", not role="dialog": the panel renders
+  // inline, with no backdrop, so it never claimed to be modal.
+  const quiz = page.locator('[role="region"]');
   const options = quiz.locator('.quiz-panel__option');
   await options.first().waitFor();
 

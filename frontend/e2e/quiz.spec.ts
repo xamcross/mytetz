@@ -56,10 +56,11 @@ test('takes a Test Me quiz across three questions and sees the score', async ({ 
   await openQuantumPhysicsSession(page);
   await page.getByTestId('test-me').click();
 
-  // `QuizPanelComponent`'s outer element carries `role="dialog"`. The verb picker also carries
-  // that role, but it only opens on a text selection. This test never selects text, so the verb
-  // picker never opens. Only one dialog is ever open here, so this locator is unambiguous.
-  const quiz = page.locator('[role="dialog"]');
+  // Finding F12. `QuizPanelComponent`'s outer element carries `role="region"`, and not
+  // `role="dialog"`: the panel renders inline, with no backdrop, so it never claimed to be
+  // modal. The verb picker keeps `role="dialog"`, but it only opens on a text selection, and
+  // this test never selects text, so this locator is unambiguous.
+  const quiz = page.locator('[role="region"]');
 
   for (const [index, question] of TEMPLATE.questions.entries()) {
     await expect(quiz.getByText(question.stem)).toBeVisible();
