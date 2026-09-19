@@ -177,6 +177,7 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
             } @else {
               <app-focus-card
                 [body]="store.currentBody()"
+                [media]="store.currentMedia()"
                 [streamingText]="store.streamingText()"
                 [isStreaming]="store.isStreaming()"
                 [step]="step()"

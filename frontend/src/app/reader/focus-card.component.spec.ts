@@ -2,7 +2,7 @@ import { ErrorHandler } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { FocusCardComponent } from './focus-card.component';
 import { rootTextMatchesBody } from './selection';
-import { SpanPayload, Verb } from '../core/models';
+import { Media, SpanPayload, Verb } from '../core/models';
 
 const BODY = 'The pillars of modern physics.';
 
@@ -258,6 +258,26 @@ describe('FocusCardComponent', () => {
     expect(pickerLive()).toBe(false);
     expect(requests).toEqual([]);
     expect(fixture.nativeElement.textContent).toContain('complete');
+  });
+
+  it('shows the media renderer when the node in focus carries media', () => {
+    const media: Media = {
+      diagram: { kind: 'SVG', source: '<svg><circle cx="1" cy="1" r="1"/></svg>' },
+      image: null,
+    };
+    expect(fixture.nativeElement.querySelector('app-media-renderer')).toBeNull();
+
+    fixture.componentRef.setInput('media', media);
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('app-media-renderer')).not.toBeNull();
+  });
+
+  it('shows no media renderer when the node in focus carries none', () => {
+    fixture.componentRef.setInput('media', null);
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('app-media-renderer')).toBeNull();
   });
 
   it('closes the picker when a stream starts', async () => {

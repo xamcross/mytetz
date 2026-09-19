@@ -8,13 +8,14 @@ import {
   signal,
   viewChild,
 } from '@angular/core';
-import { SpanPayload, Verb } from '../core/models';
+import { Media, SpanPayload, Verb } from '../core/models';
 import {
   PICKER_HEIGHT,
   PickerAnchor,
   PickerDismissal,
   VerbPickerComponent,
 } from '../ui/verb-picker.component';
+import { MediaRendererComponent } from './media-renderer.component';
 import { rootTextMatchesBody, selectionToSpan } from './selection';
 
 /**
@@ -53,7 +54,7 @@ import { rootTextMatchesBody, selectionToSpan } from './selection';
  */
 @Component({
   selector: 'app-focus-card',
-  imports: [VerbPickerComponent],
+  imports: [VerbPickerComponent, MediaRendererComponent],
   template: `
     <article #cardEl class="focus mt-card mt-card--raised">
       <div class="focus__head">
@@ -91,6 +92,10 @@ import { rootTextMatchesBody, selectionToSpan } from './selection';
             <span class="focus__caret" aria-hidden="true">▍</span>
           }
         </p>
+      }
+
+      @if (media(); as m) {
+        <app-media-renderer [media]="m" />
       }
 
       <p class="focus__hint" [class.focus__hint--warning]="!bodyMatches()">{{ hint() }}</p>
@@ -246,6 +251,9 @@ export class FocusCardComponent {
   readonly body = input.required<string>();
   readonly streamingText = input.required<string>();
   readonly isStreaming = input.required<boolean>();
+  /** The diagram and image for the node in focus, or `null` when it carries none — every verb but
+   * `VISUALIZE`, and a `VISUALIZE` node before the page supplies the field. */
+  readonly media = input<Media | null>(null);
   /** The step number and the verb of the node in focus, for the eyebrow. The reader page supplies
    * both from `NodeView`. */
   readonly step = input<number | null>(null);

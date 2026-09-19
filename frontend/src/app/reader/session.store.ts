@@ -2,7 +2,7 @@ import { DestroyRef, Injectable, InjectionToken, computed, inject, signal } from
 import { HttpErrorResponse } from '@angular/common/http';
 import { AccountStore } from '../core/account.store';
 import { ApiService } from '../core/api.service';
-import { ExplainRequest, NodeView, SessionView, SpanPayload, Verb } from '../core/models';
+import { ExplainRequest, Media, NodeView, SessionView, SpanPayload, Verb } from '../core/models';
 import { ExplainEvent, ExplainStreamError, explainStream } from '../core/sse.client';
 
 /** The shape of `explainStream` (Task 1.13), named so it can be replaced in a test. */
@@ -165,6 +165,16 @@ export class SessionStore {
     const explanations = this.session()?.explanations;
     if (!node || !explanations) return '';
     return explanations[node.explanationKey] ?? '';
+  });
+
+  /** The diagram and image for the node in focus, or `null` when it carries none. `media` is
+   * sparse, and optional on `SessionView` itself: absent for every session with no `VISUALIZE`
+   * node — see `SessionView.media`'s own doc comment. */
+  readonly currentMedia = computed<Media | null>(() => {
+    const node = this.currentNode();
+    const media = this.session()?.media;
+    if (!node || !media) return null;
+    return media[node.explanationKey] ?? null;
   });
 
   /**
