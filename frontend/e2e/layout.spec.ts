@@ -1083,7 +1083,9 @@ test('a coral pill keeps its smaller shadow while a learner presses it', async (
   await gotoReader(page);
 
   await page.getByTestId('test-me').click();
-  const quiz = page.locator('[role="dialog"]');
+  // Finding F12. QuizPanelComponent carries role="region", not role="dialog": the panel renders
+  // inline, with no backdrop, so it never claimed to be modal.
+  const quiz = page.locator('[role="region"]');
   await quiz.getByText(PRESS_TEMPLATE.questions[0].stem).waitFor();
   await quiz
     .getByRole('button', { name: PRESS_TEMPLATE.questions[0].options[0], exact: true })
@@ -1116,7 +1118,9 @@ test('a chosen quiz option keeps its amber fill under the pointer, on a press, a
   await gotoReader(page);
 
   await page.getByTestId('test-me').click();
-  const quiz = page.locator('[role="dialog"]');
+  // Finding F12. QuizPanelComponent carries role="region", not role="dialog": the panel renders
+  // inline, with no backdrop, so it never claimed to be modal.
+  const quiz = page.locator('[role="region"]');
   await quiz.getByText(PRESS_TEMPLATE.questions[0].stem).waitFor();
   const chosen = quiz.getByRole('button', { name: PRESS_TEMPLATE.questions[0].options[0] });
   await chosen.click();
@@ -1169,7 +1173,9 @@ test('a quiz option carries the Candy lift, and presses like a pill', async ({ p
   await gotoReader(page);
 
   await page.getByTestId('test-me').click();
-  const quiz = page.locator('[role="dialog"]');
+  // Finding F12. QuizPanelComponent carries role="region", not role="dialog": the panel renders
+  // inline, with no backdrop, so it never claimed to be modal.
+  const quiz = page.locator('[role="region"]');
   await quiz.getByText(PRESS_TEMPLATE.questions[0].stem).waitFor();
   const other = quiz.getByRole('button', { name: PRESS_TEMPLATE.questions[0].options[1] });
 
@@ -1220,7 +1226,9 @@ test('a long quiz option wraps to two lines, taller than a one-line option, with
   await gotoReader(page);
 
   await page.getByTestId('test-me').click();
-  const quiz = page.locator('[role="dialog"]');
+  // Finding F12. QuizPanelComponent carries role="region", not role="dialog": the panel renders
+  // inline, with no backdrop, so it never claimed to be modal.
+  const quiz = page.locator('[role="region"]');
   const options = quiz.locator('.quiz-panel__option');
   await options.first().waitFor();
 
@@ -1380,6 +1388,56 @@ test('the header fits on one line for a signed-in learner at 390px and 400px, wi
     expect(bar!.height, `the bar stays 64px tall at ${width}px, not wrapped to a second line`).toBe(
       64,
     );
+    expect(doc.scroll, `the page does not scroll sideways at ${width}px`).toBeLessThanOrEqual(
+      doc.client,
+    );
+  }
+});
+
+/**
+ * Defect 2 of the design review's second round. `AllowanceMeterComponent`'s F14/F15 fix for
+ * issue #106 added `flex-wrap: wrap` to `.allowance-meter` so the account card's own meter could
+ * wrap at a phone width. That rule reached the header too, because it carried no
+ * `:host-context(.bar)` guard: at 768px, 772px, 776px, 780px and 800px, the header's own meter
+ * wrapped onto two lines, 34px tall, with the detail text below the count. `.bar
+ * .allowance-meter__detail` only hides below 768px, so a tablet at exactly 768px is the first
+ * width where the detail shows again, right next to the count, and the header must keep that
+ * pair on one line the same way it always did.
+ *
+ * The count and the detail sharing one `y` position is the proof of one line: two elements laid
+ * out on a wrapped, second row would each report a different, lower `y`.
+ */
+test('the header meter stays on one line at 768px, 800px and 1024px, and does not wrap', async ({
+  page,
+}) => {
+  await stubCatalogueAndSession(page);
+  await stubAccount(page, accountView());
+
+  for (const width of [768, 800, 1024]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto('/');
+    await page.locator('.topic__tile').first().waitFor();
+
+    const count = page.locator('header.bar .allowance-meter__count');
+    const detail = page.locator('header.bar .allowance-meter__detail');
+    await expect(count).toBeVisible();
+    await expect(detail).toBeVisible();
+
+    const bar = (await page.locator('.bar').boundingBox())!;
+    const countBox = (await count.boundingBox())!;
+    const detailBox = (await detail.boundingBox())!;
+    const doc = await page.evaluate(() => ({
+      scroll: document.documentElement.scrollWidth,
+      client: document.documentElement.clientWidth,
+    }));
+
+    console.log(
+      `[issue-106] width=${width} barHeight=${bar.height} countY=${countBox.y} detailY=${detailBox.y} ` +
+        `scrollWidth=${doc.scroll} clientWidth=${doc.client}`,
+    );
+
+    expect(bar.height, `the bar stays 64px tall at ${width}px`).toBe(64);
+    expect(countBox.y, `the count and the detail share one line at ${width}px`).toBe(detailBox.y);
     expect(doc.scroll, `the page does not scroll sideways at ${width}px`).toBeLessThanOrEqual(
       doc.client,
     );
@@ -1624,6 +1682,72 @@ test('the account page still shows the full detail text of the meter at 390px', 
     headerDetail,
     'the header keeps hiding its own detail on every other page too',
   ).toBeHidden();
+});
+
+/**
+ * A screenshot taken on 2026-09-19 found a defect issue #100 did not catch: on `/account` at
+ * 390px, the account card's own meter does not wrap. "12 of 40 left today" and "Resets
+ * September 20, 2026 at 3:00 PM." sit on one line, wider than the card, and the page scrolls
+ * sideways by about 20px. Issue #100's own test above only asserts that the detail text is
+ * present — it never measures the card's width against the page's.
+ */
+test('the account card does not scroll the page sideways at 390px, and the meter stays inside it', async ({
+  page,
+}) => {
+  await stubAccount(page, accountView());
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.goto('/account');
+
+  const card = page.locator('.account-page__card');
+  const detail = card.locator('.allowance-meter__detail');
+  await expect(detail).toBeVisible();
+  await expect(detail).toContainText('Resets September 20, 2026 at 3:00 PM.');
+
+  const doc = await page.evaluate(() => ({
+    scroll: document.documentElement.scrollWidth,
+    client: document.documentElement.clientWidth,
+  }));
+  expect(doc.scroll, 'the account page does not scroll sideways at 390px').toBeLessThanOrEqual(
+    doc.client,
+  );
+
+  const cardBox = (await card.boundingBox())!;
+  const detailBox = (await detail.boundingBox())!;
+  expect(detailBox.x, 'the detail text starts inside the card').toBeGreaterThanOrEqual(cardBox.x);
+  expect(detailBox.x + detailBox.width, 'the detail text ends inside the card').toBeLessThanOrEqual(
+    cardBox.x + cardBox.width,
+  );
+});
+
+/**
+ * Animation I. The header's own meter is a single, long-lived instance — it lives in the shell,
+ * outside every route's own outlet — so it survives an in-app navigation. Two SPA visits to
+ * `/account`, each answering a different `remaining`, both drive `AccountStore.load()` without
+ * ever remounting the meter: a hard `page.goto` would instead reload the whole application, and
+ * lose that shared instance. The first visit is the meter's first render, which never ticks (see
+ * the component's own tests); the second is the real change this animation answers. Under
+ * reduced motion, the tick class still applies — it is what marks the moment a test can key off
+ * — but its own reduced-motion override in allowance-meter.component.ts silences the animation.
+ */
+test('under reduced motion, the header meter tick carries no animation', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  let calls = 0;
+  await page.route('**/api/account', (route) =>
+    route.fulfill({ json: accountView({ remaining: calls++ === 0 ? 12 : 11 }) }),
+  );
+
+  await page.goto('/');
+  const count = page.locator('header.bar .allowance-meter__count');
+  await page.locator('a.bar__account').click();
+  await expect(count).toContainText('12 of 40 left today');
+
+  await page.locator('a.bar__mark').click();
+  await page.locator('a.bar__account').click();
+  await expect(count).toContainText('11 of 40 left today');
+
+  await expect(count).toHaveClass(/allowance-meter__count--tick/);
+  const animationName = await count.evaluate((el) => getComputedStyle(el).animationName);
+  expect(animationName, 'the tick class applies no animation under reduced motion').toBe('none');
 });
 
 test('the mark draws at 28px, left of the wordmark', async ({ page }) => {

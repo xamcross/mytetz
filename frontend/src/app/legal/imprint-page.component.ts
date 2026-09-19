@@ -52,27 +52,6 @@ import { Component } from '@angular/core';
       :host {
         display: block;
       }
-      .legal-page {
-        max-width: 720px;
-        margin: 0 auto;
-        padding: 48px 20px 64px;
-        display: flex;
-        flex-direction: column;
-        gap: 28px;
-      }
-      h1 {
-        font-size: 32px;
-      }
-      h2 {
-        font-size: 20px;
-        margin-bottom: 8px;
-      }
-      p {
-        margin: 0;
-        font-size: 15px;
-        line-height: 1.6;
-        color: var(--mt-prose);
-      }
     `,
   ],
 })

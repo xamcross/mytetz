@@ -84,8 +84,13 @@ import { TurnstileApi, loadTurnstileScript } from './turnstile';
             @if (validationError(); as message) {
               <p class="sign-in-panel__error" role="alert">{{ message }}</p>
             }
-            <button type="submit" class="mt-pill mt-pill--coral" [disabled]="submitting()">
-              Email me a sign-in link
+            <button
+              type="submit"
+              class="mt-pill mt-pill--coral"
+              [disabled]="submitting()"
+              [attr.aria-busy]="submitting() ? 'true' : null"
+            >
+              {{ submitting() ? 'Sending…' : 'Email me a sign-in link' }}
             </button>
           </form>
 

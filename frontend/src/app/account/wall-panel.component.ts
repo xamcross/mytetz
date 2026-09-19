@@ -44,9 +44,10 @@ const HEADLINES: Readonly<Record<WallCode, string>> = {
         type="button"
         class="mt-pill mt-pill--coral wall-panel__subscribe"
         [disabled]="subscribing()"
+        [attr.aria-busy]="subscribing() ? 'true' : null"
         (click)="subscribe()"
       >
-        Subscribe
+        {{ subscribing() ? 'Opening checkout…' : 'Subscribe' }}
       </button>
     </div>
   `,

@@ -25,19 +25,30 @@ type QuizPhase = 'loading' | 'question' | 'result';
  * this component never claims an answer is right or wrong before that call returns. A learner
  * moves through every question with Next, then Finish, and sees every result together.
  *
- * This is a dialog, and it holds the same three keyboard behaviours as `VerbPickerComponent`.
- * Escape closes it. Tab and Shift+Tab keep focus inside it. Focus moves in when it opens, and
- * back to whatever opened it once it closes. Unlike the picker, this panel's own content changes
- * over time: first loading, then a question, then a result or an error. So the focus-trap query
- * and the initial focus move both read the panel's current buttons, rather than a fixed list.
+ * Finding F12. `ReaderPageComponent` renders this panel inline, below the focus card, with no
+ * backdrop and nothing `inert` around it. `role="dialog"` with `aria-modal="true"` once told a
+ * screen reader that the rest of the page was hidden, which was never true. The WAI-ARIA
+ * Authoring Practices' landmark-regions guidance
+ * (https://www.w3.org/WAI/ARIA/apg/practices/landmark-regions/) names `region` for exactly this
+ * shape: a perceivable section of content that the named landmarks do not already describe, and
+ * that carries its own label. This panel keeps `aria-label` for that.
+ *
+ * The panel still holds the same three keyboard behaviours `VerbPickerComponent` uses for its own
+ * dialog. Escape closes it. Tab and Shift+Tab keep focus inside it. Focus moves in when it opens,
+ * and back to whatever opened it once it closes. A `region` is not modal, so keeping the trap is a
+ * choice and not a rule the role imposes — the panel replaces the whole reading view while it is
+ * open, in the same slot `WallPanelComponent` and `SignInPanelComponent` use, so the trap still
+ * matches what a sighted learner sees on screen. Unlike the picker, this panel's own content
+ * changes over time: first loading, then a question, then a result or an error. So the focus-trap
+ * query and the initial focus move both read the panel's current buttons, rather than a fixed
+ * list.
  */
 @Component({
   selector: 'app-quiz-panel',
   template: `
     <div
       class="quiz-panel mt-card mt-card--raised"
-      role="dialog"
-      aria-modal="true"
+      role="region"
       tabindex="-1"
       [attr.aria-label]="title()"
       (keydown.escape)="close.emit()"
@@ -84,10 +95,12 @@ type QuizPhase = 'loading' | 'question' | 'result';
           </button>
         </div>
       } @else if (phase() === 'result') {
-        <h2 class="quiz-panel__score">{{ result()?.score }} / {{ result()?.total }}</h2>
+        <h2 class="quiz-panel__score" animate.enter="score--in">
+          {{ result()?.score }} / {{ result()?.total }}
+        </h2>
         <ul class="quiz-panel__review">
-          @for (question of questions(); track question.questionId) {
-            <li>
+          @for (question of questions(); track question.questionId; let i = $index) {
+            <li animate.enter="review--in" [style.--i]="i">
               <p class="quiz-panel__review-stem">{{ question.stem }}</p>
               <p>
                 @if (isCorrect(question.questionId)) {
@@ -207,6 +220,39 @@ type QuizPhase = 'loading' | 'question' | 'result';
         margin: 0;
         font-size: 28px;
       }
+      /* Animation H. The score lands with a small overshoot — the same settle easing a wall
+         panel and a picker use for their own arrival. */
+      .score--in {
+        animation: score-in var(--mt-dur-panel) var(--mt-ease-settle) both;
+      }
+      @keyframes score-in {
+        from {
+          opacity: 0;
+          transform: scale(0.8);
+        }
+        to {
+          opacity: 1;
+          transform: none;
+        }
+      }
+      /* Animation H. Each review row follows the score, in the order the questions were asked —
+         --i, set per row in the template, drives the stagger. 120ms and 70ms are literal, not
+         tokens, because the stagger is a fixed rhythm and not a duration that itself changes with
+         motion preference; the block below zeroes it under reduced motion instead. */
+      .review--in {
+        animation: review-in var(--mt-dur-state) var(--mt-ease-out) both;
+        animation-delay: calc(120ms + var(--i) * 70ms);
+      }
+      @keyframes review-in {
+        from {
+          opacity: 0;
+          transform: translateY(var(--mt-move-near));
+        }
+        to {
+          opacity: 1;
+          transform: none;
+        }
+      }
       .quiz-panel__review {
         list-style: none;
         margin: 0;
@@ -228,6 +274,15 @@ type QuizPhase = 'loading' | 'question' | 'result';
         margin: 0;
         font-weight: 700;
         color: var(--mt-err-ink);
+      }
+      /* Animation H's stagger. 120ms and 70ms in .review--in above are literal values, so the
+         blanket reduced-motion rule in styles.css — which only zeroes a token — cannot reach
+         them. This override lives here, next to the rule it silences, the same place #102 put
+         the caret and the band overrides. */
+      @media (prefers-reduced-motion: reduce) {
+        .review--in {
+          animation-delay: 0ms;
+        }
       }
     `,
   ],

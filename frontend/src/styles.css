@@ -347,6 +347,50 @@ button:disabled {
   opacity: 0.55;
   box-shadow: none;
 }
+/* Finding F7, animation J. A busy control once faded to 55% opacity, the same as a plain
+   disabled one, and said nothing about what it was doing. This keeps the label at full colour —
+   the label already carries a word for the work, for example "Sending…" — and sweeps a bar
+   along the bottom edge, where the pill's own lift already lives. */
+/* Defect 3 found in review of issue #106. The design review's own text put the bar exactly on
+   the 2px bottom border, with no clip on the pill's own rounded corner. On a ghost pill — dark
+   teal on a teal border — the bar was invisible at 100% zoom, because it shared the border's own
+   colour. At the pill's 999px radius, the bar's flat, square ends also sat outside the curve at
+   each corner. overflow: hidden below clips the bar to the pill's own shape; it does not clip
+   the pill's own box-shadow (the lift, and the focus ring), because a box-shadow is not a child
+   and paints outside an element's own overflow regardless. */
+.mt-pill[aria-busy='true'] {
+  position: relative;
+  overflow: hidden;
+  cursor: progress;
+  opacity: 1;
+}
+.mt-pill[aria-busy='true']::after {
+  content: '';
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 3px;
+  background: currentColor;
+  opacity: 0.6;
+  transform-origin: left;
+  animation: pill-busy 900ms linear infinite;
+}
+@keyframes pill-busy {
+  0% {
+    transform: scaleX(0);
+  }
+  50% {
+    transform: scaleX(1);
+    transform-origin: left;
+  }
+  50.1% {
+    transform: scaleX(1);
+    transform-origin: right;
+  }
+  100% {
+    transform: scaleX(0);
+    transform-origin: right;
+  }
+}
 /* Three links carry this class and keep the browser's default underline: "Terms" on the account
    page, "Continue with Google" in the sign-in panel, and "Back to topics" on the not-found page. */
 a.mt-pill {
@@ -382,6 +426,32 @@ a.mt-pill {
   color: var(--mt-err-ink);
 }
 
+/* Design review, section 1.4, item 6. Three legal pages each declared the same block, and the
+   not-found page declared a fourth variant of the same idea. One shared rule now serves all
+   four. A page still declares its own rule for anything this block does not cover — a list, a
+   code sample, or a value that page alone needs — in its own file. */
+.legal-page {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 48px 20px 64px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+.legal-page h1 {
+  font-size: 32px;
+}
+.legal-page h2 {
+  font-size: 20px;
+  margin-bottom: 8px;
+}
+.legal-page p {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--mt-prose);
+}
+
 .mt-eyebrow {
   font-size: 11px;
   font-weight: 800;
@@ -413,6 +483,32 @@ a.mt-pill {
   }
 }
 
+/* Animation N. The whole block sits inside (prefers-reduced-motion: no-preference), so a learner
+   who asks for less motion gets the browser's own default cross-fade instead, which carries no
+   movement. A browser with no support for the View Transitions API drops these pseudo-elements
+   as an unknown selector, and the route changes with no animation at all — see
+   app.config.ts's own comment on withViewTransitions for the source. */
+@media (prefers-reduced-motion: no-preference) {
+  ::view-transition-old(root) {
+    animation: vt-out var(--mt-dur-route) var(--mt-ease-in) both;
+  }
+  ::view-transition-new(root) {
+    animation: vt-in var(--mt-dur-route) var(--mt-ease-out) both;
+  }
+  @keyframes vt-out {
+    to {
+      opacity: 0;
+      transform: translateY(calc(-1 * var(--mt-move-near)));
+    }
+  }
+  @keyframes vt-in {
+    from {
+      opacity: 0;
+      transform: translateY(var(--mt-move-near));
+    }
+  }
+}
+
 /* A learner who asks for less motion still needs every change of state. The distance goes to zero
    and the duration goes to 1ms. The state stays, and so does the opacity cross-fade.
    1ms and not 0: `animate.leave` waits for `animationend` before it removes an element, and an
@@ -429,6 +525,12 @@ a.mt-pill {
   }
   .mt-skeleton {
     animation: none;
+  }
+  /* Finding F7, animation J. A static bar still says "this control is at work". */
+  .mt-pill[aria-busy='true']::after {
+    animation: none;
+    transform: scaleX(1);
+    opacity: 0.35;
   }
   /* .focus__caret and .focus__band do not have a rule here. Angular's emulated encapsulation
      writes each one's own animation rule with a component attribute, at a higher specificity
