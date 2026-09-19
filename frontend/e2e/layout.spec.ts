@@ -1395,6 +1395,56 @@ test('the header fits on one line for a signed-in learner at 390px and 400px, wi
 });
 
 /**
+ * Defect 2 of the design review's second round. `AllowanceMeterComponent`'s F14/F15 fix for
+ * issue #106 added `flex-wrap: wrap` to `.allowance-meter` so the account card's own meter could
+ * wrap at a phone width. That rule reached the header too, because it carried no
+ * `:host-context(.bar)` guard: at 768px, 772px, 776px, 780px and 800px, the header's own meter
+ * wrapped onto two lines, 34px tall, with the detail text below the count. `.bar
+ * .allowance-meter__detail` only hides below 768px, so a tablet at exactly 768px is the first
+ * width where the detail shows again, right next to the count, and the header must keep that
+ * pair on one line the same way it always did.
+ *
+ * The count and the detail sharing one `y` position is the proof of one line: two elements laid
+ * out on a wrapped, second row would each report a different, lower `y`.
+ */
+test('the header meter stays on one line at 768px, 800px and 1024px, and does not wrap', async ({
+  page,
+}) => {
+  await stubCatalogueAndSession(page);
+  await stubAccount(page, accountView());
+
+  for (const width of [768, 800, 1024]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto('/');
+    await page.locator('.topic__tile').first().waitFor();
+
+    const count = page.locator('header.bar .allowance-meter__count');
+    const detail = page.locator('header.bar .allowance-meter__detail');
+    await expect(count).toBeVisible();
+    await expect(detail).toBeVisible();
+
+    const bar = (await page.locator('.bar').boundingBox())!;
+    const countBox = (await count.boundingBox())!;
+    const detailBox = (await detail.boundingBox())!;
+    const doc = await page.evaluate(() => ({
+      scroll: document.documentElement.scrollWidth,
+      client: document.documentElement.clientWidth,
+    }));
+
+    console.log(
+      `[issue-106] width=${width} barHeight=${bar.height} countY=${countBox.y} detailY=${detailBox.y} ` +
+        `scrollWidth=${doc.scroll} clientWidth=${doc.client}`,
+    );
+
+    expect(bar.height, `the bar stays 64px tall at ${width}px`).toBe(64);
+    expect(countBox.y, `the count and the detail share one line at ${width}px`).toBe(detailBox.y);
+    expect(doc.scroll, `the page does not scroll sideways at ${width}px`).toBeLessThanOrEqual(
+      doc.client,
+    );
+  }
+});
+
+/**
  * Every new learner starts in a trial, and the trial row prints a different pair of strings —
  * "left in your trial" instead of "left today", and "Trial ends" instead of "Resets" — so it
  * needs its own measurement and cannot lean on the ACTIVE case above.

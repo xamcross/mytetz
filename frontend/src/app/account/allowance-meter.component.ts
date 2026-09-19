@@ -122,6 +122,18 @@ const METERED_STATUSES: ReadonlySet<string> = new Set([
       :host-context(.bar) .allowance-meter__detail {
         white-space: nowrap;
       }
+      /*
+       * Defect found in review of issue #106: the flex-wrap: wrap rule above, added so the
+       * account card's own meter could wrap, reached the header too. At 768px, 772px, 776px,
+       * 780px and 800px — a tablet in portrait — the header's meter wrapped onto a second,
+       * 34px-tall line, with the detail text below the count. The header bar is a fixed 64px, so
+       * a wrapped meter there collides with the row below it. This rule keeps the header's own
+       * meter on one line, the same way it always was; the account card, outside the bar
+       * element, keeps the wrap.
+       */
+      :host-context(.bar) .allowance-meter {
+        flex-wrap: nowrap;
+      }
       .allowance-meter__error {
         color: var(--mt-err-ink);
         font-weight: 700;
