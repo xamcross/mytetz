@@ -797,3 +797,31 @@ the downgrade. `failedPayments` is the field that decides how confident that dec
 still inside a dunning retry window carries a retry date only days out. A subscription that has
 genuinely renewed carries a period end a full billing period out. Read both fields together, not
 `failedPayments` alone.
+
+---
+
+## Wikimedia Commons (the Visualize image lookup)
+
+The `VISUALIZE` verb draws a diagram, and it also asks Wikimedia Commons for one licensed image of
+the same span. This section names the one new outbound dependency that feature adds.
+
+**Two different hosts, from two different places.** The server itself calls
+`commons.wikimedia.org`, once per `VISUALIZE` generation, to search for an image and read its
+licence. The server never calls `upload.wikimedia.org`. That second host serves the image file
+itself, and only the learner's own browser loads it, directly, from the `imageUrl` the API sends.
+An operator who reads a firewall log or a network policy needs both hosts, one for each direction.
+
+**No secret, and no account.** The Commons API this project calls needs no key and no login. The
+request carries only a `User-Agent` header that names the project, `mytetz/1.0
+(https://mytetz.com)`, with no email address and no other personal data.
+
+**The timeout, and the degraded behaviour.** The lookup runs on a three-second connect timeout and
+a three-second request timeout. A slow or a failed answer, and a search with no licensed image, are
+the same outcome from the learner's point of view: the document stores the diagram alone, with no
+error and no retry. `CommonsClient`'s own KDoc, in `backend/api/.../CommonsClient.kt`, names every
+case that degrades this way.
+
+**No new operator alert token.** A Commons failure is silent by design — see the paragraph above —
+so it logs a status code or an exception's class name only, at `WARN`, and adds no row to the
+"Operator alert tokens" table above. Grep `com.mytetz.api.CommonsClient` in `fly logs` to see how
+often the lookup fails, if that number is ever worth watching.
