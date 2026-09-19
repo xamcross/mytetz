@@ -159,8 +159,10 @@ fun Route.authRoutes(
     // A factory, not the built service, for the reason `sessions` above is one: `Components.quizzes`
     // is a lazy that ends at `AnthropicLlmClient()`, which demands ANTHROPIC_API_KEY in its
     // constructor. Reading it here would build the model client while this module is still being
-    // configured. The route below calls only [QuizService.deleteForPrincipal], which never reaches
-    // the model, so the factory pays no real cost even on a deployment with no Anthropic key set.
+    // configured. The route below calls only [QuizService.deleteForPrincipal], which makes no model
+    // call. The first call of this factory still builds the model client, exactly as the first
+    // call of `sessions` does, so on a deployment with no Anthropic key the delete route fails on
+    // `sessions()` before it reaches this factory, and it deletes nothing.
     quizzes: () -> QuizService,
     // Defaults to a Turnstile with no secret, which never opens a connection — see [Turnstile]'s
     // own KDoc. This lets a test that has nothing to do with Turnstile, such as this file's own
