@@ -396,4 +396,44 @@ describe('QuizPanelComponent', () => {
       expect(rule('.quiz-panel__option:disabled')).toMatch(/box-shadow:\s*none/);
     });
   });
+
+  /**
+   * Animation H. The whole panel once swapped from the question phase to the result phase in
+   * one frame. The score now lands with a small overshoot, and each review row follows in the
+   * order the questions were asked, each one a little later than the row before it.
+   */
+  describe('animation H, the reveal of a quiz result', () => {
+    const source = readFileSync('src/app/assess/quiz-panel.component.ts', 'utf8');
+
+    it('gives the score element animate.enter', () => {
+      expect(source).toMatch(/quiz-panel__score[^>]*animate\.enter="score--in"/);
+    });
+
+    it('gives every review row animate.enter and its own --i for the stagger', () => {
+      expect(source).toMatch(/<li[^>]*animate\.enter="review--in"[^>]*\[style\.--i\]="i"/);
+    });
+
+    it('declares .score--in with the panel duration and the settle easing', () => {
+      const rule = source.match(/\.score--in\s*\{([^}]*)\}/)?.[1];
+      if (!rule) throw new Error('quiz-panel.component.ts must declare .score--in');
+      expect(rule).toMatch(/animation:\s*score-in var\(--mt-dur-panel\) var\(--mt-ease-settle\)/);
+    });
+
+    it('declares .review--in with a stagger that reads --i', () => {
+      const rule = source.match(/\.review--in\s*\{([^}]*)\}/)?.[1];
+      if (!rule) throw new Error('quiz-panel.component.ts must declare .review--in');
+      expect(rule).toMatch(/animation:\s*review-in var\(--mt-dur-state\) var\(--mt-ease-out\)/);
+      expect(rule).toMatch(/animation-delay:\s*calc\(120ms \+ var\(--i\) \* 70ms\)/);
+    });
+
+    it('zeroes the stagger under reduced motion, in this same file', () => {
+      // 120ms and 70ms are literal values, not tokens, so the blanket reduced-motion rule in
+      // styles.css cannot reach them. The override lives here, next to the rule it silences —
+      // the same rule #102 set for a component's own animation.
+      const start = source.indexOf('@media (prefers-reduced-motion: reduce)');
+      if (start === -1) throw new Error('quiz-panel.component.ts must declare its own reduced-motion block');
+      const block = source.slice(start, source.indexOf('}', source.indexOf('.review--in', start)) + 1);
+      expect(block).toMatch(/\.review--in\s*\{\s*animation-delay:\s*0ms/);
+    });
+  });
 });

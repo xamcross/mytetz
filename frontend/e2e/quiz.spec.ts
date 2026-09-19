@@ -74,3 +74,38 @@ test('takes a Test Me quiz across three questions and sees the score', async ({ 
   // The result screen renders `{{ result()?.score }} / {{ result()?.total }}` as one heading.
   await expect(quiz.getByText(`${RESULT.score} / ${RESULT.total}`)).toBeVisible();
 });
+
+/**
+ * Animation H. Each review row lands a little later than the row before it — see
+ * `quiz-panel.component.ts`'s own `.review--in` rule, whose 120ms base and 70ms step are literal
+ * values and not tokens. `page.emulateMedia` is this suite's own way of reaching that preference
+ * — see #102's note that the context option `reducedMotion` does not reach `matchMedia` here.
+ */
+test('under reduced motion, every review row lands with no stagger', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await stubCatalogueAndSession(page);
+  await mockQuiz(page, 's1', TEMPLATE, RESULT);
+
+  await openQuantumPhysicsSession(page);
+  await page.getByTestId('test-me').click();
+
+  const quiz = page.locator('[role="region"]');
+  for (const [index, question] of TEMPLATE.questions.entries()) {
+    await expect(quiz.getByText(question.stem)).toBeVisible();
+    await quiz.getByRole('button', { name: question.options[0], exact: true }).click();
+    const isLastQuestion = index === TEMPLATE.questions.length - 1;
+    await quiz
+      .getByRole('button', { name: isLastQuestion ? 'See results' : 'Next question', exact: true })
+      .click();
+  }
+
+  await expect(quiz.getByText(`${RESULT.score} / ${RESULT.total}`)).toBeVisible();
+  const delays = await quiz
+    .locator('.quiz-panel__review > li')
+    .evaluateAll((rows) => rows.map((row) => getComputedStyle(row).animationDelay));
+
+  expect(delays.length).toBe(TEMPLATE.questions.length);
+  for (const delay of delays) {
+    expect(delay, 'no review row waits behind the row before it').toBe('0s');
+  }
+});
