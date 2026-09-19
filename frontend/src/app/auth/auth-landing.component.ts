@@ -47,9 +47,7 @@ import { SignInPanelComponent } from './sign-in-panel.component';
             <p class="banner__message">{{ text }}</p>
           </div>
         }
-        @if (message() !== null || hasNoReason()) {
-          <app-sign-in-panel />
-        }
+        <app-sign-in-panel />
       </main>
     }
   `,
