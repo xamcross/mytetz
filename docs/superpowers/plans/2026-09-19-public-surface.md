@@ -29,6 +29,47 @@ authoritative over each issue wherever the two disagree; each issue's own body a
 and names the points the spec changes. This plan follows the spec's decisions and cites the
 issue only for detail the spec does not repeat.
 
+## Corrections after phase 1, recorded on 2026-09-19
+
+Phase 1 is on `main` (pull requests #117 and #119). The work found two gaps and six code errors in
+this plan. Read this section before you follow phase 2, 3 or 4, and compare each task with the spec
+before you follow it.
+
+**Gap 1: no task built the "Start with this topic" control.** The spec lists it in section 6.1 and
+in section 13.2. Task 1.6 changed each catalogue tile into a plain link and said that the control
+"moves there in a later phase", and no later phase held it. With the first version of the branch,
+no page of the site started a session. The decision: the topic page has a button, an empty
+`role="alert"` paragraph and a `noscript` sentence, and one external static file,
+`frontend/public/topic-start.js`, sends `POST /api/sessions` and goes to `/learn/<id>`. The page has
+no inline script, so `unsafe { }` stays in the JSON-LD block only.
+
+**Gap 2: the page had no layout.** No task gave it a stylesheet, a header, a footer, a viewport
+tag or a `lang` attribute. The page now reuses `/guides/guides.css` and the header and footer of a
+guide page. Each later page of this plan (`/how-it-works`, the explanation page, the glossary) must
+do the same, and it must set `lang = "en"` as the first statement of its renderer: the stream
+writer of `kotlinx.html` writes the `<html>` start tag when the first child opens.
+
+**Other corrections that the code of phase 1 holds, and that the later phases must copy.**
+- The `og:` tags need the attribute `property`. The `meta(name = …)` call of the DSL writes `name`.
+  Set `attributes["property"]` directly.
+- An unknown page answers `404` with the body of the SPA fallback, through `respondSpaShell` in
+  `SpaRoutes.kt`, and not with an empty body.
+- `kotlinx.html` renders `<link href="…" rel="canonical">`, with `href` first and no closing slash.
+  A test must assert the text that the DSL writes, and not the text of a hand-written page.
+- A test snippet that uses `put(…)` inside `buildJsonObject` needs the import
+  `kotlinx.serialization.json.put`. Without it the call resolves to `MutableMap.put`.
+- A Gradle test runs with the module folder as its working folder. The path to the guide pages is
+  `../../frontend/public/guides`. A test that walks a folder must first assert that the folder
+  exists, or an empty walk passes the test.
+- This project runs Vitest. `expect(value, message)` replaces the Jasmine call `withContext`.
+- Task 1.5 names `ApplicationTest.kt`. The tests for the SPA fallback and the API catch-all are in
+  `ComponentsTest.kt`.
+- Write a Unicode escape as its escape text in source code. A literal U+2028 or U+2029 between
+  quote marks compiles, and an editor can change it with no visible difference.
+- The Playwright suite has no Ktor process. It proves the start script against a fixture page that
+  `page.route` fulfils. A backend test pins the same control markup. Only the deployed site proves
+  the two together.
+
 ---
 
 ## Global Constraints
