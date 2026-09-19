@@ -201,6 +201,35 @@ describe('the Candy palette', () => {
   });
 });
 
+describe('the non-text contrast of the controls (issue #103)', () => {
+  // `src/styles.css` and `focus-card.component.ts` are read directly, and their values are never
+  // copied into this file. A change to the real token, or to the real rule, is what makes each
+  // test below pass or fail — not a value someone remembered to update here.
+  const css = readFileSync('src/styles.css', 'utf8');
+  const tokens = readRootTokens(css);
+
+  it('gives --mt-edge a boundary of 3:1 or more against --mt-surface', () => {
+    if (!('--mt-edge' in tokens)) throw new Error(':root must declare --mt-edge');
+    expect(contrast(tokens['--mt-edge'], tokens['--mt-surface'])).toBeGreaterThanOrEqual(AA_LARGE);
+  });
+
+  it('gives the indeterminate progress band a boundary of 3:1 or more against its track', () => {
+    // The band and its track live in focus-card.component.ts, next to the animation they belong
+    // to, and not in styles.css. Both declarations still name a global token, so the values here
+    // resolve against the same :root block as every other pair in this file.
+    const componentCss = readFileSync('src/app/reader/focus-card.component.ts', 'utf8');
+    const track = resolveColor(
+      readDeclaration(readRule(componentCss, '.focus__track'), 'background'),
+      tokens,
+    );
+    const band = resolveColor(
+      readDeclaration(readRule(componentCss, '.focus__band'), 'background'),
+      tokens,
+    );
+    expect(contrast(track, band)).toBeGreaterThanOrEqual(AA_LARGE);
+  });
+});
+
 describe('the guide page buttons', () => {
   // `guides.css` cannot import `styles.css` (see its header comment), so this suite reads the
   // real shipped file and resolves each `var(--…)` value from its own `:root` block. A test that
