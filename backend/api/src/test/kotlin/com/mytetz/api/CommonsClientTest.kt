@@ -201,10 +201,24 @@ class CommonsClientTest {
         assertEquals("Public domain", image?.license)
     }
 
+    /**
+     * `ImageMedia` and `ImageMediaView` carry no license-URL field, and no page ever shows one, so a
+     * refusal on its scheme protects nothing. The real sample this pins is a live answer for a
+     * `CC0` file, read 2026-09-19: Commons itself gives `LicenseUrl` as
+     * `http://creativecommons.org/publicdomain/zero/1.0/deed.en` — plain `http`, not `https` — for a
+     * file whose license short name, `CC0`, is otherwise perfectly acceptable. An earlier version of
+     * this class refused this exact, real, freely licensed image over that one field.
+     */
     @Test
-    fun `a license url with an http scheme is refused, not accepted with the link dropped`() = runTest {
-        val body = bodyWithPages(pageJson(licenseUrl = "http://creativecommons.org/licenses/by-sa/4.0"))
-        assertNull(clientReturning(body).findImage("escape velocity", emptyList()))
+    fun `a CC0 result with a real, http-scheme LicenseUrl is accepted`() = runTest {
+        val body = bodyWithPages(
+            pageJson(
+                licenseShortName = "CC0",
+                licenseUrl = "http://creativecommons.org/publicdomain/zero/1.0/deed.en",
+            ),
+        )
+        val image = clientReturning(body).findImage("escape velocity", emptyList())
+        assertEquals("CC0", image?.license)
     }
 
     @Test

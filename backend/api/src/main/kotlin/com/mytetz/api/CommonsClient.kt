@@ -68,11 +68,18 @@ internal data class ImageInfoResult(
 internal data class MetadataValue(val value: String? = null)
 
 /**
- * The five `extmetadata` fields this class reads, confirmed at
+ * The four `extmetadata` fields this class reads, confirmed at
  * `https://www.mediawiki.org/wiki/Extension:CommonsMetadata` (read 2026-09-19): `LicenseShortName`
- * ("short human-readable license name"), `LicenseUrl`, `Artist`, `Credit` ("source"), and
- * `Attribution` ("custom attribution that should replace Artist + Credit" — the reason
- * [CommonsClient] prefers it over the other two when it is present).
+ * ("short human-readable license name"), `Artist`, `Credit` ("source"), and `Attribution` ("custom
+ * attribution that should replace Artist + Credit" — the reason [CommonsClient] prefers it over the
+ * other two when it is present).
+ *
+ * This class does not read `LicenseUrl`. A first version did, and refused a candidate whose
+ * `LicenseUrl` was not `https` — but neither `ImageMedia` nor `ImageMediaView` carries a
+ * license-URL field, and no page shows one, so that refusal protected nothing. It also cost real
+ * images: a live `CC0` file's own `LicenseUrl` is `http://creativecommons.org/publicdomain/…`, not
+ * `https`, and that one field alone made the check refuse an otherwise perfectly acceptable image.
+ * `LicenseShortName` is the one field this class gates a candidate on.
  *
  * Every field here can hold HTML a Commons editor wrote. None of it is ever stored as this class
  * received it — see [CommonsClient.attributionHtmlFor].
@@ -80,7 +87,6 @@ internal data class MetadataValue(val value: String? = null)
 @Serializable
 internal data class ExtMetadata(
     @SerialName("LicenseShortName") val licenseShortName: MetadataValue? = null,
-    @SerialName("LicenseUrl") val licenseUrl: MetadataValue? = null,
     @SerialName("Artist") val artist: MetadataValue? = null,
     @SerialName("Credit") val credit: MetadataValue? = null,
     @SerialName("Attribution") val attribution: MetadataValue? = null,
@@ -218,18 +224,6 @@ internal fun hasExactSchemeAndHost(raw: String, scheme: String, host: String): B
     false
 }
 
-/** `licenseUrl` is optional on the wire; absent is accepted. Present, it must be `https` — the
- * same exact-scheme rule [hasExactSchemeAndHost] applies to the other two URLs this class reads,
- * though a license URL carries no fixed host to check against. */
-internal fun isAcceptableLicenseUrl(raw: String?): Boolean {
-    if (raw.isNullOrBlank()) return true
-    return try {
-        URI(raw).scheme.equals("https", ignoreCase = true)
-    } catch (e: URISyntaxException) {
-        false
-    }
-}
-
 /**
  * Looks up one licensed image for a span, from Wikimedia Commons — the real, Ktor-backed
  * implementation of [com.mytetz.graph.CommonsLookup]. `:backend:graph` never builds this class or
@@ -250,8 +244,8 @@ internal fun isAcceptableLicenseUrl(raw: String?): Boolean {
  *   exists ("If iiprop=url is set, a URL to an image scaled to this width will be returned").
  * - A small number of real, read-only GET requests this class's own tests are built from, which
  *   confirm the response's exact field names: `thumburl`, `url`, `descriptionurl` and `mime` on
- *   [ImageInfoResult], and `LicenseShortName`, `LicenseUrl`, `Artist`, `Credit` and `Attribution`
- *   inside `extmetadata` — the last five also named, without their exact casing pinned down, by
+ *   [ImageInfoResult], and `LicenseShortName`, `Artist`, `Credit` and `Attribution` inside
+ *   `extmetadata` — the last four also named, without their exact casing pinned down, by
  *   `https://www.mediawiki.org/wiki/Extension:CommonsMetadata`.
  *
  * [span] reaches the request only through [io.ktor.client.request.HttpRequestBuilder.parameter] —
@@ -273,8 +267,8 @@ internal fun isAcceptableLicenseUrl(raw: String?): Boolean {
  *   both checked with [hasExactSchemeAndHost], which parses each value with `java.net.URI` rather
  *   than testing the raw string, so a look-alike host such as
  *   `upload.wikimedia.org.evil.example` is refused.
- * - `extmetadata.LicenseShortName` is on [ALLOWED_LICENSE_SHORT_NAME].
- * - `extmetadata.LicenseUrl`, if present, has the scheme `https` ([isAcceptableLicenseUrl]).
+ * - `extmetadata.LicenseShortName` is on [ALLOWED_LICENSE_SHORT_NAME]. This is the one licence
+ *   check this class runs; see [ExtMetadata]'s own KDoc for why a `LicenseUrl` check was removed.
  *
  * ## Every failure answers null
  *
@@ -347,8 +341,6 @@ class CommonsClient(private val httpClient: HttpClient) {
 
         val licenseShortName = info.extmetadata?.licenseShortName?.value ?: return null
         if (!ALLOWED_LICENSE_SHORT_NAME.matches(licenseShortName.trim())) return null
-
-        if (!isAcceptableLicenseUrl(info.extmetadata.licenseUrl?.value)) return null
 
         return ImageMedia(
             imageUrl = thumbnailUrl,
