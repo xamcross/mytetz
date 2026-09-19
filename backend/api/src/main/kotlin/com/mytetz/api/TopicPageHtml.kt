@@ -136,6 +136,7 @@ fun HTML.topicPageHtml(view: TopicPageView) {
                 }
                 p {
                     attributes["id"] = "topic-start-error"
+                    attributes["class"] = "start__error"
                     attributes["role"] = "alert"
                 }
                 noScript {

@@ -126,7 +126,10 @@ class TopicPageHtmlTest {
             """<button type="button" id="topic-start-button" class="start__cta" data-topic-slug="special-relativity">""" in html,
             "the start button, with its data-topic-slug attribute, was not found: $html",
         )
-        assertTrue("""<p id="topic-start-error" role="alert"></p>""" in html, "the alert paragraph was not found: $html")
+        assertTrue(
+            """<p id="topic-start-error" class="start__error" role="alert"></p>""" in html,
+            "the alert paragraph was not found: $html",
+        )
         assertTrue("<noscript>" in html, "no noscript block was found: $html")
         assertTrue(
             "needs JavaScript" in html,
