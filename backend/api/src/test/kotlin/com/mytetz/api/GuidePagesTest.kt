@@ -5,6 +5,7 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.routing.routing
 import io.ktor.server.testing.testApplication
+import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -47,6 +48,25 @@ class GuidePagesTest {
                 "$path must name itself in its canonical tag",
             )
         }
+    }
+
+    @Test
+    fun `no guide page still holds the issue 45 placeholder comment`() {
+        // The plan's own literal path, "../frontend/public/guides", is one level short: a Gradle
+        // `Test` task's working directory is the module's own project directory
+        // (`backend/api`), not the repository root, so that path silently walked a directory that
+        // does not exist and passed with an empty, meaningless offender list. Confirmed by running
+        // this test both ways.
+        val guidesRoot = File("../../frontend/public/guides")
+        assertTrue(guidesRoot.isDirectory, "guides root not found at ${guidesRoot.absolutePath}")
+
+        val offenders = guidesRoot.walkTopDown()
+            .filter { it.name == "index.html" }
+            .filter { it.readText().contains("issue #45") }
+            .map { it.path }
+            .toList()
+
+        assertTrue(offenders.isEmpty(), "these guide pages still name issue #45: $offenders")
     }
 
     @Test
