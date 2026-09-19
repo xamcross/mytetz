@@ -21,13 +21,14 @@ private const val SITE_URL = "https://mytetz.com"
  * catalogue the moment an editor adds a topic, and #18 grows the catalogue past the 29 topics it
  * held on 2026-09-15.
  *
- * Lists the home page, one `<url>` for each published topic, and one `<url>` for each path in
- * [GuidePages.paths] — the one list [GuidePagesTest] already holds the shipped guide pages to. A
- * pure read: this function calls [CatalogService.listPublished] and [ExplanationRepository.findByKey]
- * only, the same rule [topicPageRoutes] follows for the same reason. Spec section 13.2's
- * shared-cache rule needs a response with no `Set-Cookie` header, so this route never calls
- * `Principals.resolve` and never touches a lazy model client. [SitemapRoutesTest] proves both with
- * a real test.
+ * Lists the home page, one `<url>` for each published topic, one `<url>` for each path in
+ * [GuidePages.paths] — the one list [GuidePagesTest] already holds the shipped guide pages to —
+ * and, per issue #48, one `<url>` for each published explanation page, from
+ * [publicExplanationSitemapEntries]. A pure read: this function calls
+ * [CatalogService.listPublished] and [ExplanationRepository.findByKey] only, the same rule
+ * [topicPageRoutes] follows for the same reason. Spec section 13.2's shared-cache rule needs a
+ * response with no `Set-Cookie` header, so this route never calls `Principals.resolve` and never
+ * touches a lazy model client. [SitemapRoutesTest] proves both with a real test.
  *
  * Follows https://www.sitemaps.org/protocol.html: `<loc>` is required, `<lastmod>` is optional, and
  * one file may hold up to 50,000 URLs. The catalogue stays far below that limit even at the
@@ -70,10 +71,21 @@ fun Route.sitemapRoutes(
             )
         }
 
+        // Issue #48: one <url> per published explanation page, capped hard at
+        // MAX_PUBLISHED_EXPLANATIONS by publicExplanationSitemapEntries itself — see that
+        // function's own KDoc for why the cap is enforced there and not repeated here.
+        val explanationUrls = publicExplanationSitemapEntries(explanations).map { entry ->
+            SitemapUrl(
+                loc = SITE_URL + entry.path,
+                lastmod = lastModifiedFor(entry.createdAtEpochMillis, reviewedAtEpochMillis = null),
+            )
+        }
+
         val urls = buildList {
             add(SitemapUrl(loc = "$SITE_URL/"))
             addAll(topicUrls)
             addAll(GuidePages.paths.map { SitemapUrl(loc = SITE_URL + it) })
+            addAll(explanationUrls)
         }
 
         call.response.header(HttpHeaders.CacheControl, "public, max-age=3600")

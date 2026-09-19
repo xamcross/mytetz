@@ -4,7 +4,7 @@ import com.mytetz.graph.ExplanationRepository
 import com.mytetz.graph.MAX_PUBLISHED_EXPLANATIONS
 
 /** One published explanation page, ready for a sitemap `<url>` entry. */
-data class PublicExplanationUrl(val topicSlug: String, val shortKey: String) {
+data class PublicExplanationUrl(val topicSlug: String, val shortKey: String, val createdAtEpochMillis: Long) {
     val path: String get() = "/topics/$topicSlug/explain/$shortKey"
 }
 
@@ -12,11 +12,12 @@ data class PublicExplanationUrl(val topicSlug: String, val shortKey: String) {
  * The list of public explanation page URLs for the sitemap (spec section 7.4), capped hard at
  * [cap] entries.
  *
- * **Why this joins no route today.** `SitemapRoutes.kt` does not exist on this branch: issue #46
- * builds `GET /sitemap.xml` on its own branch, `issue-46-sitemap-route`, in parallel with this
- * issue. This function is the piece Task 4.6 can deliver without it. Once the two branches merge,
- * `SitemapRoutes.kt`'s own `sitemapRoutes` function should call this and add one `<url>` per
- * [PublicExplanationUrl.path] — that join is reported as waiting in this issue's own final report.
+ * **The join with `SitemapRoutes.kt`.** Issue #46 built `GET /sitemap.xml` on its own branch,
+ * `issue-46-sitemap-route`, in parallel with this issue. This function is the piece Task 4.6 could
+ * deliver before the two branches merged; `SitemapRoutes.kt`'s own `sitemapRoutes` function now
+ * calls it and adds one `<url>` per [PublicExplanationUrl.path], with `<lastmod>` from
+ * [createdAtEpochMillis] through [lastModifiedFor] — the same function `sitemapRoutes` already uses
+ * for a topic's own `<lastmod>`.
  *
  * **Why the cap is enforced here too, and not only in the review script.**
  * `ExplanationRepository.findPublished` should already return at most [MAX_PUBLISHED_EXPLANATIONS]
@@ -35,4 +36,10 @@ suspend fun publicExplanationSitemapEntries(
     explanations.findPublished()
         .sortedByDescending { it.requestCount }
         .take(cap)
-        .map { PublicExplanationUrl(topicSlug = it.topicSlug, shortKey = it.key.take(12)) }
+        .map {
+            PublicExplanationUrl(
+                topicSlug = it.topicSlug,
+                shortKey = it.key.take(12),
+                createdAtEpochMillis = it.createdAtEpochMillis,
+            )
+        }

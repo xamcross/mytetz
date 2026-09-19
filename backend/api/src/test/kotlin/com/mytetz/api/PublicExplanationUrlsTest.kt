@@ -12,11 +12,11 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * Task 4.6's own piece that does not need `SitemapRoutes.kt` (issue #46, not yet on `main` as this
- * task ships): the list of public explanation URLs, capped hard at [MAX_PUBLISHED_EXPLANATIONS],
- * so that a future `sitemapRoutes` can add one `<url>` per entry with no further cap logic of its
- * own. See `publicExplanationSitemapEntries`'s own KDoc for why the cap is enforced here too, and
- * not only in the review script.
+ * The list of public explanation URLs, capped hard at [MAX_PUBLISHED_EXPLANATIONS], that
+ * `SitemapRoutes.kt`'s own `sitemapRoutes` function now calls to add one `<url>` per entry, with no
+ * further cap logic of its own — see `SitemapRoutesTest`'s own explanation-page tests for the
+ * route-level proof. See `publicExplanationSitemapEntries`'s own KDoc for why the cap is enforced
+ * here too, and not only in the review script.
  */
 class PublicExplanationUrlsTest {
 
