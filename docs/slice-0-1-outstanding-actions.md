@@ -205,7 +205,7 @@ You can also confirm this in the database. The two explanations must have differ
 ## Phase 4 — Make the system observable. Do this before real traffic.
 
 Today nobody can see a failure. The application has no metrics and no alerts. The log output goes
-to the console only, and the timestamp has no date.
+to the console only. Each timestamp shows the date and the UTC zone.
 
 The code already writes three tokens. A person sees them today only by chance.
 
