@@ -37,7 +37,12 @@ class GuidePagesTest {
     private fun sitemapGuidePaths(): List<String> {
         var paths: List<String> = emptyList()
         testApplication {
-            application { routing { sitemapRoutes(TestFixtures.seededCatalog()) } }
+            val explanations = ExplanationRepository(
+                Mongo(MongoConfig(TestFixtures.connectionString, "test_api_guide_sitemap")).database
+            )
+            application {
+                routing { sitemapRoutes(TestFixtures.seededCatalog(), explanations, modelFamily = "fake-model") }
+            }
             val body = client.get("/sitemap.xml").bodyAsText()
             paths = Regex("""<loc>https://mytetz\.com(/guides[^<]*)</loc>""")
                 .findAll(body)
