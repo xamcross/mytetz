@@ -6,6 +6,7 @@ import com.mongodb.client.model.Indexes
 import com.mongodb.client.model.Updates
 import com.mongodb.kotlin.client.coroutine.MongoDatabase
 import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.flow.toList
 
 /**
  * The session named by [sessionId] does not exist — it was never created, or it has been removed.
@@ -29,8 +30,9 @@ class SessionRepository(database: MongoDatabase) {
 
     /**
      * `principal_recent` serves "my sessions, most recent first"; `by_topic` serves per-topic
-     * lookups. Neither is a TTL index and nothing here expires — sessions are the learner's record
-     * of what they read, and dropping them is a product decision nobody has made.
+     * lookups; `by_explanation_key` serves [referencedExplanationKeys]. None of the three is a
+     * TTL index and nothing here expires — sessions are the learner's record of what they read,
+     * and dropping them is a product decision nobody has made.
      */
     suspend fun ensureIndexes() {
         collection.createIndex(
@@ -38,6 +40,7 @@ class SessionRepository(database: MongoDatabase) {
             IndexOptions().name("principal_recent"),
         )
         collection.createIndex(Indexes.ascending("topicSlug"), IndexOptions().name("by_topic"))
+        collection.createIndex(Indexes.ascending("nodes.explanationKey"), IndexOptions().name("by_explanation_key"))
     }
 
     /** Raises `MongoWriteException` on a duplicate id; the id is the caller's to make unique. */
@@ -82,6 +85,29 @@ class SessionRepository(database: MongoDatabase) {
             ),
         )
         if (result.matchedCount == 0L) throw SessionNotFoundException(sessionId)
+    }
+
+    /**
+     * Of [candidates], reports which ones a session node still points at through
+     * [SessionNode.explanationKey].
+     *
+     * `Components.evictExplanations` is the only caller. It reads one batch of eviction
+     * candidates from `ExplanationRepository`, and must not delete a key that a session still
+     * references — a deleted target of a live node breaks that session's trail. See
+     * `SessionService.hydrate`'s own KDoc for what a broken trail looks like from that side.
+     *
+     * An empty [candidates] returns an empty set and asks Mongo nothing, because a caller with no
+     * candidates has nothing to check.
+     */
+    suspend fun referencedExplanationKeys(candidates: Collection<String>): Set<String> {
+        if (candidates.isEmpty()) return emptySet()
+        val wanted = candidates.toSet()
+        return collection.find(Filters.`in`("nodes.explanationKey", wanted))
+            .toList()
+            .flatMap { it.nodes }
+            .map { it.explanationKey }
+            .filter { it in wanted }
+            .toSet()
     }
 
     /**

@@ -20,13 +20,16 @@ class ExplanationRepositoryTest {
         key: String,
         body: String,
         modelFamily: String = "claude-opus-5",
+        verb: Verb = Verb.SEED,
+        requestCount: Long = 0,
+        createdAtEpochMillis: Long = 1_700_000_000_000,
     ) = Explanation(
         key = key,
         topicSlug = "quantum-physics",
         parentKey = null,
         span = null,
         spanSentence = null,
-        verb = Verb.SEED,
+        verb = verb,
         variant = 0,
         depth = 0,
         body = body,
@@ -38,8 +41,8 @@ class ExplanationRepositoryTest {
         inputTokens = 10,
         outputTokens = 20,
         costMicros = 550,
-        requestCount = 0,
-        createdAtEpochMillis = 1_700_000_000_000,
+        requestCount = requestCount,
+        createdAtEpochMillis = createdAtEpochMillis,
     )
 
     @BeforeTest
@@ -135,5 +138,78 @@ class ExplanationRepositoryTest {
     @Test
     fun `deleting by family on an empty store reports zero`() = runTest {
         assertEquals(0, repository.deleteWhereModelFamilyIsNot("claude-sonnet-5"))
+    }
+
+    // ------------------------------------------------------------------ eviction
+
+    @Test
+    fun `findEvictionCandidates returns only a non-seed, low-demand, old document`() = runTest {
+        val cutoff = 1_700_000_000_000L
+
+        // A seed. Never a candidate, however low its requestCount and however old it is.
+        repository.insertIfAbsent(
+            explanation("seed", "seed body", verb = Verb.SEED, requestCount = 0, createdAtEpochMillis = cutoff - 1),
+        )
+        // Old and unread, but too recent. Not a candidate.
+        repository.insertIfAbsent(
+            explanation("recent", "a recent body", verb = Verb.EXPLAIN, requestCount = 0, createdAtEpochMillis = cutoff + 1),
+        )
+        // Old, but read at least once. Not a candidate.
+        repository.insertIfAbsent(
+            explanation("read", "a read body", verb = Verb.EXPLAIN, requestCount = 1, createdAtEpochMillis = cutoff - 1),
+        )
+        // Old and unread. The one candidate.
+        repository.insertIfAbsent(
+            explanation("unread", "an old unread body", verb = Verb.EXPLAIN, requestCount = 0, createdAtEpochMillis = cutoff - 1),
+        )
+
+        val candidates = repository.findEvictionCandidates(maxRequestCount = 0, olderThanEpochMillis = cutoff, limit = 10)
+
+        assertEquals(listOf("unread"), candidates)
+    }
+
+    @Test
+    fun `findEvictionCandidates applies the batch limit`() = runTest {
+        val cutoff = 1_700_000_000_000L
+        repeat(5) { i ->
+            repository.insertIfAbsent(
+                explanation(
+                    "old-$i",
+                    "body $i",
+                    verb = Verb.EXPLAIN,
+                    requestCount = 0,
+                    createdAtEpochMillis = cutoff - 1000 + i,
+                ),
+            )
+        }
+
+        val candidates = repository.findEvictionCandidates(maxRequestCount = 0, olderThanEpochMillis = cutoff, limit = 3)
+
+        // The oldest three, in age order — not just any three.
+        assertEquals(listOf("old-0", "old-1", "old-2"), candidates)
+    }
+
+    @Test
+    fun `deleteEvictable removes a listed key only while its requestCount is still at or below the limit`() = runTest {
+        repository.insertIfAbsent(explanation("gone", "old and unread", verb = Verb.EXPLAIN, requestCount = 0))
+        // Read since the candidate scan ran. The delete must not remove it.
+        repository.insertIfAbsent(explanation("hit", "old but now read", verb = Verb.EXPLAIN, requestCount = 1))
+        // A seed. The delete must not remove it, even when a caller lists it by mistake.
+        repository.insertIfAbsent(explanation("seed-listed", "seed body", verb = Verb.SEED, requestCount = 0))
+
+        val removed = repository.deleteEvictable(listOf("gone", "hit", "seed-listed"), maxRequestCount = 0)
+
+        assertEquals(1, removed)
+        assertNull(repository.findByKey("gone"))
+        assertNotNull(repository.findByKey("hit"), "a document read since the candidate scan survives")
+        assertNotNull(repository.findByKey("seed-listed"), "a seed survives even when listed")
+    }
+
+    @Test
+    fun `deleteEvictable on an empty list removes nothing`() = runTest {
+        repository.insertIfAbsent(explanation("k", "body", verb = Verb.EXPLAIN, requestCount = 0))
+
+        assertEquals(0, repository.deleteEvictable(emptyList(), maxRequestCount = 0))
+        assertNotNull(repository.findByKey("k"))
     }
 }

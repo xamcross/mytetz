@@ -7,6 +7,7 @@ import com.mongodb.client.model.Indexes
 import com.mongodb.client.model.Updates
 import com.mongodb.kotlin.client.coroutine.MongoDatabase
 import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.flow.toList
 
 private const val DUPLICATE_KEY = 11000
 
@@ -70,4 +71,54 @@ open class ExplanationRepository(database: MongoDatabase) {
      */
     suspend fun deleteWhereModelFamilyIsNot(modelFamily: String): Long =
         collection.deleteMany(Filters.ne("modelFamily", modelFamily)).deletedCount
+
+    /**
+     * Finds up to [limit] eviction candidates, oldest first: not a seed, with
+     * [Explanation.requestCount] at or below [maxRequestCount], and with
+     * [Explanation.createdAtEpochMillis] below [olderThanEpochMillis].
+     *
+     * `createdAtEpochMillis` is a BSON Int64, not a BSON date. A TTL index expires a document a
+     * fixed time after a stored date; it cannot compare a field against a threshold that moves
+     * with every call. The `created_at` index still serves this query, because a plain ascending
+     * index serves a range filter and a sort on the same field.
+     *
+     * A candidate here is not yet safe to delete. `Components.evictExplanations` is the only
+     * caller, and it still has to remove every key that a session references before it deletes
+     * anything — see that method's own KDoc.
+     */
+    suspend fun findEvictionCandidates(maxRequestCount: Long, olderThanEpochMillis: Long, limit: Int): List<String> =
+        collection.find(
+            Filters.and(
+                Filters.ne("verb", Verb.SEED.name),
+                Filters.lte("requestCount", maxRequestCount),
+                Filters.lt("createdAtEpochMillis", olderThanEpochMillis),
+            ),
+        )
+            .sort(Indexes.ascending("createdAtEpochMillis"))
+            .limit(limit)
+            .toList()
+            .map { it.key }
+
+    /**
+     * Deletes every one of [keys] whose [Explanation.verb] is still not [Verb.SEED] and whose
+     * [Explanation.requestCount] is still at or below [maxRequestCount]. Reports how many it
+     * removed.
+     *
+     * Both filters repeat [findEvictionCandidates]'s own filters on purpose. Mongo checks a
+     * delete's filter against the document as it stands at delete time, not at candidate-scan
+     * time. A cache hit between the two calls raises `requestCount` before
+     * `SessionService` appends the session node that then references the key — see
+     * `SessionService`'s own KDoc — so a key a learner reaches in that window no longer matches
+     * this filter and survives.
+     */
+    suspend fun deleteEvictable(keys: Collection<String>, maxRequestCount: Long): Long {
+        if (keys.isEmpty()) return 0
+        return collection.deleteMany(
+            Filters.and(
+                Filters.`in`("_id", keys),
+                Filters.ne("verb", Verb.SEED.name),
+                Filters.lte("requestCount", maxRequestCount),
+            ),
+        ).deletedCount
+    }
 }
