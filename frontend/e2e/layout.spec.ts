@@ -1910,3 +1910,88 @@ test('the reader tab carries the topic once a session opens', async ({ page }) =
   // static `title` in `app.routes.ts` could, since the topic is not known until then.
   expect(await page.title()).toBe('Quantum Physics | mytetz');
 });
+
+/**
+ * Issue #132. Pull request #130 added a sixth footer link, "FAQ". `.foot` has no
+ * `flex-wrap`, so below about 480px the six links no longer fit on one row: each
+ * `.foot__link` shrinks and its own text wraps onto two or three lines. A live measurement
+ * on 2026-09-19 found a link 45px tall at 320, 360 and 390px, a link 30px tall at 412px, and
+ * a 4px sideways scroll at 320px.
+ */
+test.describe('the footer keeps every link on one line at a phone width', () => {
+  const FOOT_WIDTHS = [320, 360, 390, 412];
+
+  for (const width of FOOT_WIDTHS) {
+    test(`every footer link is one line tall and inside the viewport at ${width}px`, async ({
+      page,
+    }) => {
+      await stubCatalogueAndSession(page);
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto('/');
+      await page.locator('.topic__tile').first().waitFor();
+
+      const links = page.locator('.foot__link');
+      await expect(links, 'the footer holds six links').toHaveCount(6);
+
+      const rows = await links.evaluateAll((els) =>
+        els.map((el) => {
+          const box = el.getBoundingClientRect();
+          const lineHeight = parseFloat(getComputedStyle(el).lineHeight);
+          return {
+            text: el.textContent?.trim() ?? '',
+            height: box.height,
+            lineHeight,
+            left: box.left,
+            right: box.right,
+          };
+        }),
+      );
+
+      for (const row of rows) {
+        // A one-line link stays well under twice its own line-height. A wrapped link, such
+        // as "How it works" measured at 45px at 390px before this fix, does not.
+        expect(row.height, `"${row.text}" is one line tall at ${width}px`).toBeLessThan(
+          row.lineHeight * 2,
+        );
+        expect(
+          row.left,
+          `"${row.text}" starts inside the ${width}px viewport`,
+        ).toBeGreaterThanOrEqual(0);
+        expect(row.right, `"${row.text}" ends inside the ${width}px viewport`).toBeLessThanOrEqual(
+          width,
+        );
+      }
+
+      const doc = await page.evaluate(() => ({
+        scroll: document.documentElement.scrollWidth,
+        client: document.documentElement.clientWidth,
+      }));
+      expect(doc.scroll, `the page does not scroll sideways at ${width}px`).toBeLessThanOrEqual(
+        doc.client,
+      );
+
+      // The phone rule of .foot has the same specificity as the base rule, so it applies only
+      // when it stands after the base rule. The first version stood before it and never applied.
+      const foot = await page.locator('.foot').evaluate((el) => {
+        const style = getComputedStyle(el);
+        return { paddingLeft: style.paddingLeft, rowGap: style.rowGap };
+      });
+      expect(foot, `the phone padding and the row gap apply at ${width}px`).toEqual({
+        paddingLeft: '20px',
+        rowGap: '12px',
+      });
+    });
+  }
+
+  test('the footer keeps its present one-row height at 1360px', async ({ page }) => {
+    await stubCatalogueAndSession(page);
+    await page.setViewportSize(WIDTHS.wide);
+    await page.goto('/');
+    await page.locator('.topic__tile').first().waitFor();
+
+    const foot = (await page.locator('.foot').boundingBox())!;
+    // 24px padding, one line, 24px padding, and the rule's own border: one row, unchanged by
+    // this fix. A second row at this width would add at least a row gap plus a line.
+    expect(foot.height, 'the footer stays one row tall at 1360px').toBeLessThanOrEqual(70);
+  });
+});
