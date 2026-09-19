@@ -504,6 +504,87 @@ test('every control still draws its focus ring', async ({ page }) => {
   expect(ring.offset).toBe('2px');
 });
 
+test('a coral pill keeps its lift and gains a second ring while it has the keyboard focus', async ({
+  page,
+}) => {
+  // Section 3.3 of the design review: the teal ring measures 1.01:1 against a coral fill, so
+  // styles.css joins the ring and the lift in one box-shadow list. A plain rule that set its own
+  // box-shadow on :focus-visible would replace the lift instead of adding a ring next to it.
+  await page.route('**/api/auth/config', (route) =>
+    route.fulfill({
+      json: { turnstileSiteKey: null, googleEnabled: true, magicLinkEnabled: true },
+    }),
+  );
+  await page.goto('/auth');
+
+  await page.getByLabel('Email address').focus();
+  await page.keyboard.press('Tab');
+  // `.mt-pill`'s transition covers box-shadow, and the ring adds a second shadow layer to the
+  // one the pill already draws. This polls the settled value, and not a mid-transition frame.
+  await expect
+    .poll(
+      () => page.evaluate(() => getComputedStyle(document.activeElement as HTMLElement).boxShadow),
+      { message: 'the coral lift and the white ring both draw' },
+    )
+    .toBe('rgb(214, 63, 63) 0px 4px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 2px');
+});
+
+test('a link with the class .mt-pill shows no underline', async ({ page }) => {
+  await page.route('**/api/auth/config', (route) =>
+    route.fulfill({
+      json: { turnstileSiteKey: null, googleEnabled: true, magicLinkEnabled: true },
+    }),
+  );
+  await page.goto('/auth');
+
+  const google = page.getByRole('link', { name: 'Continue with Google' });
+  await google.waitFor();
+  expect(await google.evaluate((el) => getComputedStyle(el).textDecorationLine)).toBe('none');
+});
+
+test('a pill lifts and gains a hover shadow while a pointer rests on it', async ({ page }) => {
+  await stubCatalogueAndSession(page);
+  await page.goto('/');
+  // The "Physics" pill, and not "All": "All" is the selected teal pill by default, and this test
+  // reads the plain grey hover lift every .mt-pill answers with.
+  const pill = page.locator('.catalog__cat').last();
+  await pill.waitFor();
+
+  const box = await pill.boundingBox();
+  if (box === null) throw new Error('the category pill has no box to hover');
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  // The transition takes --mt-dur-press (90ms), so this polls the computed value instead of
+  // reading it right after the mouse moves, and it does not wait with a fixed sleep.
+  await expect
+    .poll(() => pill.evaluate((el) => getComputedStyle(el).boxShadow), {
+      message: 'a pill gains the grey hover lift while a pointer rests on it',
+    })
+    .toBe('rgb(207, 233, 224) 0px 5px 0px 0px');
+});
+
+test.describe('with a reduced-motion preference', () => {
+  test('the motion tokens compute to a 1ms duration and a 0px distance', async ({ page }) => {
+    // `page.emulateMedia` and not `test.use({ reducedMotion: 'reduce' })`: the context option did
+    // not reach `window.matchMedia` in this project's Chromium, confirmed with a standalone check
+    // against `window.matchMedia('(prefers-reduced-motion: reduce)').matches`. The imperative call
+    // does reach it, on the very same browser.
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await stubCatalogueAndSession(page);
+    await page.goto('/');
+    await page.locator('.topic__tile').first().waitFor();
+
+    const tokens = await page.evaluate(() => {
+      const root = getComputedStyle(document.documentElement);
+      return {
+        moveNear: root.getPropertyValue('--mt-move-near').trim(),
+        durState: root.getPropertyValue('--mt-dur-state').trim(),
+      };
+    });
+    expect(tokens.moveNear).toBe('0px');
+    expect(tokens.durState).toBe('1ms');
+  });
+});
+
 /** One question, so the quiz reaches its coral pill in one click. The score is not read here. */
 const PRESS_TEMPLATE: QuizTemplateView = {
   attemptId: 'attempt-98',
