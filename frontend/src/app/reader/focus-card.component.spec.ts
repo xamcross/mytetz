@@ -3,7 +3,7 @@ import { ErrorHandler } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
-import { FocusCardComponent } from './focus-card.component';
+import { FocusCardComponent, freezeOutOfFlow } from './focus-card.component';
 import { EXPLAIN_STREAM, ExplainStreamFn, SessionStore } from './session.store';
 import { rootTextMatchesBody } from './selection';
 import { AccountStore } from '../core/account.store';
@@ -11,6 +11,28 @@ import { Media, SessionView, SpanPayload, Verb } from '../core/models';
 import { ExplainEvent, ExplainStreamError } from '../core/sse.client';
 
 const BODY = 'The pillars of modern physics.';
+
+/**
+ * Round 2 of issue #104. jsdom has no layout engine, so every offset and every rect below is
+ * zero — the same limit `anchorFor`'s own doc comment names. This still proves the function
+ * reads position before it changes it, and writes all three properties `position: absolute`
+ * needs, which is what a mutation of the read-then-write order or a missing property would break.
+ */
+describe('freezeOutOfFlow', () => {
+  it('takes an element out of flow at its own present offset', () => {
+    const el = document.createElement('p');
+    document.body.appendChild(el);
+
+    freezeOutOfFlow(el);
+
+    expect(el.style.position).toBe('absolute');
+    expect(el.style.top).toBe('0px');
+    expect(el.style.left).toBe('0px');
+    expect(el.style.width).toBe('0px');
+
+    el.remove();
+  });
+});
 
 /**
  * Rule 3 of the design review: nothing may animate the paragraph under a learner's drag. This

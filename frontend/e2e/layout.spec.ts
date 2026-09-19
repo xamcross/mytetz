@@ -378,6 +378,146 @@ test('the reader does not move down when the loaded session replaces the skeleto
   }
 });
 
+/**
+ * Round 2 of issue #104. `animate.leave` keeps the stream box mounted for the whole close
+ * animation, after the review's own trigger for animation A already runs: the session refreshes,
+ * the body lands, and `streamingText` clears. The three tests below confirm the moment stays
+ * safe with the animation on.
+ */
+
+test("the card's height changes once, not twice, when an answer lands", async ({ page }) => {
+  // A short streamed preview and a much longer landed body, on purpose: before `onStreamingLeave`
+  // took the box out of flow, the settled body landed at its own new height in one reflow, and
+  // the box leaving 160ms later shrank the card in a second, separate reflow — measured at
+  // roughly 402px, then 497px, then 417px for this exact fixture, before the fix. A short and a
+  // long text this different cannot hide that behind a coincidentally equal line count.
+  const landedBody =
+    'Quantum mechanics is the fundamental physical theory that describes matter and light ' +
+    'at the smallest scales. It replaces the deterministic laws of classical mechanics with ' +
+    'probabilities, superpositions, and measurement-dependent outcomes. Physicists developed ' +
+    'the theory in the early twentieth century to explain phenomena classical physics could ' +
+    'not, such as the photoelectric effect and atomic spectra.';
+  const shortPreview = 'A short answer.';
+
+  await stubCatalogueAndSession(page, explainedView(landedBody));
+  const stream = await mockExplainStream(page, 's1');
+  await page.setViewportSize(WIDTHS.wide);
+  await openQuantumPhysicsSession(page);
+
+  await selectPhrase(page, 'focus-body', 'fundamental physical theory');
+  await verb(page, 'Explain it').click();
+  await stream.send(sseFrame('meta', { contentKey: 'k1', cached: false }));
+  await stream.send(sseFrame('delta', { t: shortPreview }));
+  await page.locator('.focus__streaming').waitFor();
+  const midStream = await page.locator('.focus').boundingBox();
+
+  await stream.send(sseFrame('done', { contentKey: 'k1', grounded: true }));
+  await stream.close();
+
+  // The instant the new text is on screen — the streaming box is still in the DOM here, per
+  // animate.leave, so this is the moment a second, separate reflow would show if the box still
+  // counted as a normal flex item.
+  await page.getByText(/photoelectric effect/).waitFor();
+  const justLanded = await page.locator('.focus').boundingBox();
+
+  await expect(page.locator('.focus__streaming')).toHaveCount(0);
+  const settled = await page.locator('.focus').boundingBox();
+
+  expect(
+    Math.abs((justLanded?.height ?? 0) - (settled?.height ?? 0)),
+    'the card is already at its settled height the instant the new body is on screen',
+  ).toBeLessThanOrEqual(1);
+  expect(
+    justLanded?.height,
+    'the one real change in height happens here, between mid-stream and landed',
+  ).not.toBeCloseTo(midStream?.height ?? 0, 0);
+});
+
+test('the reader main column does not move when an answer lands', async ({ page }) => {
+  await stubCatalogueAndSession(page, explainedView(LONG_BODY));
+  const stream = await mockExplainStream(page, 's1');
+  await page.setViewportSize(WIDTHS.wide);
+  await openQuantumPhysicsSession(page);
+
+  await selectPhrase(page, 'focus-body', 'fundamental physical theory');
+  await verb(page, 'Explain it').click();
+  await stream.send(sseFrame('meta', { contentKey: 'k1', cached: false }));
+  await stream.send(sseFrame('delta', { t: 'A short answer.' }));
+  await page.locator('.focus__streaming').waitFor();
+  const before = await page.locator('.reader__main').boundingBox();
+
+  await stream.send(sseFrame('done', { contentKey: 'k1', grounded: true }));
+  await stream.close();
+  await expect(page.locator('.focus__streaming')).toHaveCount(0);
+
+  const after = await page.locator('.reader__main').boundingBox();
+  expect(
+    Math.abs((after?.y ?? 0) - (before?.y ?? 0)),
+    'the main column stays put while an answer lands, the same claim criterion 1 makes for the skeleton swap',
+  ).toBeLessThanOrEqual(1);
+});
+
+test('the leaving stream box cannot be selected, and the status paragraph changes exactly twice', async ({
+  page,
+}) => {
+  await stubCatalogueAndSession(page, explainedView(CHILD));
+  const stream = await mockExplainStream(page, 's1');
+  await openQuantumPhysicsSession(page);
+
+  // Collects every distinct text the status paragraph shows, from before the stream starts to
+  // well after the answer lands — the same claim `focus-card.component.spec.ts`'s own "announces
+  // one full stream exactly two times" makes in jsdom, checked here with the leave animation
+  // actually running.
+  await page.evaluate(() => {
+    const w = window as unknown as { __statusChanges: string[] };
+    w.__statusChanges = [];
+    const el = document.querySelector('.focus__stream-status')!;
+    let previous = el.textContent?.trim() ?? '';
+    new MutationObserver(() => {
+      const text = el.textContent?.trim() ?? '';
+      if (text !== previous) {
+        previous = text;
+        w.__statusChanges.push(text);
+      }
+    }).observe(el, { characterData: true, childList: true, subtree: true });
+  });
+
+  await selectPhrase(page, 'focus-body', 'fundamental physical theory');
+  await verb(page, 'Explain it').click();
+  await stream.send(sseFrame('meta', { contentKey: 'k1', cached: false }));
+  await stream.send(sseFrame('delta', { t: CHILD }));
+  await page.locator('.focus__streaming').waitFor();
+
+  // The leaving box keeps `user-select: none` — the same rule that already stops any selection
+  // over streamed prose today — so a drag that reaches it still cannot select it, animation or
+  // not. `onSelectionChanged` is bound to `.focus__body` alone besides, so a mouseup that lands
+  // on the streaming box could not reach it even if a selection did form there.
+  const userSelect = await page
+    .locator('.focus__streaming')
+    .evaluate((el) => getComputedStyle(el).userSelect);
+  expect(userSelect, 'the streamed box stays unselectable while it streams').toBe('none');
+
+  await stream.send(sseFrame('done', { contentKey: 'k1', grounded: true }));
+  await stream.close();
+  await expect(page.getByText(/subatomic scale/)).toBeVisible();
+
+  // Still frozen and still unselectable while it fades — the moment this issue's round 2 adds.
+  const userSelectWhileLeaving = await page
+    .locator('.focus__streaming')
+    .evaluate((el) => getComputedStyle(el).userSelect);
+  expect(userSelectWhileLeaving, 'the leaving box stays unselectable while it fades').toBe('none');
+
+  await expect(page.locator('.focus__streaming')).toHaveCount(0);
+
+  const changes = await page.evaluate(
+    () => (window as unknown as { __statusChanges: string[] }).__statusChanges,
+  );
+  expect(changes, 'exactly two announcements for one stream, with the animation on').toEqual([
+    'The explanation is on its way.',
+    'The explanation is ready.',
+  ]);
+});
+
 test('the picker opens below a phrase near the top of the card', async ({ page }) => {
   await stubCatalogueAndSession(page);
   await page.route('**/api/sessions/s1', (route) =>

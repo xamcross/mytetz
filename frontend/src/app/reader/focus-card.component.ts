@@ -1,4 +1,5 @@
 import {
+  AnimationCallbackEvent,
   Component,
   DestroyRef,
   ElementRef,
@@ -20,6 +21,31 @@ import {
 } from '../ui/verb-picker.component';
 import { MediaRendererComponent } from './media-renderer.component';
 import { rootTextMatchesBody, selectionToSpan } from './selection';
+
+/**
+ * Takes an element out of flow, at the exact place it already occupies, without moving it.
+ *
+ * Animation A's stream box needs this: `animate.leave` keeps the box mounted, as a normal flex
+ * item, for the whole close animation. Left alone, the settled body would land at its own new
+ * height in one reflow, and the box leaving 160ms later would shrink the card in a second,
+ * separate reflow — two jumps for one landing, where the design review allows one. Freezing the
+ * box out of flow the instant it starts leaving lets the card's height already reflect only the
+ * settled body from that render on; the box then simply fades over whatever now sits there.
+ *
+ * `offsetTop`/`offsetLeft`, and not `getBoundingClientRect()`: they already answer in the
+ * coordinate space `position: absolute` needs — the padding edge of the nearest positioned
+ * ancestor — with no border or scroll correction to redo by hand. Read before `position` changes,
+ * because that change is what they are about to stop describing.
+ */
+export function freezeOutOfFlow(el: HTMLElement): void {
+  const top = el.offsetTop;
+  const left = el.offsetLeft;
+  const width = el.getBoundingClientRect().width;
+  el.style.position = 'absolute';
+  el.style.top = `${top}px`;
+  el.style.left = `${left}px`;
+  el.style.width = `${width}px`;
+}
 
 /**
  * How long the status paragraph keeps "The explanation is ready." before it goes quiet again.
@@ -101,7 +127,7 @@ const READY_STATUS_MILLIS = 4000;
       >{{ body() }}</p>
 
       @if (isStreaming() || streamingText().length > 0) {
-        <p class="focus__streaming" animate.leave="focus__streaming--out" aria-live="off">
+        <p class="focus__streaming" (animate.leave)="onStreamingLeave($event)" aria-live="off">
           {{ streamingText() }}
           @if (isStreaming()) {
             <span class="focus__caret" aria-hidden="true">▍</span>
@@ -277,7 +303,9 @@ const READY_STATUS_MILLIS = 4000;
       }
       /* Animation A's other half: the stream box hands off to the settled body, rather than
          simply vanishing. animate.leave keeps it in the DOM, playing this animation, for the one
-         render where isStreaming and streamingText have both gone false-and-empty. */
+         render where isStreaming and streamingText have both gone false-and-empty.
+         onStreamingLeave below adds this class and also takes the box out of flow, at the place
+         it already occupies — see freezeOutOfFlow's own comment for why. */
       .focus__streaming--out {
         animation: focus-hand-off var(--mt-dur-state) var(--mt-ease-in) both;
       }
@@ -507,6 +535,24 @@ export class FocusCardComponent {
    */
   protected onBodyAnimationEnd(event: AnimationEvent): void {
     if (event.animationName === 'focus-land') this.landed.set(false);
+  }
+
+  /**
+   * Animation A's exit, as a function rather than a CSS class name: `freezeOutOfFlow` needs to
+   * run before the fade starts, and the string form of `animate.leave` has no such hook. Angular
+   * calls this once, the moment the stream box starts leaving, and waits for
+   * `animationComplete()` before it removes the element — the same contract the CSS form has,
+   * kept by hand here instead of by the compiler.
+   */
+  protected onStreamingLeave(event: AnimationCallbackEvent): void {
+    // `Element`, not `HTMLElement`, is the field's own declared type — narrowed here because
+    // `freezeOutOfFlow` reads `offsetTop`/`offsetLeft`/`style`, which only `HTMLElement` has, and
+    // the target of this event is always the `<p class="focus__streaming">` this handler is
+    // bound to.
+    const el = event.target as HTMLElement;
+    freezeOutOfFlow(el);
+    el.classList.add('focus__streaming--out');
+    el.addEventListener('animationend', () => event.animationComplete(), { once: true });
   }
 
   private clearReadyStatusTimer(): void {
