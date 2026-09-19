@@ -9,9 +9,15 @@ import com.mytetz.account.GoogleConfig
 import com.mytetz.account.GoogleOAuth
 import com.mytetz.account.LoggingMailSender
 import com.mytetz.account.MailSender
+import com.mytetz.graph.Explanation
+import com.mytetz.graph.ExplanationRepository
+import com.mytetz.graph.Verb
 import com.mytetz.llm.FakeLlmClient
 import com.mytetz.persistence.Mongo
 import com.mytetz.persistence.MongoConfig
+import com.mytetz.session.LearningSession
+import com.mytetz.session.SessionNode
+import com.mytetz.session.SessionRepository
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.cookies.HttpCookies
@@ -36,6 +42,7 @@ import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -593,5 +600,118 @@ class ComponentsTest {
         )
 
         components.bootstrap() // must not throw, whatever FREEMIUS_API_KEY / FREEMIUS_PRODUCT_ID hold
+    }
+
+    // ------------------------------------------------------------------ evictExplanations
+
+    private fun daysAgo(days: Long): Long = System.currentTimeMillis() - days * 86_400_000L
+
+    /** A document old enough and quiet enough to be an eviction candidate, unless overridden. */
+    private fun oldExplanation(
+        key: String,
+        verb: Verb = Verb.EXPLAIN,
+        requestCount: Long = 0,
+        createdAtEpochMillis: Long = daysAgo(100),
+    ) = Explanation(
+        key = key,
+        topicSlug = "quantum-physics",
+        parentKey = null,
+        span = null,
+        spanSentence = null,
+        verb = verb,
+        variant = 0,
+        depth = 0,
+        body = "body for $key",
+        grounded = false,
+        sources = emptyList(),
+        promptVersion = "v1",
+        modelFamily = "fake-model",
+        modelId = "fake-model",
+        inputTokens = 10,
+        outputTokens = 20,
+        costMicros = 100,
+        requestCount = requestCount,
+        createdAtEpochMillis = createdAtEpochMillis,
+    )
+
+    @Test
+    fun `evictExplanations removes an old, unread, unreferenced document`() = runTest {
+        val components = components("evict_basic")
+        val explanations = ExplanationRepository(components.mongo.database)
+        explanations.insertIfAbsent(oldExplanation("stale"))
+
+        components.evictExplanations()
+
+        assertNull(explanations.findByKey("stale"), "an old, unread, unreferenced document must go")
+    }
+
+    @Test
+    fun `evictExplanations never removes a seed`() = runTest {
+        val components = components("evict_seed")
+        val explanations = ExplanationRepository(components.mongo.database)
+        explanations.insertIfAbsent(oldExplanation("seed", verb = Verb.SEED))
+
+        components.evictExplanations()
+
+        assertNotNull(explanations.findByKey("seed"), "a seed must survive eviction")
+    }
+
+    @Test
+    fun `evictExplanations never removes a document a session still references`() = runTest {
+        val components = components("evict_referenced")
+        val explanations = ExplanationRepository(components.mongo.database)
+        val sessions = SessionRepository(components.mongo.database)
+        explanations.insertIfAbsent(oldExplanation("referenced"))
+        sessions.insert(
+            LearningSession(
+                id = "s1",
+                principalId = "anon:alice",
+                topicSlug = "quantum-physics",
+                rootNodeId = "n0",
+                currentNodeId = "n0",
+                nodes = listOf(SessionNode("n0", null, "referenced", "", Verb.SEED, 0, 0, daysAgo(100))),
+                startedAtEpochMillis = daysAgo(100),
+                lastActiveAtEpochMillis = daysAgo(100),
+            ),
+        )
+
+        components.evictExplanations()
+
+        assertNotNull(explanations.findByKey("referenced"), "a referenced document must survive eviction")
+    }
+
+    @Test
+    fun `evictExplanations never removes a recent document`() = runTest {
+        val components = components("evict_recent")
+        val explanations = ExplanationRepository(components.mongo.database)
+        explanations.insertIfAbsent(oldExplanation("recent", createdAtEpochMillis = daysAgo(1)))
+
+        components.evictExplanations()
+
+        assertNotNull(explanations.findByKey("recent"), "a recent document must survive eviction")
+    }
+
+    @Test
+    fun `evictExplanations logs what it removed and what it scanned`() = runTest {
+        val components = components("evict_log")
+        val explanations = ExplanationRepository(components.mongo.database)
+        explanations.insertIfAbsent(oldExplanation("stale"))
+        // A seed. The candidate query excludes it, so it must not inflate the scanned count.
+        explanations.insertIfAbsent(oldExplanation("seed", verb = Verb.SEED))
+
+        val appender = ListAppender<ILoggingEvent>().apply { start() }
+        val logger = LoggerFactory.getLogger("com.mytetz.api.Components") as ch.qos.logback.classic.Logger
+        logger.addAppender(appender)
+        try {
+            components.evictExplanations()
+        } finally {
+            logger.detachAppender(appender)
+        }
+
+        val event = assertNotNull(
+            appender.list.firstOrNull { it.level == Level.INFO && it.formattedMessage.contains("EVICTION") },
+            "no EVICTION line was logged: ${appender.list.map { it.formattedMessage }}",
+        )
+        assertEquals("EVICTION removed=1 scanned=1", event.formattedMessage)
     }
 }

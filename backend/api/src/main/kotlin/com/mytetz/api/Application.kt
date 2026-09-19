@@ -14,9 +14,11 @@ import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.response.respond
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.coroutines.cancellation.CancellationException
 
 const val PORT_ENV: String = "PORT"
 
@@ -57,6 +59,9 @@ internal fun resolvePort(raw: String?): Int =
  */
 internal fun resolveModelForLogging(raw: String?): String =
     raw?.trim()?.takeIf { it.isNotEmpty() } ?: AnthropicLlmClient.DEFAULT_MODEL
+
+/** How often the second `launch` in [bootstrap] calls [Components.evictExplanations]. */
+private const val EVICTION_INTERVAL_MILLIS: Long = 24 * 60 * 60 * 1000L
 
 fun main() {
     embeddedServer(Netty, port = resolvePort(System.getenv(PORT_ENV)), host = "0.0.0.0") { module() }
@@ -181,6 +186,7 @@ fun Application.module(components: Components = Components()) {
 
 /**
  * Starts index creation and catalogue seeding, and returns a flag that flips when they finish.
+ * Also starts the daily explanation-eviction loop; see the second `launch` below for that one.
  *
  * ## Why this does not block startup
  *
@@ -228,6 +234,31 @@ private fun Application.bootstrap(components: Components): AtomicBoolean {
                     "is serving without them; /api/health reports the database state and readiness.",
                 e,
             )
+        }
+    }
+    // Calls `components.evictExplanations()` once a day, for as long as the process runs.
+    //
+    // `components.bootstrap()` above already calls it once, at the end of `Components.bootstrap`
+    // — see that method's own KDoc — so this loop waits one full interval before its first run,
+    // rather than running the batch twice on the same cold start.
+    //
+    // On the application's own scope, the same reason the `launch` above is: nothing here may
+    // block the routes from coming up.
+    //
+    // One failed run does not stop the loop. The failure is caught, logged, and the loop waits its
+    // usual interval and tries again — the same shape `Components.migrate` uses for one topic's
+    // failure. A `CancellationException` is thrown again, because a swallowed cancellation breaks
+    // structured concurrency; see `SessionRoutes.kt` for the same rule.
+    launch {
+        while (true) {
+            delay(EVICTION_INTERVAL_MILLIS)
+            try {
+                components.evictExplanations()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                log.error("EVICTION_LOOP_FAILED — this run did not complete; the next one runs on schedule", e)
+            }
         }
     }
     return ready

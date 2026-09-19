@@ -43,6 +43,8 @@ import kotlin.coroutines.cancellation.CancellationException
 
 private val log = LoggerFactory.getLogger("com.mytetz.api.Components")
 
+private const val DAY_MILLIS = 86_400_000L
+
 /**
  * The whole object graph, wired by hand.
  *
@@ -108,6 +110,9 @@ open class Components(
     private val explanations = ExplanationRepository(mongo.database)
     private val sessionRepository = SessionRepository(mongo.database)
     private val quizRepository = QuizRepository(mongo.database)
+
+    /** The two settings [evictExplanations] reads: how quiet, and how old, a document must be. */
+    private val evictionConfig = EvictionConfig()
 
     /** Public so `Application.kt` can pass it to `authRoutes`, which reads a counter for `GET /api/account`. */
     val quotaRepository = QuotaRepository(mongo.database)
@@ -247,6 +252,7 @@ open class Components(
         catalog.seedFromResource()
         migrate()
         reconcile()
+        evictExplanations()
     }
 
     /**
@@ -357,6 +363,49 @@ open class Components(
         log.info("RECONCILE corrected {} drifted subscription(s)", corrected)
     }
 
+    /**
+     * Removes one batch of explanations that nothing needs any more. Logs
+     * `EVICTION removed={} scanned={}` at INFO.
+     *
+     * The rule: a document is removable when it is not a seed, when its `requestCount` is at or
+     * below [EvictionConfig.maxRequestCount], and when it is older than
+     * [EvictionConfig.maxAgeDays]. A removable document is still not deleted while a session node
+     * points at it — deleting the target of a live node would break that session's trail, the
+     * fault [CorruptSessionException] exists to catch. See `SessionService.hydrate`'s own KDoc.
+     *
+     * ## Why the reference check sits here, and not in `ExplanationRepository`
+     *
+     * `:backend:graph` does not depend on `:backend:session`, so `ExplanationRepository` cannot
+     * ask whether a session still references a key. `Components` sees both repositories, so the
+     * two-step rule lives here: read one batch of candidates, remove the keys a session still
+     * points at, and delete the rest.
+     *
+     * ## The check-then-delete race, and how far the delete closes it
+     *
+     * A learner can turn a candidate into a cache hit between the reference check below and the
+     * delete that follows it. `ExplanationGraph.getOrGenerate` raises `requestCount` on a cache
+     * hit, and it does this *before* `SessionService` appends the node that then references the
+     * key. [ExplanationRepository.deleteEvictable] repeats the `requestCount` filter, so Mongo
+     * checks that filter against the document as it stands at delete time — a key raised in that
+     * window no longer matches, and it survives. This closes most of the window. It does not
+     * close every case; `SessionService.hydrate`'s own KDoc names the residual one.
+     *
+     * Called at the end of [bootstrap], and once a day after that from `Application.kt`'s own
+     * boot-time loop. One call here is one batch, bounded by [EVICTION_BATCH_LIMIT]; it is not a
+     * full sweep of the collection.
+     */
+    suspend fun evictExplanations() {
+        val candidates = explanations.findEvictionCandidates(
+            maxRequestCount = evictionConfig.maxRequestCount,
+            olderThanEpochMillis = System.currentTimeMillis() - evictionConfig.maxAgeDays * DAY_MILLIS,
+            limit = EVICTION_BATCH_LIMIT,
+        )
+        val referenced = sessionRepository.referencedExplanationKeys(candidates)
+        val evictable = candidates.filterNot { it in referenced }
+        val removed = explanations.deleteEvictable(evictable, evictionConfig.maxRequestCount)
+        log.info("EVICTION removed={} scanned={}", removed, candidates.size)
+    }
+
     companion object {
 
         /**
@@ -366,6 +415,14 @@ open class Components(
          * the Freemius API. Five hundred is generous for this product's expected scale.
          */
         const val RECONCILE_LIMIT: Int = 500
+
+        /**
+         * How many eviction candidates [evictExplanations] reads in one run.
+         *
+         * Same reasoning as [RECONCILE_LIMIT]: a bound keeps one run — at boot, and once a day
+         * after that — predictable, rather than scanning the whole collection in one sweep.
+         */
+        const val EVICTION_BATCH_LIMIT: Int = 500
 
         const val MIGRATE_ON_BOOT_ENV: String = "MYTETZ_MIGRATE_ON_BOOT"
         const val PUBLIC_BASE_URL_ENV: String = "MYTETZ_PUBLIC_BASE_URL"
