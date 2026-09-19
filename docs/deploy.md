@@ -848,3 +848,85 @@ case that degrades this way.
 so it logs a status code or an exception's class name only, at `WARN`, and adds no row to the
 "Operator alert tokens" table above. Grep `com.mytetz.api.CommonsClient` in `fly logs` to see how
 often the lookup fails, if that number is ever worth watching.
+
+## Explanation review (issue #48, for issue #49)
+
+This section is for the owner. It publishes an explanation page. **The owner runs this command.
+An agent never runs it.** It writes to the production database.
+
+**Read every text before you publish it.** A published page carries the name of the site. The
+review path never publishes a batch. It publishes only the exact keys you name, after you read
+each one.
+
+### Step 1: list the candidates
+
+This step writes nothing.
+
+```bash
+MONGODB_URI="$(grep '^MONGODB_URI=' .env | cut -d= -f2- | tr -d '\r\n')" \
+  ./gradlew :backend:graph:run
+```
+
+This lists the top 50 unpublished explanations, by demand. Add `--args="--limit 100"` to see more.
+Add `--args="--out candidates.md"` to also write the list to a file, to read outside the terminal:
+
+```bash
+MONGODB_URI="$(grep '^MONGODB_URI=' .env | cut -d= -f2- | tr -d '\r\n')" \
+  ./gradlew :backend:graph:run --args="--limit 100 --out candidates.md"
+```
+
+Each candidate shows its full key, its short key, its topic, its request count, its public path,
+and its full body text.
+
+### Step 2: read each text
+
+Open each candidate's public path on the live site, or read the body text the list already shows.
+Judge accuracy and tone. Decide which candidates to publish. Keep the full key of each one you
+approve. Issue #49 says: stop at 50 published pages for the first month, and note a wrong
+candidate's key in a comment on that issue, so a later change can fix or regenerate it.
+
+### Step 3: publish the approved keys
+
+```bash
+MONGODB_URI="$(grep '^MONGODB_URI=' .env | cut -d= -f2- | tr -d '\r\n')" \
+  ./gradlew :backend:graph:run --args="--publish --keys <key1>,<key2>,<key3>"
+```
+
+For a longer list, put one full key on each line of a file and use `--keys-file` instead of
+`--keys`:
+
+```bash
+MONGODB_URI="$(grep '^MONGODB_URI=' .env | cut -d= -f2- | tr -d '\r\n')" \
+  ./gradlew :backend:graph:run --args="--publish --keys-file approved-keys.txt"
+```
+
+**Always the full key, never the short key.** A short key can name more than one document. The
+full key names exactly one.
+
+This step is all or nothing. If one key is wrong, already published, or not an explanation, the
+command writes nothing, names every bad key, and stops. Run the command again with only the good
+keys.
+
+### Step 4: check the result
+
+```bash
+curl -sI https://mytetz.com/topics/<slug>/explain/<short-key>
+```
+
+A published page's answer carries no `X-Robots-Tag` header. An unpublished page's answer carries
+`X-Robots-Tag: noindex`. Both answers are `200`.
+
+### Taking a text back
+
+```bash
+MONGODB_URI="$(grep '^MONGODB_URI=' .env | cut -d= -f2- | tr -d '\r\n')" \
+  ./gradlew :backend:graph:run --args="--unpublish --keys <key1>"
+```
+
+The page still answers, at the same URL, now with `X-Robots-Tag: noindex` again.
+
+### The cap
+
+The review path refuses to publish past 100 pages in total, a hard limit in the code (spec section
+7.4). Issue #49 asks the owner to stop at 50 for the first month — a stricter limit the owner
+enforces by choice, not a limit the code enforces.
