@@ -103,22 +103,29 @@ class SvgSanitizerTest {
     }
 
     @Test
-    fun `a use href with a local fragment is kept, an external href is dropped`() {
+    fun `a use element is dropped, its children survive`() {
+        // use is no longer on the element allowlist: every allowed shape, marker, gradient and
+        // clip path refers to another element only through a url(#id) value, and a <use> that
+        // refers to a <g> holding further <use> elements can make a browser render an exponential
+        // number of shapes from a small, well-formed source.
         val result = SvgSanitizer.sanitize(
-            """<svg><defs><circle id="c1" r="1"/></defs><use href="#c1"/><use href="https://evil.example/x.svg"/></svg>"""
+            """<svg><use href="#c1"><circle cx="1" cy="1" r="1"/></use></svg>"""
         )
         val clean = assertIs<SvgSanitizeResult.Clean>(result)
-        assertTrue("href=\"#c1\"" in clean.svg)
-        assertTrue("evil.example" !in clean.svg)
+        assertTrue("<use" !in clean.svg)
+        assertTrue("<circle" in clean.svg)
     }
 
     @Test
-    fun `an xlink colon href is checked by the same value rule as href`() {
+    fun `an href attribute on an allowed element is dropped`() {
+        // href and xlink:href are no longer on the attribute allowlist -- no allowed element
+        // needs one, now that use is gone.
         val result = SvgSanitizer.sanitize(
-            """<svg xmlns:xlink="http://www.w3.org/1999/xlink"><use xlink:href="https://evil.example/x.svg"/></svg>"""
+            """<svg><circle href="#c1" cx="1" cy="1" r="1"/></svg>"""
         )
         val clean = assertIs<SvgSanitizeResult.Clean>(result)
-        assertTrue("evil.example" !in clean.svg)
+        assertTrue("href" !in clean.svg)
+        assertTrue("<circle" in clean.svg)
     }
 
     @Test

@@ -96,18 +96,25 @@ sealed interface SvgSanitizeResult {
  *
  * For `marker-start`, `marker-mid`, `marker-end` and `clip-path`, a value passes only as `none` or
  * as [LOCAL_URL_REFERENCE].
- *
- * For `href` and `xlink:href`, a value passes only when it starts with `#` and carries no other
- * scheme marker. A `<use>` element that loses its `href` this way renders nothing, which is the
- * safe outcome, not a document-wide refusal — the same choice this file already makes for a
- * dropped, unlisted element.
  */
 object SvgSanitizer {
 
+    /**
+     * `<use>` is not on this list. Every allowed shape, marker, gradient and clip path refers to
+     * another element only through a `url(#id)` value, which this file already restricts to a
+     * same-document reference — no allowed element needs `href` for that, so `href` and
+     * `xlink:href` are not on [ALLOWED_ATTRIBUTES] either. `<use>` is refused for a second,
+     * independent reason: a `<use>` that refers to a `<g>` which itself holds further `<use>`
+     * elements makes a browser render an exponential number of shapes from a small, well-formed
+     * source — the same "billion laughs" shape of attack XML entity expansion takes, built from
+     * ordinary SVG instead of DTD entities. A source bounded to a few thousand characters by
+     * [MediaValidator] is still enough to stall a learner's tab this way, so this file removes the
+     * element outright rather than trying to bound the expansion.
+     */
     private val ALLOWED_ELEMENTS = setOf(
         "svg", "title", "desc", "defs", "g", "path", "rect", "circle", "ellipse",
         "line", "polyline", "polygon", "text", "tspan", "marker", "lineargradient",
-        "radialgradient", "stop", "clippath", "use",
+        "radialgradient", "stop", "clippath",
     )
 
     /** Refused outright, by local name, wherever the element appears. See this file's own KDoc. */
@@ -120,7 +127,7 @@ object SvgSanitizer {
         "font-family", "font-size", "font-weight", "text-anchor", "offset", "stop-color",
         "stop-opacity", "gradientunits", "gradienttransform", "markerwidth", "markerheight",
         "refx", "refy", "orient", "role", "aria-label", "aria-hidden", "marker-start",
-        "marker-mid", "marker-end", "clip-path", "href", "xlink:href",
+        "marker-mid", "marker-end", "clip-path",
     )
 
     /** `fill` and `stroke`: colour shapes, or a same-document reference. See [isSafeFillOrStrokeValue]. */
@@ -128,9 +135,6 @@ object SvgSanitizer {
 
     /** A same-document reference only, or `none`. See [isSafeReferenceValue]. */
     private val REFERENCE_ONLY_ATTRIBUTES = setOf("marker-start", "marker-mid", "marker-end", "clip-path")
-
-    /** Attributes whose value must be a same-document fragment, checked by [isLocalFragment]. */
-    private val FRAGMENT_ATTRIBUTES = setOf("href", "xlink:href")
 
     private val COLOR_NAME = Regex("^[A-Za-z]+$")
     private val HEX_COLOR = Regex("^#[0-9A-Fa-f]{3,8}$")
@@ -242,7 +246,6 @@ object SvgSanitizer {
                 localName !in ALLOWED_ATTRIBUTES && qualifiedName.lowercase() !in ALLOWED_ATTRIBUTES -> false
                 localName in FILL_STROKE_ATTRIBUTES -> isSafeFillOrStrokeValue(attribute.nodeValue)
                 localName in REFERENCE_ONLY_ATTRIBUTES -> isSafeReferenceValue(attribute.nodeValue)
-                localName in FRAGMENT_ATTRIBUTES -> isLocalFragment(attribute.nodeValue)
                 else -> true
             }
 
@@ -269,12 +272,6 @@ object SvgSanitizer {
         if ("\\" in value) return false
         val trimmed = value.trim()
         return trimmed.equals("none", ignoreCase = true) || LOCAL_URL_REFERENCE.matches(trimmed)
-    }
-
-    /** `#id`, and nothing else: no scheme marker, and no `//` that a scheme-relative URL would carry. */
-    private fun isLocalFragment(value: String): Boolean {
-        val trimmed = value.trim()
-        return trimmed.startsWith("#") && ":" !in trimmed && "//" !in trimmed
     }
 
     private fun parse(rawSource: String): Document {
