@@ -481,8 +481,12 @@ class SessionService(
      * Does **not** check that the principal owns the session; see "Authorisation is the caller's".
      * Each [ExplainPlan] may be collected once — see [ExplainPlan].
      *
-     * A caller with no cancelled-or-truncated-stream estimate to record can use this form. See the
-     * two-argument overload for [onEstimatedSpend]'s own contract.
+     * **This form drops the estimate.** It passes a callback that does nothing, so a stream that a
+     * learner cancels, or that the provider truncates, records no cost through it. A test, and a
+     * caller that records no spend at all, can use it. A route that streams a generation to a
+     * learner must use the two-argument overload. If it does not, a cancelled stream costs money
+     * that no ledger shows, which is the gap that the callback exists to close. See that overload
+     * for [onEstimatedSpend]'s own contract.
      */
     fun explain(plan: ExplainPlan): Flow<GraphChunk> = explain(plan) { _, _ -> }
 
