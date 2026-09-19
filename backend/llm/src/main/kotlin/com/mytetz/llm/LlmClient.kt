@@ -20,13 +20,34 @@ data class LlmUsage(
 
 sealed interface LlmChunk {
     data class Delta(val text: String) : LlmChunk
+
+    /**
+     * The input usage from the stream's `message_start` event.
+     *
+     * This arrives before the first [Delta], and well before [Done]. A normal, completed stream
+     * does not need it: [Done] carries the full usage, input and output together. A stream that
+     * stops early needs it, because [Done] never arrives for one — see [LlmStreamTruncatedException]
+     * and a collector's own [kotlin.coroutines.cancellation.CancellationException]. Without this
+     * chunk, a caller that must estimate the cost of an incomplete stream would have no real input
+     * count to estimate from, only the length of the prompt it sent.
+     *
+     * [usage] carries only the fields `message_start` actually reports: input tokens, cache read
+     * tokens and cache creation tokens. Its `outputTokens` is always 0 — no output exists yet — and
+     * a caller must not read it as a real count.
+     */
+    data class EarlyUsage(val usage: LlmUsage) : LlmChunk
+
     data class Done(val usage: LlmUsage, val stopReason: String?) : LlmChunk
 }
 
 /**
- * A provider stream ended without the terminal metadata that proves the generation completed,
- * so its output token count — and therefore its cost — is unknown. Callers must treat this as a
- * failed generation and persist nothing: a silent zero-cost result would under-report spend.
+ * A provider stream ended without the terminal metadata that proves the generation completed.
+ * The stream's own output token count is therefore unknown, and a caller must not persist an
+ * explanation under this generation's key: a silent zero-cost result would under-report spend.
+ *
+ * The cost of the attempt is not unknown, only imprecise. [EarlyUsage] and the text the stream did
+ * deliver are usually enough to estimate it — see `ExplanationGraph.generate`, which builds that
+ * estimate and reports it through a callback before this exception leaves the function.
  */
 class LlmStreamTruncatedException(message: String) : RuntimeException(message)
 
