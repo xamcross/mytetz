@@ -5,6 +5,7 @@ import com.mytetz.assess.QuizUnavailableException
 import com.mytetz.graph.GenerationFailedException
 import com.mytetz.session.CorruptSessionException
 import com.mytetz.session.DepthLimitException
+import com.mytetz.session.SessionCompletedException
 import com.mytetz.session.SessionFullException
 import com.mytetz.session.SessionNotFoundException
 import com.mytetz.session.SpanMismatchException
@@ -229,6 +230,9 @@ fun Application.installErrorMapping() {
         exception<VariantLimitException> { call, cause ->
             call.respond(HttpStatusCode.Conflict, ApiError("VARIANT_LIMIT", cause.message.orEmpty()))
         }
+        exception<SessionCompletedException> { call, cause ->
+            call.respond(HttpStatusCode.Conflict, ApiError("SESSION_COMPLETED", cause.message.orEmpty()))
+        }
 
         // -------------------------------------------------- upstream, and our own data
 
@@ -316,6 +320,7 @@ internal fun sseErrorFor(cause: Throwable): ApiError = when (cause) {
     is DepthLimitException -> ApiError("DEPTH_LIMIT", cause.message.orEmpty())
     is SessionFullException -> ApiError("SESSION_FULL", cause.message.orEmpty())
     is VariantLimitException -> ApiError("VARIANT_LIMIT", cause.message.orEmpty())
+    is SessionCompletedException -> ApiError("SESSION_COMPLETED", cause.message.orEmpty())
 
     // -------------------------------------------------- the thing you named is not there
     is SessionNotFoundException -> {

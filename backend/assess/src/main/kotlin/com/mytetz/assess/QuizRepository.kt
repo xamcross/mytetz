@@ -34,10 +34,11 @@ open class QuizRepository(database: MongoDatabase) {
      * `principal_recent` serves "my attempts, most recent first". `by_session` serves
      * per-session lookups. Neither is a TTL index, and nothing here expires.
      *
-     * A quiz attempt is the learner's own record of how they did. That is the same way
-     * `com.mytetz.session.SessionRepository` treats a session: the learner's own record of what
-     * they read. Dropping either is a product decision nobody has made. So `quizAttempts` grows
-     * with no ceiling here, on purpose, and not by oversight.
+     * A quiz attempt is the learner's own record of how they did. `com.mytetz.session.
+     * SessionRepository` once treated a session the same way, and no longer does: an anonymous
+     * session now expires after 90 days of inactivity, and a learner can end one early. Neither
+     * change touches this collection. Dropping a quiz attempt is still a product decision nobody
+     * has made, so `quizAttempts` grows with no ceiling here, on purpose, and not by oversight.
      */
     suspend fun ensureIndexes() {
         attempts.createIndex(
@@ -87,4 +88,16 @@ open class QuizRepository(database: MongoDatabase) {
 
     suspend fun findAttempt(id: String): QuizAttempt? =
         attempts.find(Filters.eq("_id", id)).firstOrNull()
+
+    /**
+     * Removes every attempt document that carries [principalId]. Reports how many it removed.
+     *
+     * Account deletion is the caller. This copies `com.mytetz.session.SessionRepository`'s own
+     * [com.mytetz.session.SessionRepository.deleteForPrincipal]. It touches only `quizAttempts`: a
+     * template in `quizTemplates` holds no learner data, so this method leaves that collection
+     * alone — see `com.mytetz.api.AuthRoutes`'s own KDoc on `POST /api/account/delete` for the full
+     * scope of what an account deletion removes.
+     */
+    suspend fun deleteForPrincipal(principalId: String): Long =
+        attempts.deleteMany(Filters.eq("principalId", principalId)).deletedCount
 }

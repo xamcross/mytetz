@@ -10,6 +10,7 @@ import com.mytetz.catalog.CatalogService
 import com.mytetz.catalog.TopicRepository
 import com.mytetz.catalog.TopicRequestRepository
 import com.mongodb.client.model.Filters
+import com.mongodb.client.model.Updates
 import com.mytetz.graph.Explanation
 import com.mytetz.graph.ExplanationGraph
 import com.mytetz.graph.ExplanationRepository
@@ -199,6 +200,20 @@ object TestFixtures {
          */
         suspend fun deleteSession(sessionId: String) {
             database.getCollection<Document>("sessions").deleteOne(Filters.eq("_id", sessionId))
+        }
+
+        /**
+         * Marks a session `COMPLETED` directly in the store.
+         *
+         * There is a route for this (`POST /api/sessions/{id}/complete`), and a test of that route
+         * uses it. This helper is for a test that needs a session to already be completed before the
+         * request under test runs — the same reach-past-the-service reasoning as [deleteSession].
+         */
+        suspend fun completeSession(sessionId: String) {
+            database.getCollection<Document>("sessions").updateOne(
+                Filters.eq("_id", sessionId),
+                Updates.set("status", "COMPLETED"),
+            )
         }
     }
 

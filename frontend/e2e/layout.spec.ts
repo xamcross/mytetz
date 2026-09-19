@@ -125,6 +125,7 @@ function sessionWithBody(body: string): SessionView {
         depth: 0,
       },
     ],
+    status: 'ACTIVE',
     explanations: { k0: body },
   };
 }

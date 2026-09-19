@@ -7,6 +7,7 @@ import com.mongodb.client.model.Updates
 import com.mongodb.kotlin.client.coroutine.MongoDatabase
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.toList
+import java.util.concurrent.TimeUnit
 
 /**
  * The session named by [sessionId] does not exist — it was never created, or it has been removed.
@@ -30,9 +31,13 @@ class SessionRepository(database: MongoDatabase) {
 
     /**
      * `principal_recent` serves "my sessions, most recent first"; `by_topic` serves per-topic
-     * lookups; `by_explanation_key` serves [referencedExplanationKeys]. None of the three is a
-     * TTL index and nothing here expires — sessions are the learner's record of what they read,
-     * and dropping them is a product decision nobody has made.
+     * lookups; `by_explanation_key` serves [referencedExplanationKeys]. None of the three expires
+     * anything.
+     *
+     * `session_ttl` does. It expires a document the instant its `expiresAt` field's stored Date
+     * passes, which is only ever true for an anonymous session — see [LearningSession]'s own KDoc on
+     * [LearningSession.expiresAtEpochMillis]. A signed-in learner's sessions carry no such field and
+     * this index never touches them; they are kept until account deletion removes them.
      */
     suspend fun ensureIndexes() {
         collection.createIndex(
@@ -41,6 +46,10 @@ class SessionRepository(database: MongoDatabase) {
         )
         collection.createIndex(Indexes.ascending("topicSlug"), IndexOptions().name("by_topic"))
         collection.createIndex(Indexes.ascending("nodes.explanationKey"), IndexOptions().name("by_explanation_key"))
+        collection.createIndex(
+            Indexes.ascending("expiresAt"),
+            IndexOptions().name("session_ttl").expireAfter(0, TimeUnit.SECONDS),
+        )
     }
 
     /** Raises `MongoWriteException` on a duplicate id; the id is the caller's to make unique. */
@@ -137,11 +146,40 @@ class SessionRepository(database: MongoDatabase) {
      *
      * Sign-in is the caller: an anonymous learner's sessions carry an `anon:` principal, and a
      * sign-in must move them onto the new `user:` principal, or the learner's history is orphaned
-     * under an id nothing else ever presents again.
+     * under an id nothing else ever presents again. A completed session moves too, exactly like an
+     * active one — see "When a session completes" on [SessionService].
+     *
+     * Also removes the `expiresAt` field, on every session moved, completed or not. That field
+     * exists only for an anonymous session; the moment sign-in claims one, it is a signed-in
+     * learner's session and must be kept until account deletion, not reaped by `session_ttl` ninety
+     * days after whatever anonymous activity it last saw.
      */
     suspend fun reassignPrincipal(from: String, to: String): Long {
-        val result = collection.updateMany(Filters.eq("principalId", from), Updates.set("principalId", to))
+        val result = collection.updateMany(
+            Filters.eq("principalId", from),
+            Updates.combine(Updates.set("principalId", to), Updates.unset("expiresAt")),
+        )
         return result.modifiedCount
+    }
+
+    /**
+     * Marks the session named by [sessionId] [SessionStatus.COMPLETED].
+     *
+     * Raises [SessionNotFoundException] when no session has that id, on the same `matchedCount`
+     * check [appendNode] uses and for the same reason: an `updateOne` that matches nothing is not an
+     * error to MongoDB, and a caller that could not tell "completed" from "no such session" would
+     * report success for a request that changed nothing.
+     *
+     * The filter is on `_id` only, exactly as [appendNode]'s is — this method does not check
+     * ownership, and neither does [appendNode]; see [SessionService]'s "Authorisation is the
+     * caller's".
+     */
+    suspend fun complete(sessionId: String) {
+        val result = collection.updateOne(
+            Filters.eq("_id", sessionId),
+            Updates.set("status", SessionStatus.COMPLETED.name),
+        )
+        if (result.matchedCount == 0L) throw SessionNotFoundException(sessionId)
     }
 
     /**

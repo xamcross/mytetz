@@ -253,6 +253,11 @@ open class Components(
      * stored publication status — see `TopicRepository.upsertPreservingStatus`, which exists
      * precisely because wiring seeding into every boot is what this task did.
      *
+     * [migrate] runs before [prewarm], and the order is load-bearing: [migrate] deletes a stranded
+     * explanation, behind its own flag, and [prewarm] must not generate a fresh seed under the
+     * same slug only for the delete to remove it. [prewarm] itself carries no flag — see its own
+     * KDoc for why a published topic's seed must not wait on one.
+     *
      * `open` — with the class — only so a test can hold this method open on a latch and prove that
      * `/api/health` answers while it is still running. There is no production subclass. Same
      * reasoning, and the same note, as `QuotaRepository.incrementCounter`.
@@ -268,6 +273,7 @@ open class Components(
         accountRepository.ensureIndexes()
         catalog.seedFromResource()
         migrate()
+        prewarm()
         reconcile()
 
         // Guarded, unlike the six calls above: eviction is housekeeping, not correctness. Every
@@ -291,28 +297,22 @@ open class Components(
     }
 
     /**
-     * The one-time migration for slice B0 of the monetization specification.
+     * The one-time deletion for slice B0 of the monetization specification.
      *
      * It runs only when [migrateOnBoot] is true. An operator sets that flag for one deployment and
      * then removes it.
      *
-     * This is not an ordinary boot step. It deletes documents. It calls a metered API. It also
-     * builds the lazy model client. An unconditional version would therefore make catalogue
-     * browsing need `ANTHROPIC_API_KEY`.
+     * This is not an ordinary boot step. It deletes documents, and it needs the model client to
+     * name the family it keeps. An unconditional version would therefore make catalogue browsing
+     * need `ANTHROPIC_API_KEY`.
      *
-     * The order is load-bearing. The delete runs first. The first half then cannot delete a seed
-     * that the second half generates.
+     * The delete is idempotent. A second run finds nothing stranded and deletes nothing.
      *
-     * Both halves are idempotent. A second run is therefore safe. The seeds cost real money. The
-     * loop asks the quota gate before each seed. It stops when the global spend breaker trips.
-     * The allowance it names holds a whole catalogue. The allowance is not the real bound: ten
-     * thousand generations cost $105 at $0.0105 each. That figure is above the $50 daily breaker.
-     * The breaker is therefore the only effective bound.
-     *
-     * One topic's failure does not stop the loop. The loop catches the failure, logs the topic's
-     * slug at WARN, and moves to the next topic. It re-throws a cancellation, because a swallowed
-     * cancellation breaks structured concurrency — see `SessionRoutes.kt` for the same shape. The
-     * summary line at the end of this method names the failure count.
+     * [prewarm] used to run inside this method, after the delete. It now runs on every boot, with
+     * no flag — see [prewarm]'s own KDoc for the reason a published topic must not wait for an
+     * operator to set [MIGRATE_ON_BOOT_ENV]. [Components.bootstrap] still calls this method first
+     * and [prewarm] second, so a migrated deployment still deletes a stranded explanation before
+     * [prewarm] can generate a fresh one under the same slug.
      */
     suspend fun migrate() {
         if (!migrateOnBoot) return
@@ -323,6 +323,52 @@ open class Components(
             deleted,
             llm.modelFamily,
         )
+    }
+
+    /**
+     * Generates the seed explanation for every published topic that does not have one yet.
+     *
+     * ## This runs on every boot, with no flag
+     *
+     * [migrate] only pre-warmed behind [migrateOnBoot], so an operator who added a topic to
+     * `topics.json` and deployed, without also setting that flag, left the new topic published
+     * with no seed — and the first visitor who opened it paid, in money and in wait time, for a
+     * live generation. A published topic must never cost a visitor a cold generation, so this
+     * method now closes that gap on its own, on every boot, rather than on an operator's memory.
+     *
+     * [com.mytetz.session.SessionService.prewarmSeed] itself checks the store before it calls the
+     * model, so a topic that already has a seed costs one cheap read here and no model call. This
+     * loop's real cost, on an ordinary boot, is therefore the count of *new* topics, not the size
+     * of the catalogue.
+     *
+     * ## The credential guard mirrors [reconcile]
+     *
+     * The first read of [sessions] is the read that can throw: [sessions] forces [graph], which
+     * forces the lazy model client, and that client's default construction demands
+     * `ANTHROPIC_API_KEY`. A deployment with no key must still serve the catalogue, so that read
+     * sits inside its own `try`/`catch`, logs one WARN line, and returns. Every later boot retries
+     * — `by lazy`'s failure is not cached — the same as [reconcile]'s own guard.
+     *
+     * ## The loop shape matches [migrate]'s old one
+     *
+     * The spend-breaker check before each topic, the quota record inside the `onSpend` callback,
+     * and one failure logged and skipped rather than stopping the whole run: this is the same
+     * shape [migrate] used for the same reason. The seeds cost real money, and one topic's failure
+     * must not cost the rest of the catalogue its seed.
+     */
+    suspend fun prewarm() {
+        val sessionService = try {
+            sessions
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.warn(
+                "PREWARM_SKIPPED the model client did not build; boot continues with the catalogue " +
+                    "served as it stands, and no missing seed generated this run",
+                e,
+            )
+            return
+        }
 
         val maintenance = PrincipalId.user("maintenance")
         val budget = Allowance(generations = 10_000, windowMillis = 86_400_000)
@@ -332,11 +378,11 @@ open class Components(
         var spentMicros = 0L
         for (topic in catalog.listPublished(category = null, query = null)) {
             if (quota.checkGeneration(maintenance, budget) != QuotaDecision.Allowed) {
-                log.warn("MIGRATION stopped early: the spend breaker refused before '{}'", topic.slug)
+                log.warn("PREWARM stopped early: the spend breaker refused before '{}'", topic.slug)
                 break
             }
             try {
-                val didGenerate = sessions.prewarmSeed(topic.slug) { cost ->
+                val didGenerate = sessionService.prewarmSeed(topic.slug) { cost ->
                     spentMicros += cost
                     quota.recordGeneration(maintenance, cost, budget)
                 }
@@ -345,16 +391,15 @@ open class Components(
                 throw e
             } catch (e: Exception) {
                 failed++
-                log.warn("MIGRATION failed to pre-warm the seed for '{}'", topic.slug, e)
+                log.warn("PREWARM failed to pre-warm the seed for '{}'", topic.slug, e)
             }
         }
 
         log.info(
-            "MIGRATION pre-warmed {} seed(s), {} failed, at a cost of {} micro-dollars; remove {} now",
+            "PREWARM pre-warmed {} seed(s), {} failed, at a cost of {} micro-dollars",
             generated,
             failed,
             spentMicros,
-            MIGRATE_ON_BOOT_ENV,
         )
     }
 

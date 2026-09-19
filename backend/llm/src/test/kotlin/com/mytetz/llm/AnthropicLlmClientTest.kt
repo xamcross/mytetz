@@ -115,6 +115,37 @@ class AnthropicLlmClientTest {
     }
 
     @Test
+    fun `the early usage from message_start arrives before the first delta`() = runBlocking {
+        val body = sse(messageStart, contentBlockStart, textDelta("A hash function maps "), textDelta("data to a fixed size."), contentBlockStop, messageDelta, messageStop)
+        val server = sseServer { out -> out.write(body.toByteArray()) }
+
+        try {
+            val chunks = withTimeout(30_000) {
+                AnthropicLlmClient(clientFor(server)).stream(LlmRequest("system", "prompt")).toList()
+            }
+
+            val earlyUsageIndex = chunks.indexOfFirst { it is LlmChunk.EarlyUsage }
+            val firstDeltaIndex = chunks.indexOfFirst { it is LlmChunk.Delta }
+
+            assertTrue(earlyUsageIndex >= 0, "no EarlyUsage chunk was emitted at all")
+            assertTrue(
+                earlyUsageIndex < firstDeltaIndex,
+                "the early usage must arrive before the first delta, but arrived at " +
+                    "$earlyUsageIndex, and the first delta at $firstDeltaIndex",
+            )
+
+            // message_start reports input and cache figures only; output is not known yet.
+            val early = (chunks[earlyUsageIndex] as LlmChunk.EarlyUsage).usage
+            assertEquals(1234, early.inputTokens)
+            assertEquals(512, early.cacheReadInputTokens)
+            assertEquals(64, early.cacheCreationInputTokens)
+            assertEquals(0, early.outputTokens)
+        } finally {
+            server.stop(0)
+        }
+    }
+
+    @Test
     fun `a stream that ends without a stop reason fails instead of reporting zero cost`() = runBlocking {
         // Everything except the message_delta event — exactly what a truncated generation looks like.
         val body = sse(messageStart, contentBlockStart, textDelta("A hash function maps "), contentBlockStop, messageStop)

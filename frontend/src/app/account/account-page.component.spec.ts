@@ -5,7 +5,8 @@ import {
   TestRequest,
   provideHttpClientTesting,
 } from '@angular/common/http/testing';
-import { provideRouter } from '@angular/router';
+import { ActivatedRoute, Router, convertToParamMap, provideRouter } from '@angular/router';
+import { RouterTestingHarness } from '@angular/router/testing';
 import { AccountPageComponent } from './account-page.component';
 import { AccountStore } from '../core/account.store';
 import { AccountView } from '../core/models';
@@ -22,6 +23,14 @@ const active: AccountView = {
   allowance: 25,
   remaining: 9,
   resetsAtEpochMillis: null,
+};
+
+// The account before a purchase completes. The post-purchase poll specs below start every mount
+// with this view, then answer a later `GET /api/account` with [active] once the webhook lands.
+const trialing: AccountView = {
+  ...active,
+  status: 'TRIALING',
+  currentPeriodEndsAtEpochMillis: null,
 };
 
 const signedOut = {
@@ -44,7 +53,12 @@ describe('AccountPageComponent', () => {
     http = TestBed.inject(HttpTestingController);
   });
 
-  afterEach(() => http.verify());
+  afterEach(() => {
+    // A no-op when a test never installs fake timers. `vi.useFakeTimers()` is scoped to one test
+    // below, and this line keeps the next test's real `setTimeout` from a leftover fake clock.
+    vi.useRealTimers();
+    http.verify();
+  });
 
   const text = (): string => fixture.nativeElement.textContent as string;
 
@@ -74,10 +88,10 @@ describe('AccountPageComponent', () => {
   });
 
   it('returning from checkout refreshes the account view', async () => {
-    // A return from checkout is an ordinary navigation to this route. The browser boots the app
-    // fresh, and this component mounts. This class reads no query parameter — see its own doc
-    // comment. A plain `GET /api/account` on mount, with its result landing in the store, is the
-    // whole proof.
+    // A return from checkout with no `action` query parameter is an ordinary navigation to this
+    // route. The browser boots the app fresh, and this component mounts. A plain `GET
+    // /api/account` on mount, with its result landing in the store, is the whole proof. The
+    // describe block below covers the case where Freemius's `action` parameter is present.
     await mount((req) => {
       expect(req.request.method).toBe('GET');
       req.flush(active);
@@ -315,5 +329,241 @@ describe('AccountPageComponent', () => {
 
     expect(text()).toContain('Could not delete your account');
     expect(store.view()).toEqual(active);
+  });
+
+  it('a visit with no action parameter makes one request and starts no poll', async () => {
+    vi.useFakeTimers();
+    await mount((req) => req.flush(active));
+
+    // 30 seconds is the poll's own outer limit — see the describe block below. No poll started,
+    // so this elapsed time must cause no second request.
+    await vi.advanceTimersByTimeAsync(30000);
+
+    http.expectNone('/api/account');
+  });
+
+  it('does not touch the address bar when there is no query string to remove', async () => {
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigate');
+
+    await mount((req) => req.flush(active));
+
+    expect(navigate).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * `action=purchase` on the return URL is the hint that Freemius's webhook may still be in
+ * flight — see the class doc comment on `AccountPageComponent`. Each spec below stands in for
+ * that race: the first `GET /api/account` answers the pre-purchase view, and a later one answers
+ * [active].
+ */
+describe('AccountPageComponent — the post-purchase poll', () => {
+  let fixture: ComponentFixture<AccountPageComponent>;
+  let store: AccountStore;
+  let http: HttpTestingController;
+  let navigate: ReturnType<typeof vi.spyOn>;
+
+  // Freemius's real return URL carries several other values beside `action` — `amount` and
+  // `email` stand in for them here. Nothing in the page reads any of them; see the test named for
+  // that below.
+  const queryParams = { action: 'purchase', amount: '19.99', email: 'other-inbox@example.com' };
+
+  beforeEach(() => {
+    TestBed.configureTestingModule({
+      imports: [AccountPageComponent],
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        provideRouter([]),
+        {
+          provide: ActivatedRoute,
+          useValue: {
+            snapshot: { queryParams, queryParamMap: convertToParamMap(queryParams) },
+          },
+        },
+      ],
+    });
+    fixture = TestBed.createComponent(AccountPageComponent);
+    store = TestBed.inject(AccountStore);
+    http = TestBed.inject(HttpTestingController);
+    // `provideRouter([])` holds no route at all, so a real `Router.navigate` call has nothing to
+    // match. Every test here mocks it, the same way `catalog-page.component.spec.ts` mocks
+    // `Router.navigate` for a page that calls it — see the test named for the call itself below.
+    navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    http.verify();
+  });
+
+  const text = (): string => fixture.nativeElement.textContent as string;
+
+  /**
+   * Settles every microtask still queued, without `whenStable`.
+   *
+   * `whenStable` is a trap here. It waits on Angular's pending-task count, which clears the
+   * moment a flushed `HttpTestingController` request settles — one tick before `ngOnInit`'s own
+   * continuation (the `Router.navigate` call, then the poll decision) actually runs. A fixed
+   * small number of bare microtask turns drains that remaining continuation instead.
+   */
+  async function settle(): Promise<void> {
+    for (let i = 0; i < 4; i++) await Promise.resolve();
+  }
+
+  /** Mounts the page and answers the `GET /api/account` that `ngOnInit` fires. Mirrors the
+   * `mount` helper above — see its own comment. */
+  async function mount(respond: (req: TestRequest) => void): Promise<void> {
+    fixture.detectChanges();
+    respond(http.expectOne('/api/account'));
+    await fixture.whenStable();
+    await settle();
+    fixture.detectChanges();
+  }
+
+  it('shows the new allowance once the webhook lands, with no action from the learner', async () => {
+    await mount((req) => req.flush(trialing));
+
+    expect(store.view()).toEqual(trialing);
+    expect(text()).toContain('We are waiting for the payment confirmation');
+
+    await vi.advanceTimersByTimeAsync(2000);
+    http.expectOne('/api/account').flush(active);
+    await settle();
+    fixture.detectChanges();
+
+    expect(store.view()).toEqual(active);
+    expect(text()).toContain('ACTIVE');
+  });
+
+  it('stops the poll once the status changes, and asks the server no more', async () => {
+    await mount((req) => req.flush(trialing));
+
+    await vi.advanceTimersByTimeAsync(2000);
+    http.expectOne('/api/account').flush(active);
+    await settle();
+    fixture.detectChanges();
+
+    expect(text()).not.toContain('We are waiting for the payment confirmation');
+
+    // The poll already stopped when the status changed. Advancing well past both another
+    // interval and the whole 30-second limit must send no further request.
+    await vi.advanceTimersByTimeAsync(30000);
+
+    http.expectNone('/api/account');
+  });
+
+  it('stops after 30 seconds with no change, and tells the learner to check back', async () => {
+    await mount((req) => req.flush(trialing));
+
+    // 14 polls of 2 seconds cover 28 seconds. Each answers the same unchanged status, so none
+    // stops the poll early.
+    for (let i = 0; i < 14; i++) {
+      await vi.advanceTimersByTimeAsync(2000);
+      http.expectOne('/api/account').flush(trialing);
+      await settle();
+    }
+    fixture.detectChanges();
+    expect(text()).toContain('We are waiting for the payment confirmation');
+
+    // The 30-second limit lands on this next tick. It stops the poll before a 15th request goes
+    // out.
+    await vi.advanceTimersByTimeAsync(2000);
+    fixture.detectChanges();
+
+    http.expectNone('/api/account');
+    expect(text()).toContain('The confirmation is not here yet');
+    // The learner takes no action to reach this message, so a screen reader must announce it on
+    // its own — the same reason the waiting message above carries the same role.
+    const timedOut = fixture.nativeElement.querySelector('.account-page__poll-status');
+    expect(timedOut?.getAttribute('role')).toBe('status');
+  });
+
+  it('stops the poll when the page is destroyed', async () => {
+    await mount((req) => req.flush(trialing));
+
+    fixture.destroy();
+
+    await vi.advanceTimersByTimeAsync(30000);
+
+    http.expectNone('/api/account');
+  });
+
+  it('removes the query string from the address bar after the first load', async () => {
+    await mount((req) => req.flush(trialing));
+
+    expect(navigate).toHaveBeenCalledWith([], { queryParams: {}, replaceUrl: true });
+  });
+
+  it('ignores every other Freemius parameter, and shows only what the server answers', async () => {
+    await mount((req) => req.flush(trialing));
+
+    expect(text()).not.toContain('19.99');
+    expect(text()).not.toContain('other-inbox@example.com');
+  });
+});
+
+/**
+ * The describe block above answers `ActivatedRoute` with a fixed value, and mocks
+ * `Router.navigate` — a spy that never runs a real navigation. This describe block uses the real
+ * router instead, through `RouterTestingHarness`, because only a real navigation can show a real
+ * bug: `Router.navigate([], { queryParams: {}, replaceUrl: true })` completes and reuses this
+ * component, and the router replaces `ActivatedRoute.snapshot` with the snapshot of the cleared
+ * URL. A read of `route.snapshot.queryParamMap` made *after* that navigation therefore always
+ * finds no `action` parameter, on the very return trip the parameter was meant for.
+ */
+describe('AccountPageComponent — with the real router', () => {
+  let harness: RouterTestingHarness;
+  let http: HttpTestingController;
+  let router: Router;
+
+  beforeEach(async () => {
+    TestBed.configureTestingModule({
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        provideRouter([{ path: 'account', component: AccountPageComponent }]),
+      ],
+    });
+    http = TestBed.inject(HttpTestingController);
+    router = TestBed.inject(Router);
+    vi.useFakeTimers();
+    harness = await RouterTestingHarness.create();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    http.verify();
+  });
+
+  /** Settles the microtasks `whenStable` leaves behind. See the comment on the other `settle`,
+   * above the `AccountPageComponent — the post-purchase poll` describe block, for the trap
+   * itself. A real navigation runs through more microtask turns than a mocked one, so this
+   * `settle` loops longer than that one does. */
+  async function settle(): Promise<void> {
+    for (let i = 0; i < 50; i++) await Promise.resolve();
+  }
+
+  it('polls again after the router clears the return URL, and leaves no query string behind', async () => {
+    await harness.navigateByUrl(
+      '/account?action=purchase&email=learner%40example.com',
+      AccountPageComponent,
+    );
+    http.expectOne('/api/account').flush(trialing);
+    await harness.fixture.whenStable();
+    await settle();
+    harness.detectChanges();
+
+    // The address bar is already clear, proving the real `Router.navigate` call completed before
+    // this line — the same navigation that swaps out `ActivatedRoute.snapshot`.
+    expect(router.url).toBe('/account');
+
+    await vi.advanceTimersByTimeAsync(2000);
+
+    // The poll must survive that swap. On the present code it does not: `maybeStartPoll` reads
+    // `route.snapshot` again, after the swap, finds no `action` parameter, and never starts the
+    // poll — so this second request never appears.
+    http.expectOne('/api/account').flush(active);
   });
 });

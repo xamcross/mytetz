@@ -18,12 +18,18 @@ export interface NodeView {
   depth: number;
 }
 
+/** A session is `COMPLETED` once a learner ends it, or once 30 days pass with no activity on it.
+ * The backend decides which on every read — see `SessionService.statusOf` — so the client only
+ * ever reads the field and never derives it. */
+export type SessionStatus = 'ACTIVE' | 'COMPLETED';
+
 export interface SessionView {
   sessionId: string;
   topicSlug: string;
   rootNodeId: string;
   currentNodeId: string;
   nodes: NodeView[];
+  status: SessionStatus;
   explanations: Record<string, string>;
 }
 

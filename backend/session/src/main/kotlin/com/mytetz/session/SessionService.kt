@@ -30,6 +30,12 @@ class DepthLimitException(message: String) : Exception(message)
 /** The session already holds [SessionLimits.maxNodes] steps. */
 class SessionFullException(message: String) : Exception(message)
 
+/**
+ * The session is complete and admits no new node. See "When a session completes" on
+ * [SessionService].
+ */
+class SessionCompletedException(message: String) : Exception(message)
+
 /** The regeneration would be numbered above [SessionLimits.maxVariants]. */
 class VariantLimitException(message: String) : Exception(message)
 
@@ -191,6 +197,31 @@ class ExplainPlan internal constructor(
  * ## Cancellation drops the node, deliberately
  *
  * See [explain].
+ *
+ * ## When a session completes, and what that changes
+ *
+ * A session becomes [SessionStatus.COMPLETED] one of two ways. A learner marks it complete, through
+ * [complete]. Or 30 days pass with no activity on it. [statusOf] is where this is decided, and it is
+ * consulted, not stored, for the second case: no job here ever writes [SessionStatus.COMPLETED] onto
+ * a document for it. This module has no daily job today, and `principal_recent` — the one index this
+ * class could sweep by — is not ordered for a scan by date. [statusOf] answers the question at read
+ * time instead, from [LearningSession.lastActiveAtEpochMillis] and the clock, which costs nothing
+ * extra: [prepare] already reads the document it would sweep.
+ *
+ * A completed session stays fully readable. [load] and [ownerOf] do not call [statusOf] at all —
+ * they answer the same way for a completed session as for an active one, because a cached trail
+ * costs nothing to serve and a learner who finished a topic keeps their own record of it. [prepare]
+ * does call it, and refuses with [SessionCompletedException] before anything is generated. A quiz
+ * is unaffected: it reads the existing nodes and adds none, so a completed session can still be
+ * quizzed — see [SessionLimits.maxNodes] for the one ceiling a quiz can still meet.
+ *
+ * [reassignPrincipal] moves a completed session exactly as it moves an active one. This is a
+ * decision and not an oversight: skipping a completed session there was considered and rejected.
+ * Every session route resolves the caller's principal through `SessionRoutes.kt`'s
+ * `effectiveIdentity`, which prefers the signed-in user's principal the instant a sign-in completes.
+ * A session left under the old anonymous principal would then answer 404 from every route the
+ * moment the learner signed in — the exact defect `AuthRoutes.kt` already records for the
+ * unconditional case. A completed session must stay exactly as readable after sign-in as before it.
  */
 class SessionService(
     private val sessions: SessionRepository,
@@ -241,10 +272,22 @@ class SessionService(
      * that is old, low-demand and unreferenced — an operator cannot point it at one topic on demand,
      * and a document a learner still reads survives it no matter what the topic's status is.
      * Recorded as a decision rather than left as an omission.
+     *
+     * [anonymous] sets [LearningSession.expiresAtEpochMillis] to 90 days from [clock] when true, and
+     * leaves it unset when false. This is the one place that field can be set at all: an anonymous
+     * session gets no new node until it signs in (`SessionRoutes.kt` requires a sign-in on every
+     * explain), so its creation is also its last activity, and this call is the only chance to write
+     * the TTL date. **This module does not read [principalId] to decide anonymity itself** — that
+     * would need this module to know the `anon:`/`user:` naming convention `:backend:quota` defines,
+     * which is exactly the dependency this module must not take. The caller already knows which one
+     * it has; `SessionRoutes.kt` resolves it before this call. There is no default, for the same
+     * reason [onSpend] has none: a caller that forgets it either TTLs a signed-in learner's history
+     * away or lets an anonymous one grow forever, and neither error should compile by accident.
      */
     suspend fun create(
         principalId: String,
         topicSlug: String,
+        anonymous: Boolean,
         onSpend: suspend (Long) -> Unit,
     ): SessionCreation {
         val topic = requirePublishedTopic(topicSlug)
@@ -286,6 +329,7 @@ class SessionService(
             ),
             startedAtEpochMillis = now,
             lastActiveAtEpochMillis = now,
+            expiresAtEpochMillis = if (anonymous) now + ANONYMOUS_TTL_MILLIS else null,
         )
         sessions.insert(session)
         return SessionCreation(session, seedExplanation)
@@ -383,6 +427,14 @@ class SessionService(
         // raises it for the same session being absent, and having the two paths disagree would let
         // one stale client get a 404 and another a 400 for one situation.
         val session = sessions.findById(sessionId) ?: throw SessionNotFoundException(sessionId)
+
+        // Before every other check, including the node ceiling below: a completed session refuses a
+        // new node regardless of how much room is left in it. See "When a session completes" above.
+        if (statusOf(session) == SessionStatus.COMPLETED) {
+            throw SessionCompletedException(
+                "session $sessionId is completed and admits no new node"
+            )
+        }
 
         if (session.nodes.size >= limits.maxNodes) {
             throw SessionFullException(
@@ -487,8 +539,27 @@ class SessionService(
      *
      * Does **not** check that the principal owns the session; see "Authorisation is the caller's".
      * Each [ExplainPlan] may be collected once — see [ExplainPlan].
+     *
+     * **This form drops the estimate.** It passes a callback that does nothing, so a stream that a
+     * learner cancels, or that the provider truncates, records no cost through it. A test, and a
+     * caller that records no spend at all, can use it. A route that streams a generation to a
+     * learner must use the two-argument overload. If it does not, a cancelled stream costs money
+     * that no ledger shows, which is the gap that the callback exists to close. See that overload
+     * for [onEstimatedSpend]'s own contract.
      */
-    fun explain(plan: ExplainPlan): Flow<GraphChunk> = flow {
+    fun explain(plan: ExplainPlan): Flow<GraphChunk> = explain(plan) { _, _ -> }
+
+    /**
+     * [onEstimatedSpend] is [ExplanationGraph.getOrGenerate]'s own callback, threaded straight
+     * through: this class has no view of the model call that [ExplanationGraph] makes and nothing
+     * to add to the estimate it reports. See that function's KDoc for the full contract, and
+     * `SessionRoutes.kt`'s `streamExplanation` for the one caller that supplies a real callback
+     * rather than the one-argument overload's no-op.
+     */
+    fun explain(
+        plan: ExplainPlan,
+        onEstimatedSpend: suspend (costMicros: Long, reason: String) -> Unit,
+    ): Flow<GraphChunk> = flow {
         // Before anything, and inside the flow builder so it fires per collection rather than per
         // call: this plan carries ceiling decisions taken against the session as it was at prepare
         // time, and nothing below re-checks them.
@@ -500,7 +571,7 @@ class SessionService(
 
         var generated: Explanation? = null
 
-        graph.getOrGenerate(plan.request).collect { chunk ->
+        graph.getOrGenerate(plan.request, onEstimatedSpend).collect { chunk ->
             if (chunk is GraphChunk.Done) generated = chunk.explanation
             emit(chunk)
         }
@@ -539,8 +610,18 @@ class SessionService(
         selection: SpanSelection,
         verb: Verb,
         requestedVariant: Int?,
+    ): Flow<GraphChunk> = explain(sessionId, parentNodeId, selection, verb, requestedVariant) { _, _ -> }
+
+    /** [onEstimatedSpend] carries the same contract as the two-argument [explain] plan overload. */
+    fun explain(
+        sessionId: String,
+        parentNodeId: String,
+        selection: SpanSelection,
+        verb: Verb,
+        requestedVariant: Int?,
+        onEstimatedSpend: suspend (costMicros: Long, reason: String) -> Unit,
     ): Flow<GraphChunk> = flow {
-        emitAll(explain(prepare(sessionId, parentNodeId, selection, verb, requestedVariant)))
+        emitAll(explain(prepare(sessionId, parentNodeId, selection, verb, requestedVariant), onEstimatedSpend))
     }
 
     // ------------------------------------------------------------------ ownership
@@ -577,6 +658,36 @@ class SessionService(
      * does not touch.
      */
     suspend fun deleteForPrincipal(principalId: String): Long = sessions.deleteForPrincipal(principalId)
+
+    // ------------------------------------------------------------------ completion
+
+    /**
+     * [SessionStatus.COMPLETED] when [session] is stored that way, or when [COMPLETES_AFTER_MILLIS]
+     * has passed since [LearningSession.lastActiveAtEpochMillis]. [SessionStatus.ACTIVE] otherwise.
+     *
+     * The one place this rule is written. [prepare] calls it to decide whether to refuse a new node,
+     * and the API layer calls it to decide what `status` to put on the wire — see "When a session
+     * completes" on this class. Neither caller may compute the 30-day part on its own: doing that
+     * twice is exactly how the two answers drift apart.
+     */
+    fun statusOf(session: LearningSession): SessionStatus =
+        if (session.status == SessionStatus.COMPLETED ||
+            clock() - session.lastActiveAtEpochMillis >= COMPLETES_AFTER_MILLIS
+        ) {
+            SessionStatus.COMPLETED
+        } else {
+            SessionStatus.ACTIVE
+        }
+
+    /**
+     * Marks [sessionId] complete, by the learner's own choice — the control the reader offers, and
+     * the other of the two ways [statusOf] can answer [SessionStatus.COMPLETED]. See "When a session
+     * completes" on this class.
+     *
+     * Raises [SessionNotFoundException] for an unknown id, exactly as [SessionRepository.appendNode]
+     * does for the same condition.
+     */
+    suspend fun complete(sessionId: String) = sessions.complete(sessionId)
 
     // ------------------------------------------------------------------ load
 
@@ -799,6 +910,12 @@ class SessionService(
     }
 
     private companion object {
+
+        /** 30 days, in millis. See "When a session completes" on this class. */
+        private const val COMPLETES_AFTER_MILLIS = 30L * 24 * 60 * 60 * 1000
+
+        /** 90 days, in millis. See [create]'s note on [LearningSession.expiresAtEpochMillis]. */
+        private const val ANONYMOUS_TTL_MILLIS = 90L * 24 * 60 * 60 * 1000
 
         private const val CLOSING_PUNCTUATION = "\"'”’)]}»"
 

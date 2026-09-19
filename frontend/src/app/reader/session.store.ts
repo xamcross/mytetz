@@ -126,6 +126,10 @@ export class SessionStore {
 
   readonly session = signal<SessionView | null>(null);
   readonly currentNodeId = signal<string | null>(null);
+  /** True once the loaded session is complete, either because the learner ended it or because 30
+   * days passed with no activity — the backend decides which, in `SessionService.statusOf`, and
+   * this store only ever reads the field it sends. */
+  readonly isCompleted = computed(() => this.session()?.status === 'COMPLETED');
   /**
    * The curated title of the session's topic, or `null` when the catalogue did not supply one.
    *
@@ -350,8 +354,12 @@ export class SessionStore {
     const parentNodeId = this.currentNodeId();
     // A second explain while one is in flight would be a second *paid* generation for a span the
     // learner highlighted once — the same guard, for the same reason, as the catalogue's
-    // double-click protection on session creation.
-    if (sessionId === null || parentNodeId === null || this.isStreaming()) return;
+    // double-click protection on session creation. `isCompleted` is the client's own copy of a
+    // refusal the backend already makes with `409 SESSION_COMPLETED`; the guard here only saves the
+    // round trip, and `FocusCardComponent`'s `readOnly` input is what stops the picker offering this
+    // call in the first place.
+    if (sessionId === null || parentNodeId === null || this.isStreaming() || this.isCompleted())
+      return;
 
     this.lastExplain = { span, verb, parentNodeId };
     this.isStreaming.set(true);
@@ -521,6 +529,22 @@ export class SessionStore {
 
   dismissError(): void {
     this.error.set(null);
+  }
+
+  /**
+   * Marks the session complete, by the learner's own choice.
+   *
+   * Updates [session] locally rather than re-reading it: the route answers `204` with no body, and
+   * every other field of the session is unchanged by completing it. A failure is left for the
+   * caller — `ReaderPageComponent` has nothing useful to show for a completion that did not happen,
+   * beyond the control still being there to press again.
+   */
+  async complete(): Promise<void> {
+    const sessionId = this.sessionId;
+    if (sessionId === null) return;
+    await this.api.completeSession(sessionId);
+    const current = this.session();
+    if (current !== null) this.session.set({ ...current, status: 'COMPLETED' });
   }
 
   /**

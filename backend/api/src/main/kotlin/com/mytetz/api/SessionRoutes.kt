@@ -15,6 +15,7 @@ import com.mytetz.session.ExplainPlan
 import com.mytetz.session.LearningSession
 import com.mytetz.session.SessionNotFoundException
 import com.mytetz.session.SessionService
+import com.mytetz.session.SessionStatus
 import com.mytetz.session.SpanSelection
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
@@ -60,6 +61,11 @@ data class NodeView(
     val depth: Int,
 )
 
+/**
+ * [status] has no default. `Application.kt`'s `ContentNegotiation` does not turn on
+ * `encodeDefaults`, and a default value here would never reach the wire — the reader needs this
+ * field on every response, so a caller cannot be allowed to forget it.
+ */
 @Serializable
 data class SessionView(
     val sessionId: String,
@@ -67,6 +73,7 @@ data class SessionView(
     val rootNodeId: String,
     val currentNodeId: String,
     val nodes: List<NodeView>,
+    val status: SessionStatus,
     val explanations: Map<String, String>,
 )
 
@@ -121,12 +128,14 @@ const val SESSION_WINDOW_MILLIS: Long = 60L * 60 * 1000
  * Three other bounds apply to `POST /api/sessions/{id}/explain`. One client can make all three read
  * zero. No path below needs an attacker.
  *
- * - **The ledger and the principal counter.** They move on `GraphChunk.Spent`. The graph emits
- *   `Spent` only after the model stream completes. A stream that breaks before that point emits
- *   nothing. Two paths break it: the learner leaves the page, or `AnthropicLlmClient` raises
- *   `LlmStreamTruncatedException` because the provider stream ends with no stop reason. The second
- *   path includes OkHttp's 120-second whole-call timeout on a slow stream. The token counts do not
- *   exist on these paths, so this layer cannot record them. See "The bound this still leaves" on
+ * - **The ledger and the principal counter.** The exact cost moves on `GraphChunk.Spent`, which the
+ *   graph emits only after the model stream completes. Two paths break the stream before that
+ *   point: the learner leaves the page, or `AnthropicLlmClient` raises `LlmStreamTruncatedException`
+ *   because the provider stream ends with no stop reason — which includes OkHttp's 120-second
+ *   whole-call timeout on a slow stream. `streamExplanation` now records an estimated cost for both,
+ *   so this limiter is no longer the only thing standing between them and the ledger. A third path
+ *   is still open on purpose: any other upstream failure records nothing, and this limiter is what
+ *   bounds a retry loop built on it. See "What this closes, and the one gap left" on
  *   [streamExplanation].
  * - **`SessionLimits.maxNodes`.** `appendNode` consumes it. `SessionService.explain` calls
  *   `appendNode` after the last emit, so the same two paths skip it.
@@ -180,7 +189,8 @@ const val EXPLAIN_WINDOW_MILLIS: Long = 10L * 60 * 1000
 const val MAX_SESSION_BODY_BYTES: Long = 4_096
 
 /**
- * `POST /api/sessions`, `GET /api/sessions/{id}` and `POST /api/sessions/{id}/explain`.
+ * `POST /api/sessions`, `GET /api/sessions/{id}`, `POST /api/sessions/{id}/explain` and
+ * `POST /api/sessions/{id}/complete`.
  *
  * This was the only endpoint in the system that could spend money. `POST /api/sessions/{id}/quizzes`
  * now spends money too. See `QuizRoutes.kt` for its own gate. Most of what follows is about the
@@ -334,15 +344,16 @@ fun Route.sessionRoutes(
      * *global* breaker that one endpoint ignores is not global; and because the re-check that makes
      * a stale miss survive is the same three lines as on the explain path.
      *
-     * **Session documents are not bounded, and cannot be from here.** Nothing expires them —
-     * `SessionRepository` says so deliberately, they are the learner's record of what they read — so
-     * the honest statement is that this limits the *rate* at which one caller can create them and
-     * not the total. Keyed on [ClientAddress], not the principal, for the reason
-     * `FixedWindowRateLimiter` gives: `Principals.resolve` mints a fresh principal for any request
-     * without a valid cookie, so a per-principal limit limits only callers polite enough to return
-     * their cookie. A per-principal session cap, or a TTL on abandoned sessions, is a product
-     * decision nobody has made; it is written down here rather than left to be discovered from a
-     * disk-usage alert.
+     * **Session documents are not bounded by count, and cannot be from here.** An anonymous session
+     * now expires 90 days after its last activity — see `SessionService.create`'s note on
+     * `LearningSession.expiresAtEpochMillis` — and a signed-in learner's session is kept until account
+     * deletion removes it. Neither bound is a cap on how many sessions exist at once, so the honest
+     * statement stays: this limits the *rate* at which one caller can create them and not the total.
+     * Keyed on [ClientAddress], not the principal, for the reason `FixedWindowRateLimiter` gives:
+     * `Principals.resolve` mints a fresh principal for any request without a valid cookie, so a
+     * per-principal limit limits only callers polite enough to return their cookie. A per-principal
+     * session cap is a product decision nobody has made; it is written down here rather than left to
+     * be discovered from a disk-usage alert.
      *
      * ## This route must gate on the same entitlement the explain route gates on
      *
@@ -421,11 +432,16 @@ fun Route.sessionRoutes(
         // Recorded from inside the generation, not from the result: a seed can be billed and then
         // rejected by the validator, in which case `create` raises and there is no result to read a
         // cost off. `recordSpend` swallows its own failures, so this cannot fail the request.
-        val created = sessions.create(principal.value, request.topicSlug) { costMicros ->
+        //
+        // `anonymous = user == null`: this route already resolved that fact through
+        // `effectiveIdentity`, so it is passed straight through rather than re-derived from
+        // `principal.value` — see `SessionService.create`'s own KDoc on why it does not read that
+        // string itself.
+        val created = sessions.create(principal.value, request.topicSlug, anonymous = user == null) { costMicros ->
             withContext(NonCancellable) { quota.recordSpend(principal, costMicros, allowance) }
         }
 
-        call.respond(created.session.toView(mapOf(created.seed.key to created.seed.body)))
+        call.respond(created.session.toView(mapOf(created.seed.key to created.seed.body), sessions.statusOf(created.session)))
     }
 
     get("/api/sessions/{id}") {
@@ -439,7 +455,29 @@ fun Route.sessionRoutes(
         // and is this principal's, so a null here means it was deleted between two reads, which is
         // the same 404 by a different route.
         val (session, bodies) = sessions.load(id) ?: throw SessionNotFoundException(id)
-        call.respond(session.toView(bodies.mapValues { it.value.body }))
+        call.respond(session.toView(bodies.mapValues { it.value.body }, sessions.statusOf(session)))
+    }
+
+    /**
+     * `POST /api/sessions/{id}/complete`.
+     *
+     * The learner's own control for ending a session, alongside the 30-day rule `SessionService`
+     * applies without one. Ownership is checked exactly as the two routes above check it, and for
+     * the same reason: without it, anyone holding a guessed id could end another learner's session.
+     *
+     * Answers `204`, with no body: there is nothing here a client needs back that a following
+     * `GET /api/sessions/{id}` does not already answer, and every other action route in this file —
+     * `POST /api/auth/sign-out` among them — answers the same way.
+     */
+    post("/api/sessions/{id}/complete") {
+        val sessions = sessions()
+        val (principal, _) = call.effectiveIdentity(account, cookies)
+        val id = call.parameters["id"].orEmpty()
+
+        sessions.requireOwnedBy(id, principal)
+        sessions.complete(id)
+
+        call.respond(HttpStatusCode.NoContent)
     }
 
     post("/api/sessions/{id}/explain") {
@@ -624,35 +662,38 @@ fun Route.sessionRoutes(
  * being written either" — was the exact conflation this task exists to prevent. An unwritten node is
  * free. Sampled tokens are not.
  *
- * ## The bound this still leaves, named rather than implied
+ * ## What this closes, and the one gap left
  *
- * A cancellation that arrives **before the model's own stream completes** records nothing, and this
- * is the one case where that is not a bookkeeping choice: `ExplanationGraph.generate` rethrows
- * `CancellationException` before `LlmChunk.Done` delivers `LlmUsage`, so no token counts exist
- * anywhere and the cost is genuinely unknowable at every layer rather than merely unread here.
+ * A cancellation and a `LlmStreamTruncatedException` used to record nothing at all. No token count
+ * existed for either, so the ledger and the principal's daily count stayed at zero, and
+ * [EXPLAINS_PER_CALLER] was the only real bound on a client of that shape.
  *
- * The bound that leaves: a client which disconnects mid-generation pays nothing into the ledger and
- * nothing into its own daily count, which makes `QuotaConfig.dailyExplains` optional for such a
- * client. [EXPLAINS_PER_CALLER] therefore applies at the door, and it keys on the address and not
- * on the principal. It is the only bound under a client of that shape.
+ * `ExplanationGraph.generate` now builds an estimate for both cases — from the input usage
+ * `message_start` reported early, when it arrived, and from the text the stream did deliver
+ * otherwise — and hands it to `SessionService.explain`'s `onEstimatedSpend` callback, inside
+ * `withContext(NonCancellable)`, so a cancelled coroutine still delivers it. [estimatedSpend]
+ * above holds whatever the callback last received, and the `finally` block records it through the
+ * same [QuotaService.recordSpend] a real cost would use. See `ExplanationGraph` for how the
+ * estimate is built and where it understates the truth — adaptive thinking in particular, which
+ * this estimate cannot see and a completed generation's real usage always accounts for.
+ *
+ * **One path is still open, and it is a choice rather than an oversight.** A failure that is
+ * neither a cancellation nor a `LlmStreamTruncatedException` — an SDK fault, a network error,
+ * anything else upstream — still records nothing: `ExplanationGraph.generate` wraps it in
+ * `GenerationFailedException` with no estimate, because a bare upstream failure says nothing about
+ * how much of an answer the model produced before it fell over, and a number invented from nothing
+ * is worse than no number. `SessionRoutesTest` pins this — a generic `RuntimeException` moves no
+ * ledger — and [EXPLAINS_PER_CALLER] is what still bounds a retry loop built on it.
+ *
  * **Everything after the announcement is recorded** — a generation that is billed and then
  * rejected, or whose insert fails, or whose correction cannot be sent, all reach `Spent` first. The
  * guarantee starts at the emit rather than at the model returning: a disconnect landing in the
  * microseconds between the two loses a cost that is already known, which is a real if vanishing
  * window and is stated rather than rounded away.
- *
- * Charging the *count* without the cost is **deferred as a billing-policy decision, not blocked by
- * anything**. It was once argued here that this layer cannot tell "cancelled after the model was
- * called" from "cancelled while being served a cache hit under the lock" — true of the signals that
- * existed then, and disproved by `GraphChunk.Spent`, which demonstrates that the graph can announce
- * anything it likes at any instant it chooses, including the instant it commits to calling the
- * model. So the question is whether a learner should spend one of twenty daily explanations on an
- * answer they never received, and that is a product call nobody has made. What is *not* available
- * either way is the amount, since no token counts exist on this path; closing that needs
- * `ExplanationGraph` to report partial usage, which is the same change that would let it be billed
- * rather than merely counted. Recorded as a bound in the shape `QuotaService` uses for its own
- * overshoot.
  */
+/** What [streamExplanation] records in place of an exact cost. See its own KDoc. */
+private data class EstimatedSpend(val costMicros: Long, val reason: String)
+
 private suspend fun ServerSSESession.streamExplanation(
     sessions: SessionService,
     quota: QuotaService,
@@ -660,10 +701,16 @@ private suspend fun ServerSSESession.streamExplanation(
     allowance: Allowance,
     plan: ExplainPlan,
 ) {
-    // Outside the `try`, because the `finally` reads it.
+    // Both outside the `try`, because the `finally` reads them.
     var spentMicros = 0L
+    var estimatedSpend: EstimatedSpend? = null
     try {
-        sessions.explain(plan).collect { chunk ->
+        sessions.explain(plan) { costMicros, reason ->
+            // A plain assignment, so it needs no suspension of its own — but it still runs inside
+            // `ExplanationGraph`'s own `withContext(NonCancellable)`, because the exception that
+            // triggers it is already tearing this coroutine down. See that class's KDoc.
+            estimatedSpend = EstimatedSpend(costMicros, reason)
+        }.collect { chunk ->
             // Recorded on arrival and never on completion: `Spent` is emitted before the validator,
             // the insert and the correction, every one of which can throw with the money already
             // gone. Assignment first, `send` second — a socket that closes during the send must not
@@ -683,7 +730,28 @@ private suspend fun ServerSSESession.streamExplanation(
     } catch (e: Exception) {
         send(ServerSentEvent(event = "error", data = json.encodeToString(sseErrorFor(e))))
     } finally {
-        withContext(NonCancellable) { quota.recordSpend(principal, spentMicros, allowance) }
+        withContext(NonCancellable) {
+            if (spentMicros > 0) {
+                // The exact cost. A stream that reached this cannot also carry an estimate — see
+                // ExplanationGraph.generate: the two are raised from disjoint paths — but the check
+                // is written as an `if`/`else` anyway, so that can never silently change to "both".
+                quota.recordSpend(principal, spentMicros, allowance)
+            } else {
+                estimatedSpend?.let { (costMicros, reason) ->
+                    // INFO, and not the SPEND_UNRECORDED_ALERT token: the ledger did move, by the
+                    // best estimate this layer has. An operator greps this to see how much of the
+                    // day's spend is estimated rather than exact — it is not, on its own, evidence
+                    // of a problem.
+                    log.info(
+                        "SPEND_ESTIMATED principal={} costMicros={} reason={}",
+                        principal.value,
+                        costMicros,
+                        reason,
+                    )
+                    quota.recordSpend(principal, costMicros, allowance)
+                }
+            }
+        }
     }
 }
 
@@ -949,7 +1017,12 @@ internal suspend fun ApplicationCall.bodyIsSmallEnough(): Boolean {
     return false
 }
 
-private fun LearningSession.toView(bodies: Map<String, String>) = SessionView(
+/**
+ * [status] is the caller's job to compute, through [SessionService.statusOf] — the one place the
+ * 30-day rule is written. A `LearningSession.status` field read directly here would miss every
+ * session that has gone quiet rather than been marked complete.
+ */
+private fun LearningSession.toView(bodies: Map<String, String>, status: SessionStatus) = SessionView(
     sessionId = id,
     topicSlug = topicSlug,
     rootNodeId = rootNodeId,
@@ -957,5 +1030,6 @@ private fun LearningSession.toView(bodies: Map<String, String>) = SessionView(
     nodes = nodes.map {
         NodeView(it.nodeId, it.parentNodeId, it.explanationKey, it.span, it.verb, it.variant, it.depth)
     },
+    status = status,
     explanations = bodies,
 )

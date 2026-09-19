@@ -127,6 +127,7 @@ class ComponentsTest {
         assertContains(indexNames(database, "sessions"), "principal_recent")
         assertContains(indexNames(database, "sessions"), "by_topic")
         assertContains(indexNames(database, "sessions"), "by_explanation_key")
+        assertContains(indexNames(database, "sessions"), "session_ttl")
         assertContains(indexNames(database, "principals"), "window_ttl")
         // AccountRepository, added by this task. `accountRepository.ensureIndexes()` was wired into
         // `bootstrap()` with no assertion here — the exact gap this test's own KDoc names. The two
@@ -155,6 +156,22 @@ class ComponentsTest {
         // The whole point of the index. Without `expireAfterSeconds` it is an ordinary ascending
         // index that reaps nothing, and `principals` grows by one document per anonymous visitor for
         // ever — silently, because an index that exists looks like an index that works.
+        assertEquals(0L, (index["expireAfterSeconds"] as Number).toLong())
+    }
+
+    @Test
+    fun `the session TTL index is a real TTL index and not an ordinary one`() = runTest {
+        val components = components("session-ttl")
+
+        components.bootstrap()
+
+        val index = assertNotNull(
+            components.mongo.database.getCollection<Document>("sessions").listIndexes().toList()
+                .firstOrNull { it.getString("name") == "session_ttl" },
+        )
+        // Without `expireAfterSeconds` this is an ordinary ascending index that reaps nothing, and
+        // an anonymous visitor's session grows the `sessions` collection for ever — see
+        // `SessionRepository.ensureIndexes`.
         assertEquals(0L, (index["expireAfterSeconds"] as Number).toLong())
     }
 
@@ -280,7 +297,7 @@ class ComponentsTest {
     }
 
     @Test
-    fun `module boots and serves without a model client, because the session routes defer it`() = testApplication {
+    fun `module boots and serves the catalogue even when the model client cannot build`() = testApplication {
         // The regression this exists for: `sessionRoutes(sessions = components.sessions, …)` reads a
         // lazy whose chain ends at `AnthropicLlmClient()`, which demands ANTHROPIC_API_KEY in its
         // constructor. Evaluating it while `module()` is being configured means a missing or
@@ -288,23 +305,28 @@ class ComponentsTest {
         // which need no model at all, down with it. The key is currently absent from fly secrets, so
         // this is the difference between "sessions unavailable" and "does not start".
         //
+        // The rule changed once `Components.prewarm` began to run on every boot: this factory IS
+        // now called, from inside `prewarm`'s own guard, exactly as `reconcile` calls
+        // `freemiusApiClientFactory` inside its own guard. The point of this test is that a build
+        // failure there still does not take the boot down. See `Components.prewarm`'s own KDoc.
+        //
         // Invisible to every other test in the suite, because they all inject a FakeLlmClient. This
-        // one injects a factory that fails if it is ever called.
+        // one injects a factory that always fails, to prove the guard holds.
         application {
             module(
                 Components(
                     mongo = Mongo(MongoConfig(TestFixtures.connectionString, "test_api_no_model")),
                     cookies = TestFixtures.cookieConfig,
-                    llmFactory = { error("the model client must not be built to serve the catalogue") },
+                    llmFactory = { error("simulated: the model client cannot build") },
                 )
             )
         }
 
         assertEquals(HttpStatusCode.OK, client.get("/api/health").status)
         // Not just the routing path: `bootstrap()` runs in the background and its failures are
-        // swallowed and logged, so a future version of it that touched `sessions` would leave both
-        // assertions above passing while the instance came up with no indexes and no catalogue.
-        // Waiting for readiness is what makes this cover the boot as well as the wiring.
+        // swallowed and logged, so a future version of it that touched `sessions` unguarded would
+        // leave both assertions above passing while the instance came up with no indexes and no
+        // catalogue. Waiting for readiness is what makes this cover the boot as well as the wiring.
         awaitReady(client)
         assertEquals(HttpStatusCode.OK, client.get("/api/catalog/topics").status)
     }
@@ -393,6 +415,11 @@ class ComponentsTest {
         // Nothing this slice registers touches the model. Building it eagerly means a missing or
         // freshly-rotated ANTHROPIC_API_KEY takes down topic browsing, which needs no model at all —
         // `AnthropicOkHttpClient.fromEnv()` demands the key during construction.
+        //
+        // This test reads properties directly, and it does not call `bootstrap()`. `bootstrap()`
+        // now builds the model client on every run, because `prewarm` needs it — see the test
+        // named "bootstrap builds the model client once for pre-warm, even when the migration is
+        // off", below, and `Components.prewarm`'s own KDoc for the rule that changed.
         components.catalog
         components.topicRequests
         components.quota
@@ -404,22 +431,24 @@ class ComponentsTest {
     }
 
     @Test
-    fun `bootstrap builds no model client when the migration is off`() = runTest {
+    fun `bootstrap builds the model client once for pre-warm, even when the migration is off`() = runTest {
         var clientBuilds = 0
 
         val components = Components(
             mongo = Mongo(MongoConfig(uri = TestFixtures.connectionString, databaseName = "test_api_no_migrate")),
             cookies = TestFixtures.cookieConfig,
-            // The migration is the only thing in bootstrap that forces the lazy model client. A
-            // build count of zero proves the migration did not run. It also proves that the
-            // catalogue boots with no ANTHROPIC_API_KEY. This class's KDoc protects that property.
+            // The rule changed: `migrate()` no longer forces the lazy model client on its own, but
+            // `prewarm()` now runs on every boot and reads `sessions` to reach it — see
+            // `Components.prewarm`'s own KDoc for why a published topic's seed must not wait on
+            // the migration flag. A build count of one proves `prewarm` ran exactly once; `llm` is
+            // itself `by lazy`, so the factory runs once no matter how many topics it pre-warms.
             llmFactory = { clientBuilds++; FakeLlmClient() },
             migrateOnBoot = false,
         )
 
         components.bootstrap()
 
-        assertEquals(0, clientBuilds, "bootstrap must not build a model client when the flag is off")
+        assertEquals(1, clientBuilds, "bootstrap must pre-warm, and so build the model client, even with the flag off")
     }
 
     @Test
@@ -541,6 +570,105 @@ class ComponentsTest {
                 "the summary did not name the failure count: ${summary.formattedMessage}",
             )
         }
+
+    @Test
+    fun `pre-warm runs even when the migration flag is off, and leaves one seed per published topic`() = runTest {
+        val components = Components(
+            mongo = Mongo(MongoConfig(uri = TestFixtures.connectionString, databaseName = "test_api_prewarm_no_migrate")),
+            cookies = TestFixtures.cookieConfig,
+            llmFactory = { FakeLlmClient() },
+            migrateOnBoot = false,
+        )
+        val explanations = components.mongo.database.getCollection<Document>("explanations")
+        explanations.drop()
+
+        components.bootstrap()
+
+        val published = components.catalog.listPublished(category = null, query = null)
+        assertEquals(
+            published.size.toLong(),
+            explanations.countDocuments(Filters.eq("modelFamily", "fake-model")),
+            "every published topic must have a seed, even with the migration flag off",
+        )
+    }
+
+    @Test
+    fun `pre-warm with the migration flag off never touches a document of another model family`() = runTest {
+        val components = Components(
+            mongo = Mongo(
+                MongoConfig(uri = TestFixtures.connectionString, databaseName = "test_api_prewarm_keeps_stranded"),
+            ),
+            cookies = TestFixtures.cookieConfig,
+            llmFactory = { FakeLlmClient() },
+            migrateOnBoot = false,
+        )
+        val explanations = components.mongo.database.getCollection<Document>("explanations")
+        explanations.drop()
+        // A document from a model family nobody runs any more. Only `migrate()` may remove one,
+        // and `migrate()` does not run when the flag is off.
+        explanations.insertOne(
+            Document()
+                .append("_id", "stranded")
+                .append("topicSlug", "quantum-physics")
+                .append("modelFamily", "claude-opus-5")
+                .append("body", "an unreachable body"),
+        )
+
+        components.bootstrap()
+
+        assertEquals(
+            1,
+            explanations.countDocuments(Filters.eq("modelFamily", "claude-opus-5")),
+            "pre-warm deleted a document of another model family; only migrate() may do that",
+        )
+        val published = components.catalog.listPublished(category = null, query = null)
+        assertEquals(
+            published.size.toLong(),
+            explanations.countDocuments(Filters.eq("modelFamily", "fake-model")),
+            "pre-warm must still seed every published topic under the current family",
+        )
+    }
+
+    @Test
+    fun `bootstrap does not throw when the model client cannot build for pre-warm, and the catalogue is still seeded`() =
+        runTest {
+            val components = Components(
+                mongo = Mongo(MongoConfig(uri = TestFixtures.connectionString, databaseName = "test_api_prewarm_no_key")),
+                cookies = TestFixtures.cookieConfig,
+                llmFactory = { error("no model credential configured") },
+                migrateOnBoot = false,
+            )
+
+            components.bootstrap() // must not throw, with no model credential configured
+
+            assertTrue(
+                components.catalog.listPublished(category = null, query = null).isNotEmpty(),
+                "the catalogue must be seeded even when the model client cannot build",
+            )
+        }
+
+    @Test
+    fun `a second boot's pre-warm calls the model zero times, because every seed already exists`() = runTest {
+        val fakeLlm = FakeLlmClient()
+        val components = Components(
+            mongo = Mongo(MongoConfig(uri = TestFixtures.connectionString, databaseName = "test_api_prewarm_idempotent")),
+            cookies = TestFixtures.cookieConfig,
+            llmFactory = { fakeLlm },
+            migrateOnBoot = false,
+        )
+
+        components.bootstrap()
+        val callsAfterFirstBoot = fakeLlm.calls.size
+        assertTrue(callsAfterFirstBoot > 0, "the first boot must generate at least one seed")
+
+        components.bootstrap()
+
+        assertEquals(
+            callsAfterFirstBoot,
+            fakeLlm.calls.size,
+            "the second boot's pre-warm must call the model zero more times",
+        )
+    }
 
     @Test
     fun `bootstrap runs reconciliation with no Freemius credential and does not throw`() = runTest {

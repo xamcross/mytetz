@@ -2,6 +2,7 @@ import { TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting, HttpTestingController } from '@angular/common/http/testing';
 import { AccountStore } from '../core/account.store';
+import { ApiService } from '../core/api.service';
 import { EXPLAIN_STREAM, ExplainStreamFn, SessionStore } from './session.store';
 import { ExplainRequest, SessionView, SpanPayload } from '../core/models';
 import { ExplainEvent, ExplainStreamError } from '../core/sse.client';
@@ -61,6 +62,7 @@ const view: SessionView = {
       depth: 2,
     },
   ],
+  status: 'ACTIVE',
   explanations: {
     k0: 'Quantum mechanics is…',
     k1: 'The pillars of modern physics…',
@@ -756,5 +758,38 @@ describe('SessionStore', () => {
 
     expect(store.error()).toBeNull();
     expect(store.currentBody()).toBe('The pillars of modern physics…');
+  });
+
+  // ------------------------------------------------------------------ completion
+
+  it('reports isCompleted from the loaded session, and refuses to explain once it is set', async () => {
+    await loadSession({ ...view, status: 'COMPLETED' });
+
+    expect(store.isCompleted()).toBe(true);
+
+    // The backend already refuses this with `409 SESSION_COMPLETED` — this is the client's own,
+    // cheaper guard, so a completed session's reader never opens a stream that can only fail.
+    await store.explain(span, 'EXPLAIN');
+
+    expect(streamCalls).toEqual([]);
+  });
+
+  it('reports isCompleted false for an ordinary, active session', async () => {
+    await loadSession();
+
+    expect(store.isCompleted()).toBe(false);
+  });
+
+  it('completes the session and reflects that immediately, with no re-read', async () => {
+    const complete = vi
+      .spyOn(TestBed.inject(ApiService), 'completeSession')
+      .mockResolvedValue(undefined);
+    await loadSession();
+
+    await store.complete();
+
+    expect(complete).toHaveBeenCalledWith('s1');
+    expect(store.isCompleted()).toBe(true);
+    expect(store.session()?.status).toBe('COMPLETED');
   });
 });

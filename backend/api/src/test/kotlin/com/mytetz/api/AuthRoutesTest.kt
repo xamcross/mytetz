@@ -10,10 +10,15 @@ import com.mytetz.account.GoogleOAuth
 import com.mytetz.account.MagicLinkService
 import com.mytetz.account.MailSender
 import com.mongodb.client.model.Filters
+import com.mytetz.assess.QuizAttempt
+import com.mytetz.assess.QuizKind
+import com.mytetz.assess.QuizQuestion
+import com.mytetz.assess.QuizTemplate
 import com.mytetz.billing.BillingConfig
 import com.mytetz.billing.BillingRepository
 import com.mytetz.billing.BillingService
 import com.mytetz.billing.SubscriptionStatus
+import com.mytetz.quota.PrincipalId
 import com.mytetz.quota.QuotaConfig
 import com.sun.net.httpserver.HttpServer
 import io.ktor.client.HttpClient
@@ -79,6 +84,7 @@ class AuthRoutesTest {
         val mailSender: CapturingMailSender,
         val stack: TestFixtures.SessionStack,
         val billingRepository: BillingRepository,
+        val quiz: TestFixtures.QuizStack,
         /**
          * A second, independently-cookied client against the same running application. The trial
          * cap keys on the caller's IP bucket, and every client this helper builds resolves to the
@@ -164,6 +170,7 @@ class AuthRoutesTest {
         block: suspend Scope.() -> Unit,
     ) = testApplication {
         val stack = TestFixtures.sessionApp()
+        val quiz = TestFixtures.quizApp(stack)
         val accountRepository = AccountRepository(stack.database)
         // The same clock the route itself reads, so a session's own `createdAtEpochMillis` and the
         // freshness check in `POST /api/account/delete` are compared on one clock and not two —
@@ -203,6 +210,7 @@ class AuthRoutesTest {
                     cookies = TestFixtures.cookieConfig,
                     quotaRepository = stack.quotaRepository,
                     billing = billing,
+                    quizzes = { quiz.service },
                     turnstile = turnstile,
                     turnstileSiteKey = turnstileSiteKey,
                     clientAddresses = ClientAddressConfig(trustedHeader = null),
@@ -212,7 +220,7 @@ class AuthRoutesTest {
         }
 
         fun freshClient() = createClient { install(HttpCookies); followRedirects = false }
-        Scope(freshClient(), account, mailSender, stack, billingRepository, newClient = ::freshClient).block()
+        Scope(freshClient(), account, mailSender, stack, billingRepository, quiz, newClient = ::freshClient).block()
     }
 
     // ------------------------------------------------------------------ the magic link
@@ -724,6 +732,50 @@ class AuthRoutesTest {
             client.get("/api/account").status,
             "the session cookie must no longer resolve to anyone",
         )
+    }
+
+    @Test
+    fun `deleting an account removes every quiz attempt but leaves the quiz template`() = authApp {
+        val created = createSession()
+        val email = signIn()
+        val principalId = PrincipalId.user(requireNotNull(account.findByEmail(email)).id).value
+        val template = quiz.repository.insertIfAbsent(
+            QuizTemplate(
+                key = "k1",
+                kind = QuizKind.TEST_ME,
+                scopeKeys = listOf("scope-1"),
+                questions = listOf(
+                    QuizQuestion("q1", "stem", listOf("a", "b", "c", "d"), 0, "scope-1", "why"),
+                ),
+                promptVersion = "v1",
+                modelFamily = "family",
+                modelId = "model",
+                inputTokens = 10,
+                outputTokens = 5,
+                costMicros = 100,
+                requestCount = 0,
+                createdAtEpochMillis = 0,
+            ),
+        )
+        quiz.repository.upsertAttempt(
+            QuizAttempt(
+                id = "attempt-1",
+                principalId = principalId,
+                sessionId = created.sessionId,
+                templateId = template.key,
+                answers = emptyList(),
+                score = null,
+                total = 1,
+                createdAtEpochMillis = 0,
+                submittedAtEpochMillis = null,
+            ),
+        )
+
+        val response = client.post("/api/account/delete")
+
+        assertEquals(HttpStatusCode.NoContent, response.status, response.bodyAsText())
+        assertNull(quiz.repository.findAttempt("attempt-1"), "the quiz attempt must be gone")
+        assertNotNull(quiz.repository.findByKey(template.key), "the quiz template must survive its own principal's deletion")
     }
 
     @Test

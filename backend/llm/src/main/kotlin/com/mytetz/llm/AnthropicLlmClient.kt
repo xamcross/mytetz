@@ -104,6 +104,11 @@ class AnthropicLlmClient(
                         cacheReadInputTokens = u.cacheReadInputTokens().orElse(0L),
                         cacheCreationInputTokens = u.cacheCreationInputTokens().orElse(0L),
                     )
+                    // Reported the instant it is known, and not held for Done: a stream that later
+                    // stops early — a cancellation, or LlmStreamTruncatedException — never reaches
+                    // Done at all, and a caller estimating that stream's cost needs a real input
+                    // count rather than only the length of the prompt it sent. See LlmChunk.EarlyUsage.
+                    emit(LlmChunk.EarlyUsage(usage))
                 }
 
                 val messageDelta = event.messageDelta().orElse(null)

@@ -15,6 +15,7 @@ import io.ktor.server.routing.Route
 import io.ktor.server.routing.post
 import io.ktor.utils.io.toByteArray
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerializationException
 import org.slf4j.LoggerFactory
 import java.net.URLEncoder
 
@@ -138,7 +139,22 @@ fun Route.billingRoutes(
             return@post
         }
 
-        val event = FreemiusWebhook.parse(rawBody)
+        val event = try {
+            FreemiusWebhook.parse(rawBody)
+        } catch (cause: SerializationException) {
+            // Never cause.message. The signature already verified. A valid signature is not proof
+            // that the JSON inside has the shape this route expects. A JsonDecodingException's
+            // own message can quote a part of the input. That part can hold an email address.
+            //
+            // identifyOrNull reads the type and the id best-effort, from the same body. It never
+            // raises. Both fields are vendor values, and not personal data. This line stays safe
+            // to grep, even when the sender is untrusted. It still names the event for an
+            // operator who needs to find it in the Freemius dashboard.
+            val identity = FreemiusWebhook.identifyOrNull(rawBody)
+            log.warn("BILLING_UNPARSEABLE_EVENT type={} id={}", identity.type, identity.id)
+            call.respond(HttpStatusCode.BadRequest, ApiError("INVALID_REQUEST", "the request was not valid for this endpoint"))
+            return@post
+        }
         val resolved = resolveUserReference(event) { email ->
             MagicLinkService.normaliseEmail(email)?.let { account.findByEmail(it)?.id }
         }
