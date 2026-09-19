@@ -111,14 +111,6 @@ const POLL_TIMEOUT_MILLIS = 30000;
             >
               Sign out
             </button>
-            <button
-              type="button"
-              class="mt-pill mt-pill--ghost"
-              data-action="sign-out-everywhere"
-              (click)="signOutEverywhere()"
-            >
-              Sign out everywhere
-            </button>
             @if (!confirmingDelete()) {
               <button
                 type="button"
@@ -359,16 +351,6 @@ export class AccountPageComponent implements OnInit {
       await this.account.load();
     } catch {
       this.actionError.set('Could not sign out. Check your connection and try again.');
-    }
-  }
-
-  async signOutEverywhere(): Promise<void> {
-    this.actionError.set(null);
-    try {
-      await this.api.signOutAll();
-      await this.account.load();
-    } catch {
-      this.actionError.set('Could not sign out everywhere. Check your connection and try again.');
     }
   }
 

@@ -99,6 +99,9 @@ data class AccountView(
  * `GET /api/auth/google`, `GET /api/auth/google/callback`, `POST /api/auth/sign-out`,
  * `POST /api/auth/sign-out-all`, `GET /api/account`, and `POST /api/account/delete`.
  *
+ * No page calls `POST /api/auth/sign-out-all` since issue #88 removed its button from the account
+ * page.
+ *
  * ## Sign-in carries the anonymous trail
  *
  * A visitor reads a seed anonymously, highlights a phrase, and signs in. Every route below that

@@ -153,15 +153,6 @@ describe('ApiService', () => {
     await expect(promise).resolves.toBeNull();
   });
 
-  it('signs out of every session', async () => {
-    const promise = service.signOutAll();
-    const req = http.expectOne('/api/auth/sign-out-all');
-    expect(req.request.method).toBe('POST');
-    req.flush(null, { status: 204, statusText: 'No Content' });
-
-    await expect(promise).resolves.toBeNull();
-  });
-
   it('fetches a checkout url', async () => {
     const promise = service.checkout();
     const req = http.expectOne('/api/billing/checkout');
