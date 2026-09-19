@@ -38,6 +38,15 @@ class TopicPageHtmlTest {
     )
 
     @Test
+    fun `the html element states the language of the page`() {
+        // A screen reader selects its voice from this attribute, and a search engine reads it. The
+        // first version of this page had none, and no test saw it: the live page showed it on
+        // 2026-09-19.
+        val html = render(view())
+        assertTrue(html.contains("<html lang=\"en\">"), html.take(200))
+    }
+
+    @Test
     fun `a title carrying a script tag is escaped in the HTML body, not executed`() {
         val html = render(view(title = "<script>alert(1)</script>"))
 
