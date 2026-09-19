@@ -231,6 +231,23 @@ class SvgSanitizerTest {
     }
 
     @Test
+    fun `an attribute with a namespace prefix is dropped -- xmlns colon, xml colon and a made-up colon alike`() {
+        // "evil" must be a declared prefix, or the document is not well-formed namespace XML at
+        // all -- a different failure than the one this test means to pin.
+        val result = SvgSanitizer.sanitize(
+            """<svg xmlns:x="http://example.com" xml:base="https://evil.example/"
+               xmlns:evil="http://example.com/evil" evil:fill="red">
+               <circle cx="1" cy="1" r="1"/></svg>"""
+        )
+        val clean = assertIs<SvgSanitizeResult.Clean>(result)
+        assertTrue("xmlns:x" !in clean.svg, clean.svg)
+        assertTrue("xmlns:evil" !in clean.svg, clean.svg)
+        assertTrue("xml:base" !in clean.svg, clean.svg)
+        assertTrue("evil:fill" !in clean.svg, clean.svg)
+        assertTrue("evil.example" !in clean.svg, clean.svg)
+    }
+
+    @Test
     fun `nesting past the depth bound is refused`() {
         val nested = "<g>".repeat(41) + "<circle cx=\"1\" cy=\"1\" r=\"1\"/>" + "</g>".repeat(41)
         val result = SvgSanitizer.sanitize("<svg>$nested</svg>")

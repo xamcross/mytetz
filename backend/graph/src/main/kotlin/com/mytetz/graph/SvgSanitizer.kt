@@ -66,6 +66,15 @@ sealed interface SvgSanitizeResult {
  * child must still pass every rule this file states. Nothing skips a check by riding in on a
  * dropped wrapper's back, a `<script>` one level down included.
  *
+ * An attribute whose qualified name carries a colon is dropped outright, on any element, before any
+ * other attribute rule runs — `xmlns:xlink`, `xml:base`, and a made-up `evil:fill` alike. Every
+ * attribute this file allows is unprefixed, so this rule costs nothing a legitimate diagram needs.
+ * It also closes a specific bypass: a namespace-declaration attribute such as `xmlns:x="…"` is
+ * represented, by a namespace-aware parser, with the *local* name `x` and the prefix `xmlns` — the
+ * opposite of how it reads — so a check keyed on local name alone would keep it as though it were
+ * the ordinary `x`-coordinate attribute. Checking the qualified name for a colon first removes that
+ * whole class of confusion, for every prefixed attribute at once.
+ *
  * An attribute whose local name starts with `on`, case-folded, is dropped on any element — every
  * event handler, named or not, by the start of its name rather than a fixed list of known bad
  * names, so a future handler name this list does not yet know is still caught.
@@ -242,8 +251,9 @@ object SvgSanitizer {
             val localName = (attribute.localName ?: qualifiedName).lowercase()
 
             val keep = when {
+                ":" in qualifiedName -> false
                 localName.startsWith("on") -> false
-                localName !in ALLOWED_ATTRIBUTES && qualifiedName.lowercase() !in ALLOWED_ATTRIBUTES -> false
+                localName !in ALLOWED_ATTRIBUTES -> false
                 localName in FILL_STROKE_ATTRIBUTES -> isSafeFillOrStrokeValue(attribute.nodeValue)
                 localName in REFERENCE_ONLY_ATTRIBUTES -> isSafeReferenceValue(attribute.nodeValue)
                 else -> true
