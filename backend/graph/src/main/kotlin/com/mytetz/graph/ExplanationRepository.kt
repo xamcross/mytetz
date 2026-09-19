@@ -145,4 +145,58 @@ open class ExplanationRepository(database: MongoDatabase) {
             ),
         ).deletedCount
     }
+
+    // ------------------------------------------------------------------ published (issue #48)
+
+    /**
+     * Sets [Explanation.published]. The only writer of this field anywhere in this project — see
+     * that field's own KDoc. A curator calls this through the review script
+     * (`scripts/PublishTopExplanations.kt`), never a request-time route.
+     */
+    suspend fun setPublished(key: String, published: Boolean) {
+        collection.updateOne(Filters.eq("_id", key), Updates.set("published", published))
+    }
+
+    /**
+     * Every published `EXPLAIN` node, for the glossary and for the sitemap. A `SEED` node names no
+     * phrase, so it never belongs in a glossary, and a `VISUALIZE` node carries an SVG this project
+     * does not render on a public page in this issue — see [Explanation.media]'s own KDoc — so
+     * both are excluded by the `verb` filter, not by a second check downstream.
+     */
+    suspend fun findPublished(): List<Explanation> =
+        collection.find(Filters.and(Filters.eq("verb", Verb.EXPLAIN.name), Filters.eq("published", true))).toList()
+
+    /**
+     * Finds every document whose `_id` starts with [prefix] (12 lowercase hex characters, per spec
+     * section 7.1 of `docs/superpowers/specs/2026-09-19-public-surface-design.md`). Zero results is
+     * an ordinary miss. More than one result is a short-key collision — the caller
+     * (`ExplanationPageRoutes.kt`) answers `404` for both and logs `EXPLANATION_KEY_COLLISION` at
+     * `WARN` with both keys, per spec section 7.2.
+     *
+     * MongoDB's own default index on `_id` (named `_id_`, created automatically for every
+     * collection) already serves this range query in sorted order, so this method adds no new
+     * index. `ComponentsTest`'s own index-listing test asserts that `_id_` exists on this
+     * collection, so a later change cannot drop it without a test noticing.
+     */
+    suspend fun findByShortKeyPrefix(prefix: String): List<Explanation> {
+        val upperBound = prefix.dropLast(1) + (prefix.last() + 1)
+        return collection.find(Filters.and(Filters.gte("_id", prefix), Filters.lt("_id", upperBound))).toList()
+    }
+
+    /**
+     * The top [limit] `EXPLAIN` nodes by [Explanation.requestCount], for the review script
+     * (`scripts/PublishTopExplanations.kt`) to consider for publication. A `SEED` node is excluded
+     * for the same reason [findPublished] excludes it: a seed names no phrase, so publishing one
+     * would give the glossary an entry with nothing to define. The existing `topic_demand` index
+     * (ascending `topicSlug`, descending `requestCount`) does not cover this query, because this
+     * query has no `topicSlug` filter; a store at today's scale (well under the 512 MB Atlas M0
+     * limit — see spec section 7.2's own store-size table) makes a full sort of the `EXPLAIN`
+     * subset a bounded and infrequent cost, and this method runs only when a curator runs the
+     * review script by hand, never on a request path.
+     */
+    suspend fun findTopByRequestCount(limit: Int): List<Explanation> =
+        collection.find(Filters.eq("verb", Verb.EXPLAIN.name))
+            .sort(Indexes.descending("requestCount"))
+            .limit(limit)
+            .toList()
 }
