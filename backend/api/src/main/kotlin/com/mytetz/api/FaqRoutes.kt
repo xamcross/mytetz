@@ -94,8 +94,12 @@ internal fun faqEntries(billingConfig: BillingConfig): List<FaqEntry> = listOf(
     FaqEntry(
         id = "how-much-does-mytetz-cost",
         question = "How much does mytetz cost?",
-        answer = "Mytetz costs €$FAQ_PRICE_EUR_PER_MONTH each month. Freemius bills the " +
-            "subscriber, once the trial ends.",
+        // The trial takes no card, so nothing bills a learner when the trial ends. A learner
+        // subscribes through the checkout link of `POST /api/billing/checkout`. An earlier text
+        // said that Freemius bills the subscriber "once the trial ends", which a reader takes as
+        // an automatic payment. The review of issue #121 corrected it.
+        answer = "Mytetz costs €$FAQ_PRICE_EUR_PER_MONTH each month. A learner subscribes through " +
+            "the Freemius checkout. The trial needs no card, so no payment starts when the trial ends.",
         link = FaqLink(href = "/terms", label = "Terms"),
     ),
     FaqEntry(
@@ -126,8 +130,9 @@ internal fun faqEntries(billingConfig: BillingConfig): List<FaqEntry> = listOf(
     FaqEntry(
         id = "what-happens-to-the-data-of-a-learner",
         question = "What happens to the data of a learner, and how does a learner delete the account?",
-        answer = "A learner deletes their account, their sessions and their quiz attempts from " +
-            "the account page. An explanation stays in the catalogue. It holds no personal data.",
+        answer = "A learner can delete the account on the account page. That removes the account, " +
+            "each reading session and each quiz attempt. An explanation stays on the site, because " +
+            "other learners read the same text. It holds no personal data.",
         link = FaqLink(href = "/privacy", label = "Privacy policy"),
     ),
     FaqEntry(
