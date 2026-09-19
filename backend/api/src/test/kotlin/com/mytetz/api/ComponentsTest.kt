@@ -119,6 +119,7 @@ class ComponentsTest {
         assertContains(indexNames(database, "explanations"), "created_at")
         assertContains(indexNames(database, "sessions"), "principal_recent")
         assertContains(indexNames(database, "sessions"), "by_topic")
+        assertContains(indexNames(database, "sessions"), "session_ttl")
         assertContains(indexNames(database, "principals"), "window_ttl")
         // AccountRepository, added by this task. `accountRepository.ensureIndexes()` was wired into
         // `bootstrap()` with no assertion here — the exact gap this test's own KDoc names. The two
@@ -147,6 +148,22 @@ class ComponentsTest {
         // The whole point of the index. Without `expireAfterSeconds` it is an ordinary ascending
         // index that reaps nothing, and `principals` grows by one document per anonymous visitor for
         // ever — silently, because an index that exists looks like an index that works.
+        assertEquals(0L, (index["expireAfterSeconds"] as Number).toLong())
+    }
+
+    @Test
+    fun `the session TTL index is a real TTL index and not an ordinary one`() = runTest {
+        val components = components("session-ttl")
+
+        components.bootstrap()
+
+        val index = assertNotNull(
+            components.mongo.database.getCollection<Document>("sessions").listIndexes().toList()
+                .firstOrNull { it.getString("name") == "session_ttl" },
+        )
+        // Without `expireAfterSeconds` this is an ordinary ascending index that reaps nothing, and
+        // an anonymous visitor's session grows the `sessions` collection for ever — see
+        // `SessionRepository.ensureIndexes`.
         assertEquals(0L, (index["expireAfterSeconds"] as Number).toLong())
     }
 

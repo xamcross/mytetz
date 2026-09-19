@@ -9,6 +9,7 @@ import com.mytetz.graph.GenerationFailedException
 import com.mytetz.graph.Verb
 import com.mytetz.session.CorruptSessionException
 import com.mytetz.session.DepthLimitException
+import com.mytetz.session.SessionCompletedException
 import com.mytetz.session.SessionFullException
 import com.mytetz.session.SessionNotFoundException
 import com.mytetz.session.SpanMismatchException
@@ -251,6 +252,19 @@ class ErrorMappingTest {
     }
 
     @Test
+    fun `a completed session is 409 under its own code`() = testApplication {
+        throwing { SessionCompletedException("session s1 is completed and admits no new node") }
+
+        val response = client.get("/boom")
+
+        assertEquals(HttpStatusCode.Conflict, response.status)
+        assertEquals("SESSION_COMPLETED", response.apiError().code)
+        // Echoed deliberately, on the same reasoning as the three ceilings above: the message states
+        // the one thing a client needs to explain the refusal to the learner.
+        assertTrue(response.apiError().message.contains("completed"), "the reason was not echoed")
+    }
+
+    @Test
     fun `a failed generation is 502 and does not echo the upstream detail`() = testApplication {
         throwing {
             GenerationFailedException(
@@ -382,7 +396,7 @@ class ErrorMappingTest {
      * How many `exception<...>` arms `installErrorMapping` registers, excluding the `Throwable`
      * catch-all. Hand written on purpose; see the test that reads it.
      */
-    private val REGISTERED_EXCEPTION_ARMS = 15
+    private val REGISTERED_EXCEPTION_ARMS = 16
 
     /**
      * Every type `installErrorMapping` registers an `exception<...>` arm for, read out of the source.
@@ -414,6 +428,7 @@ class ErrorMappingTest {
         DepthLimitException("a chain of 9 links exceeds the limit of 8"),
         SessionFullException("session s1 already holds 200 of 200 nodes"),
         VariantLimitException("variant 4 is outside the permitted range 0..3"),
+        SessionCompletedException("session s1 is completed and admits no new node"),
         SessionNotFoundException("s-vanished"),
         QuizAttemptNotFoundException("attempt-vanished"),
         ResourceNotFoundException("no topic with slug 'nope'"),
