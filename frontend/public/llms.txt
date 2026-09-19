@@ -6,7 +6,8 @@ The catalogue lists topics by title, category and summary. A reader can search, 
 
 ## Pages
 
-- [Catalogue](https://mytetz.com/): the curated list of topics, and the site's home page.
+- [Catalogue](https://mytetz.com/): the curated list of topics.
+- [How it works](https://mytetz.com/how-it-works): which model writes an explanation, the known limits, and a contact.
 - [Privacy policy](https://mytetz.com/privacy)
 - [Terms of service](https://mytetz.com/terms)
 - [Imprint](https://mytetz.com/imprint)

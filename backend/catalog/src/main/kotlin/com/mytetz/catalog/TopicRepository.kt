@@ -4,6 +4,7 @@ import com.mongodb.client.model.Filters
 import com.mongodb.client.model.IndexOptions
 import com.mongodb.client.model.Indexes
 import com.mongodb.client.model.ReplaceOptions
+import com.mongodb.client.model.Updates
 import com.mongodb.kotlin.client.coroutine.MongoDatabase
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.toList
@@ -46,6 +47,12 @@ class TopicRepository(database: MongoDatabase) {
      * redeploying, and withdrawing a topic is still done once. Adding a *new* topic naturally takes
      * the file's status, because there is no stored row to preserve.
      *
+     * [Topic.reviewedAt] carries over the same way `status` does, and for the same reason. A topic
+     * decoded fresh from `topics.json` always carries `reviewedAt = null`, so a plain [upsert] on
+     * every boot would erase a curator's review date the very next time the machine scales from
+     * zero. `TopicRepositoryTest`'s own `upsertPreservingStatus does not erase an existing
+     * reviewedAt` pins this.
+     *
      * Read-then-write, and deliberately unguarded. The alternative — a field-by-field `$set` with
      * `$setOnInsert` on `status` — has to list every property of [Topic] and silently stops writing
      * any property added later. The race it leaves needs an operator to change a topic's status in
@@ -53,8 +60,16 @@ class TopicRepository(database: MongoDatabase) {
      * do it again. Nothing else in the system writes `status`.
      */
     suspend fun upsertPreservingStatus(topic: Topic) {
-        val storedStatus = findBySlug(topic.slug)?.status
-        upsert(if (storedStatus == null) topic else topic.copy(status = storedStatus))
+        val stored = findBySlug(topic.slug)
+        upsert(
+            if (stored == null) topic
+            else topic.copy(status = stored.status, reviewedAt = stored.reviewedAt)
+        )
+    }
+
+    /** Sets [Topic.reviewedAt] alone. A curator calls this once a person confirms a topic's text. */
+    suspend fun setReviewedAt(slug: String, epochMillis: Long) {
+        collection.updateOne(Filters.eq("_id", slug), Updates.set("reviewedAt", epochMillis))
     }
 
     suspend fun findBySlug(slug: String): Topic? =

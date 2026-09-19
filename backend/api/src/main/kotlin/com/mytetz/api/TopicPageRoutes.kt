@@ -62,6 +62,7 @@ fun Route.topicPageRoutes(
                     summary = topic.summary,
                     seedBody = seed?.body,
                     relatedTopics = related,
+                    reviewedAt = topic.reviewedAt,
                 )
             )
         }
