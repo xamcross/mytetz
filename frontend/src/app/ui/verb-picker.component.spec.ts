@@ -38,6 +38,7 @@ describe('VerbPickerComponent', () => {
   const button = (verb: Verb): HTMLButtonElement =>
     fixture.nativeElement.querySelector(`button[data-verb="${verb}"]`);
   const root = (): HTMLElement => fixture.nativeElement.querySelector('[role="dialog"]');
+  const cancel = (): HTMLButtonElement => fixture.nativeElement.querySelector('.picker__cancel');
   /** A real Tab press on whatever holds focus, which is how the trap is reached in a browser. */
   const pressTab = (shiftKey: boolean): void => {
     document.activeElement?.dispatchEvent(
@@ -168,6 +169,36 @@ describe('VerbPickerComponent', () => {
       fixture.detectChanges();
       expect(dismissed).toBe(1);
       expect(reasons).toEqual(['escape']);
+    });
+
+    it('ignores a further click on Cancel', () => {
+      cancel().click();
+      expect(dismissed).toBe(1);
+    });
+  });
+
+  /**
+   * Finding F13 of the design review. A phone has no Escape key, and the sheet's only exit was a
+   * tap outside it, which a learner had to guess. `getComputedStyle` picks up the media query
+   * below: jsdom's default viewport is 1024px, wider than the 767px cutoff, so it agrees with a
+   * real desktop browser that the control is hidden there — Task 8's own two-width manual pass
+   * covers the 390px case this file cannot lay out.
+   */
+  describe('the Cancel control', () => {
+    it('is in the DOM, hidden by CSS above 768px', () => {
+      expect(cancel(), 'the control exists at every width').not.toBeNull();
+      expect(cancel().textContent?.trim()).toBe('Cancel');
+      expect(getComputedStyle(cancel()).display, 'hidden above 768px').toBe('none');
+    });
+
+    it('closes the picker the same way Escape does', () => {
+      cancel().click();
+      fixture.detectChanges();
+      expect(dismissed).toBe(1);
+      // The host returns focus to the text on this reason alone — see `PickerDismissal`. Cancel
+      // must take the same path so a learner who presses it keeps their place the same way.
+      expect(reasons).toEqual(['escape']);
+      expect(chosen).toEqual([]);
     });
   });
 

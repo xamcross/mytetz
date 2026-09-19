@@ -5,6 +5,7 @@ import {
   inject,
   input,
   output,
+  viewChild,
   viewChildren,
 } from '@angular/core';
 import { SpanPayload, Verb } from '../core/models';
@@ -95,6 +96,20 @@ const VERBS: ReadonlyArray<{ verb: Verb; name: string; caption: string }> = [
           </button>
         }
       </div>
+      <!--
+        Finding F13 of the design review. A phone has no Escape key, and a tap outside the sheet
+        was the only exit, which a learner had to guess. This button gives the sheet a visible
+        way to close, and it shows below 768px only: a wide screen already keeps Escape and a
+        press outside, so a second, redundant close control would only add noise there.
+      -->
+      <button
+        #cancelBtn
+        type="button"
+        class="mt-pill mt-pill--ghost picker__cancel"
+        (click)="onCancel()"
+      >
+        Cancel
+      </button>
     </div>
   `,
   styles: [
@@ -221,6 +236,15 @@ const VERBS: ReadonlyArray<{ verb: Verb; name: string; caption: string }> = [
       .picker__verb--primary .picker__caption {
         color: var(--mt-surface);
       }
+      /* F13. Hidden above 768px on purpose: a wide screen already closes the picker on Escape and
+         on a press outside, so a second, always-on close control would only add noise there.
+         \`.mt-pill mt-pill--ghost\` on the tag above supplies every colour and border this control
+         needs, so nothing here draws either — issue #105 must not touch a colour or a border of
+         this file, because draft pull request #126 changes both here, and the two changes must
+         join without a clash. */
+      .picker__cancel {
+        display: none;
+      }
       /* Below 768px the same card rises from the bottom edge. \`top\` and \`left\` are set again
          here, so the anchor the host passed in is simply unused — no !important, and no
          measurement in TypeScript. */
@@ -237,6 +261,11 @@ const VERBS: ReadonlyArray<{ verb: Verb; name: string; caption: string }> = [
           /* The sheet rises from the edge it is attached to. */
           transform-origin: bottom center;
           animation: picker-rise var(--mt-dur-panel) var(--mt-ease-out) both;
+        }
+        .picker__cancel {
+          display: block;
+          width: 100%;
+          text-align: center;
         }
         @keyframes picker-rise {
           from {
@@ -295,6 +324,7 @@ export class VerbPickerComponent {
   readonly verbs = VERBS;
 
   private readonly verbButtons = viewChildren<ElementRef<HTMLButtonElement>>('verb');
+  private readonly cancelButton = viewChild<ElementRef<HTMLButtonElement>>('cancelBtn');
 
   /**
    * True from the moment this picker first asks its host to dismiss it.
@@ -337,6 +367,35 @@ export class VerbPickerComponent {
   }
 
   /**
+   * Finding F13 of the design review. The Cancel control closes the picker the same way Escape
+   * does — the reason is `'escape'`, and not a reason of its own — so the host returns focus to
+   * the same place either way. See [closing] for why this checks it first.
+   */
+  onCancel(): void {
+    if (this.closing) return;
+    this.closing = true;
+    this.dismissed.emit('escape');
+  }
+
+  /**
+   * Every control Tab should reach, in order: the five verbs, and Cancel where it is visible.
+   *
+   * `getComputedStyle` and not [closing] or a stored flag: Cancel's own visibility is decided by
+   * a media query in this file's styles, and nothing in TypeScript measures the viewport (see the
+   * class doc comment) — this reads the one result of that query the DOM already carries, inside
+   * an event handler and never on the render path, the same way [FocusCardComponent.onSelectionChanged]
+   * reads `window.getSelection()`.
+   */
+  private focusableControls(): HTMLElement[] {
+    const verbs = this.verbButtons().map((b) => b.nativeElement);
+    const cancel = this.cancelButton()?.nativeElement;
+    if (cancel !== undefined && getComputedStyle(cancel).display !== 'none') {
+      return [...verbs, cancel];
+    }
+    return verbs;
+  }
+
+  /**
    * Keeps Tab inside the picker. Without this, Tab walks into the page behind an open dialog.
    *
    * The template binds this to `keydown.tab` **and** to `keydown.shift.tab`. Angular builds a full
@@ -351,10 +410,10 @@ export class VerbPickerComponent {
     // Angular types `$event` as `Event` for a compound key pseudo-event, so the narrow happens
     // here. The template call site stays type-checked.
     const key = event as KeyboardEvent;
-    const buttons = this.verbButtons().map((b) => b.nativeElement);
-    if (buttons.length === 0) return;
-    const first = buttons[0];
-    const last = buttons[buttons.length - 1];
+    const controls = this.focusableControls();
+    if (controls.length === 0) return;
+    const first = controls[0];
+    const last = controls[controls.length - 1];
     const active = this.host.nativeElement.ownerDocument.activeElement;
     if (key.shiftKey && active === first) {
       key.preventDefault();
