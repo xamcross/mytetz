@@ -67,15 +67,34 @@ const METERED_STATUSES: ReadonlySet<string> = new Set([
       .allowance-meter {
         display: flex;
         align-items: baseline;
-        gap: 8px;
+        flex-wrap: wrap;
+        gap: 4px 8px;
         font-size: 13px;
       }
       .allowance-meter__count {
         font-weight: 700;
-        white-space: nowrap;
+        min-width: 0;
       }
       .allowance-meter__detail {
         color: var(--mt-muted);
+        min-width: 0;
+      }
+      /*
+       * A defect found in a screenshot on 2026-09-19, and not by issue #100's own test: on
+       * the account page at 390px, the account card's own meter did not wrap. "12 of 40 left
+       * today" and "Resets September 20, 2026 at 3:00 PM." sat on one line, wider than the
+       * card, and the page scrolled sideways by about 20px. Issue #100 only ever fixed the
+       * header — see the comment below — and its own test only asserted that the detail text
+       * stays visible in the account card, never that the card itself stays inside the page.
+       *
+       * The two white-space: nowrap rules now apply inside the header only, through
+       * host-context(.bar), so a one-line meter stays true where the design calls for it —
+       * the header bar is a fixed 64px, and a wrapped meter there would collide with the row
+       * below it — and the account page's own card, which has no such height limit, wraps onto a
+       * second line instead of pushing the page sideways.
+       */
+      :host-context(.bar) .allowance-meter__count,
+      :host-context(.bar) .allowance-meter__detail {
         white-space: nowrap;
       }
       .allowance-meter__error {

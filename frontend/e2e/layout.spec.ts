@@ -1634,6 +1634,42 @@ test('the account page still shows the full detail text of the meter at 390px', 
   ).toBeHidden();
 });
 
+/**
+ * A screenshot taken on 2026-09-19 found a defect issue #100 did not catch: on `/account` at
+ * 390px, the account card's own meter does not wrap. "12 of 40 left today" and "Resets
+ * September 20, 2026 at 3:00 PM." sit on one line, wider than the card, and the page scrolls
+ * sideways by about 20px. Issue #100's own test above only asserts that the detail text is
+ * present — it never measures the card's width against the page's.
+ */
+test('the account card does not scroll the page sideways at 390px, and the meter stays inside it', async ({
+  page,
+}) => {
+  await stubAccount(page, accountView());
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.goto('/account');
+
+  const card = page.locator('.account-page__card');
+  const detail = card.locator('.allowance-meter__detail');
+  await expect(detail).toBeVisible();
+  await expect(detail).toContainText('Resets September 20, 2026 at 3:00 PM.');
+
+  const doc = await page.evaluate(() => ({
+    scroll: document.documentElement.scrollWidth,
+    client: document.documentElement.clientWidth,
+  }));
+  expect(doc.scroll, 'the account page does not scroll sideways at 390px').toBeLessThanOrEqual(
+    doc.client,
+  );
+
+  const cardBox = (await card.boundingBox())!;
+  const detailBox = (await detail.boundingBox())!;
+  expect(detailBox.x, 'the detail text starts inside the card').toBeGreaterThanOrEqual(cardBox.x);
+  expect(
+    detailBox.x + detailBox.width,
+    'the detail text ends inside the card',
+  ).toBeLessThanOrEqual(cardBox.x + cardBox.width);
+});
+
 test('the mark draws at 28px, left of the wordmark', async ({ page }) => {
   await stubCatalogueAndSession(page);
   await page.setViewportSize(WIDTHS.wide);
