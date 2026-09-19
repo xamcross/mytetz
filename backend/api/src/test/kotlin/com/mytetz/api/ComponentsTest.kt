@@ -18,8 +18,11 @@ import com.mytetz.persistence.MongoConfig
 import com.mytetz.session.LearningSession
 import com.mytetz.session.SessionNode
 import com.mytetz.session.SessionRepository
+import com.mytetz.session.SpanSelection
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
+import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.respond
 import io.ktor.client.plugins.cookies.HttpCookies
 import io.ktor.client.request.get
 import io.ktor.client.request.head
@@ -27,8 +30,10 @@ import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
+import io.ktor.http.headersOf
 import io.ktor.server.testing.testApplication
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -401,6 +406,66 @@ class ComponentsTest {
             explain.status,
             "the explain route did not run; the catch-all or the SPA answered: ${explain.bodyAsText()}",
         )
+    }
+
+    /**
+     * The one test in this file for the Commons wiring itself. [CommonsClientTest] already proves
+     * the client's own request and its own acceptance rules; this proves only the seam —
+     * `commonsClientFactory`'s default builds a real client, and `graph`'s own `commonsLookup`
+     * lambda really calls it — the same division of labour the Freemius tests already draw between
+     * [CommonsClientTest] and `ComponentsTest`'s own reconciliation tests.
+     *
+     * Drives `components.sessions` directly, service to service, not through the HTTP routes:
+     * nothing about this test is about routing, and Task 9's own `SessionRoutesTest` covers the
+     * wire shape. Reads the persisted [com.mytetz.graph.Explanation] back through a second
+     * [ExplanationRepository] built on the same database — the same reach-past-the-service pattern
+     * the eviction tests above already use.
+     */
+    @Test
+    fun `Components wires the real Commons client into ExplanationGraph through the port`() = runTest {
+        val wiredImageUrl = "https://upload.wikimedia.org/thumb/wired-example.jpg"
+        val engine = MockEngine {
+            respond(
+                content = """
+                    {"query":{"pages":[{"title":"File:Wired.jpg","imageinfo":[
+                        {"thumburl":"$wiredImageUrl",
+                         "descriptionurl":"https://commons.wikimedia.org/wiki/File:Wired.jpg",
+                         "mime":"image/jpeg",
+                         "extmetadata":{"LicenseShortName":{"value":"CC0"}}}
+                    ]}]}}
+                """.trimIndent(),
+                status = HttpStatusCode.OK,
+                headers = headersOf(HttpHeaders.ContentType, "application/json"),
+            )
+        }
+        val components = Components(
+            mongo = Mongo(MongoConfig(uri = TestFixtures.connectionString, databaseName = "test_api_commons_wiring")),
+            cookies = TestFixtures.cookieConfig,
+            llmFactory = {
+                FakeLlmClient().apply {
+                    nextStructuredJson = """
+                        {"explanation":"A short valid sentence about the span, long enough to pass.",
+                         "svg":"<svg><circle cx=\"1\" cy=\"1\" r=\"1\"/></svg>"}
+                    """.trimIndent()
+                }
+            },
+            commonsClientFactory = { CommonsClient(HttpClient(engine)) },
+        )
+        components.catalog.seedFromResource()
+
+        val created = components.sessions.create("anon:commons-wiring-test", "quantum-physics", anonymous = true) {}
+        val plan = components.sessions.prepare(
+            sessionId = created.session.id,
+            parentNodeId = created.session.rootNodeId,
+            selection = SpanSelection("A", 0, 1),
+            verb = Verb.VISUALIZE,
+            requestedVariant = null,
+        )
+        components.sessions.explain(plan).toList()
+
+        val explanations = ExplanationRepository(components.mongo.database)
+        val stored = explanations.findByKey(plan.contentKey)
+        assertEquals(wiredImageUrl, stored?.media?.image?.imageUrl, "the real CommonsClient never reached ExplanationGraph")
     }
 
     @Test

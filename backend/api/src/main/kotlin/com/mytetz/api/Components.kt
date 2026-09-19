@@ -37,6 +37,7 @@ import com.mytetz.session.SessionRepository
 import com.mytetz.session.SessionService
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
+import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.defaultRequest
 import io.ktor.client.request.url
 import org.slf4j.LoggerFactory
@@ -45,6 +46,11 @@ import kotlin.coroutines.cancellation.CancellationException
 private val log = LoggerFactory.getLogger("com.mytetz.api.Components")
 
 private const val DAY_MILLIS = 86_400_000L
+
+/** Task 6's own rule: "about 3 seconds in total". Applied to both the connect and the request
+ * timeout on the [HttpClient] [Components] builds for [CommonsClient] — see that class's own KDoc,
+ * "Timeouts", for why the timeout lives here and not inside [CommonsClient] itself. */
+private const val COMMONS_TIMEOUT_MILLIS = 3_000L
 
 /**
  * The ERROR token a failed eviction run is logged under. [Components.bootstrap]'s own guard
@@ -113,6 +119,22 @@ open class Components(
     // supported deployment state, not a missing credential. So [turnstile] below is built eagerly,
     // the same as [account].
     turnstileFactory: () -> Turnstile = { Turnstile(HttpClient(CIO), TurnstileConfig().secretKey) },
+    // A factory, on the same model as [turnstileFactory]: [CommonsClient]'s own construction never
+    // throws either, so [commonsClient] below is built eagerly, not behind a `by lazy`. The
+    // three-second connect and request timeouts live here, on the real, production [HttpClient],
+    // and nowhere inside [CommonsClient] itself — see that class's own KDoc, "Timeouts", for why:
+    // its tests then run against a plain, un-timed [HttpClient] and control the timeout only where
+    // one specific test needs it.
+    commonsClientFactory: () -> CommonsClient = {
+        CommonsClient(
+            HttpClient(CIO) {
+                install(HttpTimeout) {
+                    connectTimeoutMillis = COMMONS_TIMEOUT_MILLIS
+                    requestTimeoutMillis = COMMONS_TIMEOUT_MILLIS
+                }
+            },
+        )
+    },
 ) {
 
     private val topics = TopicRepository(mongo.database)
@@ -145,6 +167,10 @@ open class Components(
 
     /** Cheap to build and needs no credential, so — like [account] and unlike [magicLink] — this is not lazy. */
     val turnstile: Turnstile = turnstileFactory()
+
+    /** Cheap to build and needs no credential, so — like [turnstile] — this is not lazy. See
+     * [commonsClientFactory]'s own comment for where its timeouts are set. */
+    private val commonsClient: CommonsClient = commonsClientFactory()
 
     /**
      * The public Cloudflare Turnstile site key this deployment holds, or null.
@@ -227,11 +253,11 @@ open class Components(
             llm = llm,
             validator = ExplanationValidator(),
             config = GraphConfig(),
-            // The real Wikimedia Commons client comes with Task 8. Until then, VISUALIZE serves
-            // the diagram only — the same default ExplanationGraph's own constructor already
-            // gives, spelled out here so a reader does not have to check that default to know
-            // what this deployment does today.
-            commonsLookup = { _, _ -> null },
+            // The port [commonsClient] is adapted through, on the model of
+            // `Reconciliation.reconcile(billingRepository, limit = RECONCILE_LIMIT) { subscription
+            // -> client.fetchState(subscription) }` below: `:backend:graph` calls a lambda, never
+            // `CommonsClient` itself, so it never depends on Ktor.
+            commonsLookup = { span, ancestors -> commonsClient.findImage(span, ancestors) },
         )
     }
 
