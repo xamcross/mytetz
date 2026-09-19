@@ -744,6 +744,65 @@ test('a coral pill keeps its smaller shadow while a learner presses it', async (
   await page.mouse.up();
 });
 
+/** #fff8e6, the hex value of --mt-amber-bg, as a browser reports it from getComputedStyle. */
+const AMBER_BG_RGB = 'rgb(255, 248, 230)';
+
+test('a chosen quiz option keeps its amber fill under the pointer, on a press, and on a keyboard focus', async ({
+  page,
+}) => {
+  // A click leaves the pointer over the option it landed on, so the option's own :hover rule
+  // still matches right after the learner chooses it — the exact moment the fill must read
+  // clearly as chosen, and not as merely hovered.
+  await stubCatalogueAndSession(page);
+  await mockQuiz(page, 's1', PRESS_TEMPLATE, PRESS_RESULT);
+  await gotoReader(page);
+
+  await page.getByTestId('test-me').click();
+  const quiz = page.locator('[role="dialog"]');
+  await quiz.getByText(PRESS_TEMPLATE.questions[0].stem).waitFor();
+  const chosen = quiz.getByRole('button', { name: PRESS_TEMPLATE.questions[0].options[0] });
+  await chosen.click();
+
+  await expect
+    .poll(() => chosen.evaluate((el) => getComputedStyle(el).backgroundColor), {
+      message: 'the chosen option keeps its amber fill while the pointer still rests on it',
+    })
+    .toBe(AMBER_BG_RGB);
+
+  // A press must not swap the fill to the plain :active background either.
+  const box = await chosen.boundingBox();
+  if (box === null) throw new Error('the chosen option has no box to press');
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await expect
+    .poll(() => chosen.evaluate((el) => getComputedStyle(el).backgroundColor), {
+      message: 'the chosen option keeps its amber fill while a learner presses it',
+    })
+    .toBe(AMBER_BG_RGB);
+  await page.mouse.up();
+
+  // Move the pointer well away, so no hover rule of any option can still be in play. The chosen
+  // option is the dialog's first focusable element, so focusing the dialog root itself (already
+  // programmatically reachable, and not a control) and then pressing Tab reaches it by keyboard
+  // alone — the one path Chromium counts as :focus-visible, the same technique `layout.spec.ts`
+  // already uses for the catalogue filter above.
+  await page.mouse.move(0, 0);
+  await quiz.evaluate((el) => (el as HTMLElement).focus());
+  await page.keyboard.press('Tab');
+  await expect
+    .poll(
+      async () => {
+        const state = await chosen.evaluate((el) => ({
+          fill: getComputedStyle(el).backgroundColor,
+          focusVisible: el.matches(':focus-visible'),
+        }));
+        return state;
+      },
+      { message: 'the chosen option keeps its amber fill while it holds the keyboard focus' },
+    )
+    .toEqual({ fill: AMBER_BG_RGB, focusVisible: true });
+});
+
 /** Finding F10. The first option is one line. The second is long enough to wrap onto a second
  * line inside the 560px-wide panel, at 15px and a 1.45 line-height. */
 const WRAP_TEMPLATE: QuizTemplateView = {

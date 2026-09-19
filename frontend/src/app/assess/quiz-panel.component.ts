@@ -146,13 +146,18 @@ type QuizPhase = 'loading' | 'question' | 'result';
         transition: background var(--mt-dur-press) var(--mt-ease-press);
       }
       /* (hover: hover) and not a plain :hover: see styles.css's own comment on .mt-pill:hover
-         for why a touch screen needs this guard. */
+         for why a touch screen needs this guard.
+         :not(.quiz-panel__option--chosen) on both rules below: a click leaves the pointer over
+         the option it landed on, so this rule would otherwise still match right after a learner
+         chooses it, and :hover comes after .quiz-panel__option--chosen in this file, so it would
+         win on source order even at equal specificity. The chosen fill must read clearly at
+         exactly that moment, so an unchosen option is the only one these two rules ever repaint. */
       @media (hover: hover) {
-        .quiz-panel__option:hover:not(:disabled) {
+        .quiz-panel__option:hover:not(:disabled):not(.quiz-panel__option--chosen) {
           background: var(--mt-sunk);
         }
       }
-      .quiz-panel__option:active:not(:disabled) {
+      .quiz-panel__option:active:not(:disabled):not(.quiz-panel__option--chosen) {
         background: var(--mt-chip);
       }
       .quiz-panel__option:disabled {
@@ -161,7 +166,9 @@ type QuizPhase = 'loading' | 'question' | 'result';
       }
       /* aria-pressed already states this for a screen reader. A sighted learner with low vision
          needs a signal that is not a colour too: a heavier edge, plus the check glyph below. The
-         amber fill stays, but it is no longer the only signal. */
+         amber fill stays, but it is no longer the only signal. This rule must win over the hover
+         and active rules above at every moment: on a click, under a press, and while it holds
+         the keyboard focus, so a learner never loses sight of what they chose. */
       .quiz-panel__option--chosen {
         background: var(--mt-amber-bg);
         border-color: var(--mt-amber);
