@@ -124,6 +124,26 @@ describe('AllowanceMeterComponent', () => {
     expect(text()).not.toContain('1970');
   });
 
+  it('the meter shows no "Invalid Date" when the trial-end key is absent from the wire', () => {
+    // The route serializer once omitted `trialEndsAtEpochMillis` from the wire body of a trial
+    // learner, because the field's value equalled its declared default — see issue #89. This
+    // test builds that exact shape: the key is absent, and not `null`. It proves the meter
+    // treats an absent key the same safe way.
+    const { trialEndsAtEpochMillis: _omittedTrialEnd, ...withoutTrialEndKey } = trialing;
+    store.view.set(withoutTrialEndKey as unknown as AccountView);
+    fixture.detectChanges();
+
+    expect(text()).not.toContain('Invalid Date');
+  });
+
+  it('the meter shows no "Invalid Date" when the reset key is absent from the wire', () => {
+    const { resetsAtEpochMillis: _omittedReset, ...withoutResetKey } = active;
+    store.view.set(withoutResetKey as unknown as AccountView);
+    fixture.detectChanges();
+
+    expect(text()).not.toContain('Invalid Date');
+  });
+
   it('a NONE status shows no counts', () => {
     store.view.set(none);
     fixture.detectChanges();
