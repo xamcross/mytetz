@@ -414,11 +414,16 @@ Do the following one time, after the deployment that carries the `claude-sonnet-
    ```
    mongosh "$MONGODB_URI" --quiet --eval '
      const family = "claude-sonnet-5";
+     const version = "v3";
      const published = db.topics.countDocuments({ status: "PUBLISHED" });
-     const seeded = db.explanations.countDocuments({ verb: "SEED", modelFamily: family });
+     const seeded = db.explanations.countDocuments({ verb: "SEED", modelFamily: family, promptVersion: version });
      print("published=" + published + " seeded=" + seeded);
    '
    ```
+
+   Set `family` to the value of `MYTETZ_MODEL_FAMILY`, or to its default in section 2.2. Set
+   `version` to `PromptBuilder.VERSION` in `backend/graph/src/main/kotlin/com/mytetz/graph/PromptBuilder.kt`.
+   A seed key holds the two values, so a seed from an older prompt version does not count.
 
    The two counts must match. A lower `seeded` count means the spend breaker stopped the loop
    early; see below.
@@ -569,6 +574,8 @@ line is for an operator, and no line ever reaches a learner.
 | `BILLING_NO_PERIOD_END` | `Entitlement.resolve` | an `ACTIVE` row carries no period end | check whether the first-payment webhook for that row ever carried one; the row is granted access regardless |
 | `BILLING_DRIFT` | `Reconciliation.reconcile` | a subscription disagreed with what Freemius reports. `applied=true` means the row was corrected; `applied=false` means only a downgrade was proposed, and the row is untouched | read the log line's own fields — see "Reading a `BILLING_DRIFT` line" below, right after this table |
 | `RECONCILE_SKIPPED` | `Components.reconcile` | `MYTETZ_RECONCILE_ON_BOOT` is on but `FREEMIUS_API_KEY` or `FREEMIUS_PRODUCT_ID` is not set | set the missing variable; nothing else needs to change, the next boot retries on its own |
+| `PREWARM_SKIPPED` | `Components.prewarm` | the model client did not build at boot, usually because `ANTHROPIC_API_KEY` is not set. The catalogue still serves. No missing seed was generated on this boot | set the key. The next boot runs the pre-warm again |
+| `PREWARM stopped early` and `PREWARM failed to pre-warm` | `Components.prewarm` | the spend breaker refused a topic, or the generation of one seed failed. A published topic then has no seed, and the first visitor pays for a live generation | read the slug in the line. For the breaker, read section "The B0 model migration". For a failure, read the stack trace under the line. The next boot tries the topic again, and each try that reaches the model costs money |
 | `WEBHOOK_SIGNATURE_MISMATCH` | `BillingRoutes` | `POST /api/billing/webhook` received a body whose signature did not verify | expected from scanners and mis-configured retries; investigate only if it is frequent, or if `FREEMIUS_SECRET_KEY` was just rotated |
 | `ACCOUNT_LINK_CONFLICT` | `AuthRoutes` | a Google sign-in's email is already linked to a different Google account | a real conflict, not a bug; the learner needs the sign-in method their account already used |
 | `MAIL_SEND_FAILED` | `MailSender` | a magic-link email could not be sent | check the mail provider's status and `MYTETZ_MAIL_API_KEY`; a learner is currently unable to sign in by email |
