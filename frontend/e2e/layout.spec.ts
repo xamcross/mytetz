@@ -1214,6 +1214,10 @@ test('a ghost pill draws no shadow while a learner presses it', async ({ page })
 test('a coral pill keeps its smaller shadow while a learner presses it', async ({ page }) => {
   // The ghost fix above must change no other pill. This presses the coral pill of the Test Me
   // quiz and checks that its press shadow still only shrinks, from a 4px lift to a 2px lift.
+  // A tall viewport, and not the default 720px one: issue #105's own action row below the card
+  // (F11) moved "See results" close enough to the default viewport's own bottom edge that a
+  // press there missed the pill outright — elementFromPoint answers null past the fold.
+  await page.setViewportSize(WIDTHS.wide);
   await stubCatalogueAndSession(page);
   await mockQuiz(page, 's1', PRESS_TEMPLATE, PRESS_RESULT);
   await gotoReader(page);
