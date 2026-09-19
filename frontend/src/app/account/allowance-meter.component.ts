@@ -81,6 +81,47 @@ const METERED_STATUSES: ReadonlySet<string> = new Set([
         color: var(--mt-err-ink);
         font-weight: 700;
       }
+      /*
+       * Issue #100. At a phone width, the count and the detail together are wider than the
+       * header bar. A real run measures a scroll width of 488px inside a 390px window. This rule
+       * hides the detail, and only inside the header. host-context(.bar) matches the header's own
+       * bar element. The account page renders this same component outside that element, in its
+       * own card, so the account page keeps the full detail text.
+       */
+      @media (max-width: 767px) {
+        :host-context(.bar) .allowance-meter__detail {
+          display: none;
+        }
+        /*
+         * Issue #100, round 2. The checkout error can wrap into several lines. Inside the row,
+         * a tall child does not grow the bar: the bar keeps its own fixed height of 64px, and
+         * the child overflows over the bar's other elements instead. A real run measures the
+         * error box from y=-16 to y=89, well outside the bar's own 0-to-64 range.
+         *
+         * These two rules take the error out of the row and put it as a small card below the
+         * bar. The card hangs from this component's own host element, so it moves with the
+         * header when the page scrolls, and it needs no positioned ancestor in another file. A
+         * card with position: fixed was the first attempt. The bar is not sticky, so such a card
+         * stays on the screen, away from the header, after the learner scrolls. The host is about
+         * 38px tall and sits in the middle of the 64px bar, so 16px below the host is below the
+         * bar. The layout test asserts that result, and not this arithmetic.
+         */
+        :host-context(.bar) {
+          position: relative;
+        }
+        :host-context(.bar) .allowance-meter__error {
+          position: absolute;
+          top: calc(100% + 16px);
+          right: 0;
+          z-index: 1;
+          width: max-content;
+          max-width: 260px;
+          padding: 8px 12px;
+          background: var(--mt-err-bg);
+          border: var(--mt-border-w) solid var(--mt-err-border);
+          border-radius: var(--mt-r-row);
+        }
+      }
     `,
   ],
 })
