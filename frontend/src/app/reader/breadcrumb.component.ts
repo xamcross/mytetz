@@ -66,9 +66,13 @@ import { NodeView } from '../core/models';
         transition: background var(--mt-dur-press) var(--mt-ease-press);
       }
       /* The last crumb is always the disabled, current one (see the template), so this never
-         paints over the teal fill of .mt-chip--teal. */
-      .crumb__button:hover:not(:disabled) {
-        background: var(--mt-sunk);
+         paints over the teal fill of .mt-chip--teal.
+         (hover: hover) and not a plain :hover: see styles.css's own comment on .mt-pill:hover
+         for why a touch screen needs this guard. */
+      @media (hover: hover) {
+        .crumb__button:hover:not(:disabled) {
+          background: var(--mt-sunk);
+        }
       }
       .crumb__button:disabled {
         cursor: default;

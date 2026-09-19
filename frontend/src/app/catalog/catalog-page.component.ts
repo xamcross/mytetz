@@ -232,24 +232,20 @@ import { TopicSummary } from '../core/models';
         color: inherit;
         text-decoration: none;
         transition:
-          transform 80ms ease-out,
-          box-shadow 80ms ease-out;
+          transform var(--mt-dur-press) var(--mt-ease-press),
+          box-shadow var(--mt-dur-press) var(--mt-ease-press);
       }
-      .topic__tile:hover {
-        transform: translateY(-2px);
-        box-shadow: var(--mt-lift-hover);
+      /* (hover: hover) and not a plain :hover: see styles.css's own comment on .mt-pill:hover for
+         why a touch screen needs this guard. */
+      @media (hover: hover) {
+        .topic__tile:hover {
+          transform: translateY(-2px);
+          box-shadow: var(--mt-lift-hover);
+        }
       }
       .topic__tile:active {
         transform: translateY(2px);
         box-shadow: var(--mt-press);
-      }
-      /* This tile keeps its own 80ms transition and does not move to the motion tokens (issue
-         #102 does not touch it). A learner who asks for less motion still needs it silenced, so
-         the rule below stays local instead of relying on a token it does not use. */
-      @media (prefers-reduced-motion: reduce) {
-        .topic__tile {
-          transition: none;
-        }
       }
       .topic__title {
         font-size: 23px;

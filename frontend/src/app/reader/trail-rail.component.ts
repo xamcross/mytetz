@@ -104,9 +104,13 @@ const VERB_LABELS: Readonly<Record<string, string>> = {
           box-shadow var(--mt-dur-press) var(--mt-ease-press);
       }
       /* The current row is teal-filled (see the rule below), so a plain background change on
-         hover would paint over its fill. This rule answers a pointer for every other row only. */
-      .trail__item:not(.trail__item--current):hover {
-        background: var(--mt-sunk);
+         hover would paint over its fill. This rule answers a pointer for every other row only.
+         (hover: hover) and not a plain :hover: see styles.css's own comment on .mt-pill:hover
+         for why a touch screen needs this guard. */
+      @media (hover: hover) {
+        .trail__item:not(.trail__item--current):hover {
+          background: var(--mt-sunk);
+        }
       }
       /* The four declarations below are also what .mt-pill--teal draws, and the duplication is
          deliberate. That class is a modifier of .mt-pill, and .mt-pill--teal:active changes only
@@ -121,8 +125,10 @@ const VERB_LABELS: Readonly<Record<string, string>> = {
         box-shadow: var(--mt-lift-teal);
       }
       /* This is also what .mt-pill--teal:hover draws, for the same reason as the block above. */
-      .trail__item--current:hover {
-        box-shadow: 0 5px 0 var(--mt-teal-deep);
+      @media (hover: hover) {
+        .trail__item--current:hover {
+          box-shadow: var(--mt-lift-hover-teal);
+        }
       }
       .trail__dot {
         width: 22px;
