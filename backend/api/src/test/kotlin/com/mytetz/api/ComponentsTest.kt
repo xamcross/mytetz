@@ -119,6 +119,7 @@ class ComponentsTest {
         assertContains(indexNames(database, "explanations"), "created_at")
         assertContains(indexNames(database, "sessions"), "principal_recent")
         assertContains(indexNames(database, "sessions"), "by_topic")
+        assertContains(indexNames(database, "sessions"), "by_explanation_key")
         assertContains(indexNames(database, "principals"), "window_ttl")
         // AccountRepository, added by this task. `accountRepository.ensureIndexes()` was wired into
         // `bootstrap()` with no assertion here — the exact gap this test's own KDoc names. The two
