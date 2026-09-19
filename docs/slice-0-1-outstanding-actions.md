@@ -278,6 +278,12 @@ method decides the page structure. Build both at one time.
 
 ### Decision 5.2 — When does a session end?
 
+**Decided in issue #22.** A session becomes `COMPLETED` after 30 days with no activity, or when the
+learner completes it in the reader. A completed session stays readable, and no new node can join
+it. MongoDB deletes an anonymous session 90 days after its creation, through a TTL index. The
+session of a signed-in learner stays until the account is deleted. The KDoc of `SessionService`
+holds the full rule. The text below is the state before that decision.
+
 **The state.** A session has a `COMPLETED` state. The wire format works and a test pins it. No
 code makes the transition. Every session stays `ACTIVE` for ever.
 

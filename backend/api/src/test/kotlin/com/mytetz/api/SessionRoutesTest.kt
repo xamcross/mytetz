@@ -23,6 +23,7 @@ import com.mytetz.quota.PrincipalId
 import com.mytetz.quota.QuotaConfig
 import com.mytetz.quota.QuotaRepository
 import com.mytetz.quota.QuotaService
+import com.mytetz.session.SessionStatus
 import com.mytetz.session.SpanSelection
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.cookies.HttpCookies
@@ -472,6 +473,59 @@ class SessionRoutesTest {
         )
         assertEquals("no", response.headers["X-Accel-Buffering"])
         assertEquals(ContentType.Text.EventStream.contentType, response.contentType()?.contentType)
+    }
+
+    // ------------------------------------------------------------------ completion
+
+    @Test
+    fun `an explain on a completed session is refused before anything is generated`() = app {
+        val created = createSession()
+        val span = sessionView(created.sessionId).spanOn("behavior of matter")
+        stack.completeSession(created.sessionId)
+        val before = stack.generations
+
+        val response = explain(created.sessionId, span)
+
+        assertEquals(HttpStatusCode.Conflict, response.status)
+        assertEquals("SESSION_COMPLETED", response.apiError().code)
+        assertEquals(before, stack.generations, "a completed session reached the model")
+        assertEquals(1, sessionView(created.sessionId).nodes.size, "a completed session gained a node")
+    }
+
+    @Test
+    fun `GET reports a session's status, and a completed session stays readable`() = app {
+        val created = createSession()
+        assertEquals(SessionStatus.ACTIVE, sessionView(created.sessionId).status)
+
+        stack.completeSession(created.sessionId)
+
+        val view = sessionView(created.sessionId)
+        assertEquals(SessionStatus.COMPLETED, view.status)
+        assertTrue(view.explanations.values.any { it.contains("Quantum mechanics") }, "a completed session must stay readable")
+    }
+
+    @Test
+    fun `a learner can mark their own session complete`() = app {
+        val created = createSession()
+
+        val response = client.post("/api/sessions/${created.sessionId}/complete")
+
+        assertEquals(HttpStatusCode.NoContent, response.status)
+        assertEquals(SessionStatus.COMPLETED, sessionView(created.sessionId).status)
+    }
+
+    @Test
+    fun `completing an unknown or another learner's session answers the same 404`() = app {
+        val mine = createSession()
+        val stranger = anotherLearner()
+
+        val theirs = stranger.post("/api/sessions/${mine.sessionId}/complete")
+        val absent = stranger.post("/api/sessions/00000000-0000-0000-0000-000000000000/complete")
+
+        assertEquals(HttpStatusCode.NotFound, theirs.status)
+        assertEquals(absent.status, theirs.status)
+        assertEquals(absent.apiError(), theirs.apiError())
+        assertEquals(SessionStatus.ACTIVE, sessionView(mine.sessionId).status, "a stranger completed my session")
     }
 
     // ------------------------------------------------------------------ the entitlement gate

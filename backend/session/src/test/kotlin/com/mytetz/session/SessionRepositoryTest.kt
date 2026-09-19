@@ -6,10 +6,14 @@ import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import org.bson.Document
+import java.util.Date
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 
 class SessionRepositoryTest {
@@ -182,5 +186,83 @@ class SessionRepositoryTest {
             byName["principal_recent"]?.get("key"),
         )
         assertEquals(Document("topicSlug", 1), byName["by_topic"]?.get("key"))
+    }
+
+    // ------------------------------------------------------------------ the anonymous TTL
+
+    @Test
+    fun `the TTL index exists, and an anonymous session's expiry is stored as a BSON date`() = runTest {
+        // The only test that creates the index — see the note in `reset()` above about a live TTL
+        // index over documents stamped in the past. This one stamps its own session in the year
+        // 2100, so the container's real-time TTL monitor has no reason to touch it mid-test.
+        repository.ensureIndexes()
+        val anon = session.copy(id = "s-anon", expiresAtEpochMillis = FUTURE)
+        repository.insert(anon)
+
+        val index = raw.listIndexes().toList().single { it.getString("name") == "session_ttl" }
+        assertEquals(setOf("expiresAt"), index.get("key", Document::class.java).keys)
+        assertEquals(0L, (index["expireAfterSeconds"] as Number).toLong(), "0 means 'expire at the stored instant'")
+
+        val stored = raw.find(Filters.eq("_id", "s-anon")).firstOrNull()
+        assertNotNull(stored)
+        // The whole point of the index. MongoDB's TTL monitor acts only on a field holding a BSON
+        // Date; against a Long it does nothing at all — no error and no reaping — so `sessions`
+        // would grow by one document per anonymous visitor and never shrink.
+        // https://www.mongodb.com/docs/manual/core/index-ttl/
+        assertIs<Date>(stored["expiresAt"], "a non-Date here makes the TTL index a silent no-op")
+        assertEquals(FUTURE, (stored["expiresAt"] as Date).time)
+        assertEquals(FUTURE, repository.findById("s-anon")?.expiresAtEpochMillis)
+    }
+
+    @Test
+    fun `a user session carries no TTL key at all`() = runTest {
+        // `session` sets no `expiresAtEpochMillis`, which is the default — a signed-in learner's
+        // session, or one not yet claimed by an anonymous owner's TTL write.
+        repository.insert(session)
+
+        val stored = raw.find(Filters.eq("_id", "s1")).firstOrNull()!!
+        assertFalse(
+            stored.containsKey("expiresAt"),
+            "a null field must not be written at all, or the TTL index would still act on it",
+        )
+        assertNull(repository.findById("s1")?.expiresAtEpochMillis)
+    }
+
+    @Test
+    fun `reassignPrincipal clears the TTL field of the session it moves`() = runTest {
+        val anon = session.copy(id = "s-anon", expiresAtEpochMillis = FUTURE)
+        repository.insert(anon)
+
+        repository.reassignPrincipal("anon:alice", "user:u1")
+
+        val stored = raw.find(Filters.eq("_id", "s-anon")).firstOrNull()!!
+        assertFalse(
+            stored.containsKey("expiresAt"),
+            "a session moved onto a signed-in principal must not carry an anonymous session's TTL",
+        )
+        assertEquals("user:u1", repository.findById("s-anon")?.principalId)
+        assertNull(repository.findById("s-anon")?.expiresAtEpochMillis)
+    }
+
+    // ------------------------------------------------------------------ completion
+
+    @Test
+    fun `complete marks a session COMPLETED`() = runTest {
+        repository.insert(session)
+
+        repository.complete("s1")
+
+        assertEquals(SessionStatus.COMPLETED, repository.findById("s1")?.status)
+    }
+
+    @Test
+    fun `complete raises for an unknown session rather than silently doing nothing`() = runTest {
+        assertFailsWith<SessionNotFoundException> { repository.complete("nope") }
+    }
+
+    private companion object {
+        /** The year 2100. Far enough into the future that a real TTL monitor never reaps it during
+         * a test run. Matches `FUTURE` in `QuotaServiceTest` and elsewhere. */
+        const val FUTURE = 4_102_444_800_000L
     }
 }

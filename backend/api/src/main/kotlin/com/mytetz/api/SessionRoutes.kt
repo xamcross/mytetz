@@ -15,6 +15,7 @@ import com.mytetz.session.ExplainPlan
 import com.mytetz.session.LearningSession
 import com.mytetz.session.SessionNotFoundException
 import com.mytetz.session.SessionService
+import com.mytetz.session.SessionStatus
 import com.mytetz.session.SpanSelection
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
@@ -60,6 +61,11 @@ data class NodeView(
     val depth: Int,
 )
 
+/**
+ * [status] has no default. `Application.kt`'s `ContentNegotiation` does not turn on
+ * `encodeDefaults`, and a default value here would never reach the wire — the reader needs this
+ * field on every response, so a caller cannot be allowed to forget it.
+ */
 @Serializable
 data class SessionView(
     val sessionId: String,
@@ -67,6 +73,7 @@ data class SessionView(
     val rootNodeId: String,
     val currentNodeId: String,
     val nodes: List<NodeView>,
+    val status: SessionStatus,
     val explanations: Map<String, String>,
 )
 
@@ -182,7 +189,8 @@ const val EXPLAIN_WINDOW_MILLIS: Long = 10L * 60 * 1000
 const val MAX_SESSION_BODY_BYTES: Long = 4_096
 
 /**
- * `POST /api/sessions`, `GET /api/sessions/{id}` and `POST /api/sessions/{id}/explain`.
+ * `POST /api/sessions`, `GET /api/sessions/{id}`, `POST /api/sessions/{id}/explain` and
+ * `POST /api/sessions/{id}/complete`.
  *
  * This was the only endpoint in the system that could spend money. `POST /api/sessions/{id}/quizzes`
  * now spends money too. See `QuizRoutes.kt` for its own gate. Most of what follows is about the
@@ -336,15 +344,16 @@ fun Route.sessionRoutes(
      * *global* breaker that one endpoint ignores is not global; and because the re-check that makes
      * a stale miss survive is the same three lines as on the explain path.
      *
-     * **Session documents are not bounded, and cannot be from here.** Nothing expires them —
-     * `SessionRepository` says so deliberately, they are the learner's record of what they read — so
-     * the honest statement is that this limits the *rate* at which one caller can create them and
-     * not the total. Keyed on [ClientAddress], not the principal, for the reason
-     * `FixedWindowRateLimiter` gives: `Principals.resolve` mints a fresh principal for any request
-     * without a valid cookie, so a per-principal limit limits only callers polite enough to return
-     * their cookie. A per-principal session cap, or a TTL on abandoned sessions, is a product
-     * decision nobody has made; it is written down here rather than left to be discovered from a
-     * disk-usage alert.
+     * **Session documents are not bounded by count, and cannot be from here.** An anonymous session
+     * now expires 90 days after its last activity — see `SessionService.create`'s note on
+     * `LearningSession.expiresAtEpochMillis` — and a signed-in learner's session is kept until account
+     * deletion removes it. Neither bound is a cap on how many sessions exist at once, so the honest
+     * statement stays: this limits the *rate* at which one caller can create them and not the total.
+     * Keyed on [ClientAddress], not the principal, for the reason `FixedWindowRateLimiter` gives:
+     * `Principals.resolve` mints a fresh principal for any request without a valid cookie, so a
+     * per-principal limit limits only callers polite enough to return their cookie. A per-principal
+     * session cap is a product decision nobody has made; it is written down here rather than left to
+     * be discovered from a disk-usage alert.
      *
      * ## This route must gate on the same entitlement the explain route gates on
      *
@@ -423,11 +432,16 @@ fun Route.sessionRoutes(
         // Recorded from inside the generation, not from the result: a seed can be billed and then
         // rejected by the validator, in which case `create` raises and there is no result to read a
         // cost off. `recordSpend` swallows its own failures, so this cannot fail the request.
-        val created = sessions.create(principal.value, request.topicSlug) { costMicros ->
+        //
+        // `anonymous = user == null`: this route already resolved that fact through
+        // `effectiveIdentity`, so it is passed straight through rather than re-derived from
+        // `principal.value` — see `SessionService.create`'s own KDoc on why it does not read that
+        // string itself.
+        val created = sessions.create(principal.value, request.topicSlug, anonymous = user == null) { costMicros ->
             withContext(NonCancellable) { quota.recordSpend(principal, costMicros, allowance) }
         }
 
-        call.respond(created.session.toView(mapOf(created.seed.key to created.seed.body)))
+        call.respond(created.session.toView(mapOf(created.seed.key to created.seed.body), sessions.statusOf(created.session)))
     }
 
     get("/api/sessions/{id}") {
@@ -441,7 +455,29 @@ fun Route.sessionRoutes(
         // and is this principal's, so a null here means it was deleted between two reads, which is
         // the same 404 by a different route.
         val (session, bodies) = sessions.load(id) ?: throw SessionNotFoundException(id)
-        call.respond(session.toView(bodies.mapValues { it.value.body }))
+        call.respond(session.toView(bodies.mapValues { it.value.body }, sessions.statusOf(session)))
+    }
+
+    /**
+     * `POST /api/sessions/{id}/complete`.
+     *
+     * The learner's own control for ending a session, alongside the 30-day rule `SessionService`
+     * applies without one. Ownership is checked exactly as the two routes above check it, and for
+     * the same reason: without it, anyone holding a guessed id could end another learner's session.
+     *
+     * Answers `204`, with no body: there is nothing here a client needs back that a following
+     * `GET /api/sessions/{id}` does not already answer, and every other action route in this file —
+     * `POST /api/auth/sign-out` among them — answers the same way.
+     */
+    post("/api/sessions/{id}/complete") {
+        val sessions = sessions()
+        val (principal, _) = call.effectiveIdentity(account, cookies)
+        val id = call.parameters["id"].orEmpty()
+
+        sessions.requireOwnedBy(id, principal)
+        sessions.complete(id)
+
+        call.respond(HttpStatusCode.NoContent)
     }
 
     post("/api/sessions/{id}/explain") {
@@ -981,7 +1017,12 @@ internal suspend fun ApplicationCall.bodyIsSmallEnough(): Boolean {
     return false
 }
 
-private fun LearningSession.toView(bodies: Map<String, String>) = SessionView(
+/**
+ * [status] is the caller's job to compute, through [SessionService.statusOf] — the one place the
+ * 30-day rule is written. A `LearningSession.status` field read directly here would miss every
+ * session that has gone quiet rather than been marked complete.
+ */
+private fun LearningSession.toView(bodies: Map<String, String>, status: SessionStatus) = SessionView(
     sessionId = id,
     topicSlug = topicSlug,
     rootNodeId = rootNodeId,
@@ -989,5 +1030,6 @@ private fun LearningSession.toView(bodies: Map<String, String>) = SessionView(
     nodes = nodes.map {
         NodeView(it.nodeId, it.parentNodeId, it.explanationKey, it.span, it.verb, it.variant, it.depth)
     },
+    status = status,
     explanations = bodies,
 )

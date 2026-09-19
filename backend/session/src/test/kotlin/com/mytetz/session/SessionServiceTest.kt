@@ -1,5 +1,7 @@
 package com.mytetz.session
 
+import com.mongodb.client.model.Filters
+import com.mongodb.client.model.Updates
 import com.mytetz.catalog.CatalogService
 import com.mytetz.catalog.Topic
 import com.mytetz.catalog.TopicRepository
@@ -15,6 +17,7 @@ import com.mytetz.llm.FakeLlmClient
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
+import org.bson.Document
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -103,7 +106,7 @@ class SessionServiceTest {
         llm.nextStopReason = "end_turn"
     }
 
-    private suspend fun newSession() = service.create("anon:alice", "quantum-physics") {}
+    private suspend fun newSession() = service.create("anon:alice", "quantum-physics", anonymous = true) {}
 
     /** A selection that really does sit where it says it does, so the gate lets it through. */
     private fun selectionOf(body: String, text: String): SpanSelection {
@@ -150,7 +153,7 @@ class SessionServiceTest {
 
     @Test
     fun `create fails for an unknown topic`() = runTest {
-        assertFailsWith<IllegalArgumentException> { service.create("anon:alice", "no-such-topic") {} }
+        assertFailsWith<IllegalArgumentException> { service.create("anon:alice", "no-such-topic", anonymous = true) {} }
 
         // Nothing half-built: a session must not exist for a topic that does not.
         assertEquals(0L, database.getCollection<org.bson.Document>("sessions").countDocuments())
@@ -175,7 +178,7 @@ class SessionServiceTest {
         // The row really is there, so the refusal below is the status check and not a failed upsert.
         assertEquals(TopicStatus.DRAFT, catalog.findBySlug(draft.slug)?.status)
 
-        assertFailsWith<IllegalArgumentException> { service.create("anon:alice", draft.slug) {} }
+        assertFailsWith<IllegalArgumentException> { service.create("anon:alice", draft.slug, anonymous = true) {} }
 
         assertEquals(0, llm.calls.size, "an unpublished topic must be refused before the model is asked")
         assertEquals(0L, database.getCollection<org.bson.Document>("sessions").countDocuments())
@@ -266,7 +269,7 @@ class SessionServiceTest {
         // advances on every call.
         var tick = 0L
         val svc = serviceWith(clock = { FIXED_NOW + tick++ })
-        val (session, _) = svc.create("anon:alice", "quantum-physics") {}
+        val (session, _) = svc.create("anon:alice", "quantum-physics", anonymous = true) {}
 
         svc.explain(
             session.id, session.rootNodeId,
@@ -616,7 +619,7 @@ class SessionServiceTest {
     @Test
     fun `a session that has reached its node ceiling is refused before anything is generated`() = runTest {
         val svc = serviceWith(SessionLimits(maxDepth = 12, maxNodes = 2, maxVariants = 3))
-        val (session, _) = svc.create("anon:alice", "quantum-physics") {}
+        val (session, _) = svc.create("anon:alice", "quantum-physics", anonymous = true) {}
         val selection = selectionOf(seedBody, "behavior of matter")
 
         // One node so far, so the second is admitted.
@@ -638,7 +641,7 @@ class SessionServiceTest {
     @Test
     fun `a chain that has reached its depth ceiling is refused before anything is generated`() = runTest {
         val svc = serviceWith(SessionLimits(maxDepth = 1, maxNodes = 200, maxVariants = 3))
-        val (session, _) = svc.create("anon:alice", "quantum-physics") {}
+        val (session, _) = svc.create("anon:alice", "quantum-physics", anonymous = true) {}
 
         // Depth 1 is inside a ceiling of 1: the limit counts links below the root.
         svc.explain(
@@ -689,6 +692,91 @@ class SessionServiceTest {
         )
     }
 
+    // ------------------------------------------------------------------ completion
+
+    /** Marks [sessionId] `COMPLETED` directly on the stored document. There is no route through
+     * this class that does this yet — that is what this whole section pins the need for. */
+    private suspend fun markCompleted(sessionId: String) {
+        database.getCollection<Document>("sessions").updateOne(
+            Filters.eq("_id", sessionId),
+            Updates.set("status", "COMPLETED"),
+        )
+    }
+
+    @Test
+    fun `prepare refuses a completed session before anything is generated`() = runTest {
+        val (session, _) = newSession()
+        markCompleted(session.id)
+        val callsBefore = llm.calls.size
+
+        assertFailsWith<SessionCompletedException> {
+            service.explain(
+                session.id, session.rootNodeId,
+                selectionOf(seedBody, "behavior of matter"), Verb.EXPLAIN, null,
+            ).toList()
+        }
+
+        assertEquals(callsBefore, llm.calls.size, "a completed session must be refused before the model is paid")
+        assertEquals(1, sessions.findById(session.id)!!.nodes.size, "a completed session gained a node")
+    }
+
+    @Test
+    fun `a session one millisecond short of 30 days of inactivity is still active`() = runTest {
+        var now = FIXED_NOW
+        val svc = serviceWith(clock = { now })
+        val (session, _) = svc.create("anon:alice", "quantum-physics", anonymous = true) {}
+
+        now = FIXED_NOW + THIRTY_DAYS_MILLIS - 1
+
+        // No exception: the model really is called, which is the honest way to pin "still active"
+        // rather than merely asserting the absence of a throw.
+        svc.explain(
+            session.id, session.rootNodeId,
+            selectionOf(seedBody, "behavior of matter"), Verb.EXPLAIN, null,
+        ).toList()
+        assertEquals(2, sessions.findById(session.id)!!.nodes.size)
+    }
+
+    @Test
+    fun `a session with exactly 30 days of inactivity is completed`() = runTest {
+        var now = FIXED_NOW
+        val svc = serviceWith(clock = { now })
+        val (session, _) = svc.create("anon:alice", "quantum-physics", anonymous = true) {}
+
+        now = FIXED_NOW + THIRTY_DAYS_MILLIS
+        val callsBefore = llm.calls.size
+
+        assertFailsWith<SessionCompletedException> {
+            svc.explain(
+                session.id, session.rootNodeId,
+                selectionOf(seedBody, "behavior of matter"), Verb.EXPLAIN, null,
+            ).toList()
+        }
+
+        assertEquals(callsBefore, llm.calls.size, "a completed session must be refused before the model is paid")
+        assertEquals(1, sessions.findById(session.id)!!.nodes.size)
+    }
+
+    @Test
+    fun `complete marks the session so a later prepare refuses it`() = runTest {
+        val (session, _) = newSession()
+
+        service.complete(session.id)
+
+        assertEquals(SessionStatus.COMPLETED, sessions.findById(session.id)!!.status)
+        assertFailsWith<SessionCompletedException> {
+            service.explain(
+                session.id, session.rootNodeId,
+                selectionOf(seedBody, "behavior of matter"), Verb.EXPLAIN, null,
+            ).toList()
+        }
+    }
+
+    @Test
+    fun `complete raises for an unknown session`() = runTest {
+        assertFailsWith<SessionNotFoundException> { service.complete("no-such-session") }
+    }
+
     // ------------------------------------------------------------------ the quota seam
 
     @Test
@@ -733,7 +821,7 @@ class SessionServiceTest {
         // A second learner, on the same topic, drills into the same span. A seed is keyed by its
         // topic, so both sessions' roots hold the SAME explanation key, so both plans derive the
         // same content key — which is the entire premise of the store being a cache.
-        val (second, _) = service.create("anon:bob", "quantum-physics") {}
+        val (second, _) = service.create("anon:bob", "quantum-physics", anonymous = true) {}
         val other = service.prepare(second.id, second.rootNodeId, selection, Verb.EXPLAIN, null)
         assertEquals(
             plan.contentKey, other.contentKey,
@@ -950,7 +1038,7 @@ class SessionServiceTest {
         service.prewarmSeed("quantum-physics") { }
 
         val spent = mutableListOf<Long>()
-        service.create("anon:alice", "quantum-physics") { spent += it }
+        service.create("anon:alice", "quantum-physics", anonymous = true) { spent += it }
 
         assertEquals(emptyList(), spent, "create found the pre-warmed seed and called no model")
         assertEquals(1, llm.calls.size, "the one call is the pre-warm's own")
@@ -1006,8 +1094,8 @@ class SessionServiceTest {
 
     @Test
     fun `reassignPrincipal moves every session of one principal`() = runTest {
-        val (first, _) = service.create("anon:alice", "quantum-physics") {}
-        val (second, _) = service.create("anon:alice", "quantum-physics") {}
+        val (first, _) = service.create("anon:alice", "quantum-physics", anonymous = true) {}
+        val (second, _) = service.create("anon:alice", "quantum-physics", anonymous = true) {}
 
         val moved = service.reassignPrincipal("anon:alice", "user:u1")
 
@@ -1018,8 +1106,8 @@ class SessionServiceTest {
 
     @Test
     fun `reassignPrincipal leaves another principal's sessions`() = runTest {
-        val (alice, _) = service.create("anon:alice", "quantum-physics") {}
-        val (bob, _) = service.create("anon:bob", "quantum-physics") {}
+        val (alice, _) = service.create("anon:alice", "quantum-physics", anonymous = true) {}
+        val (bob, _) = service.create("anon:bob", "quantum-physics", anonymous = true) {}
 
         service.reassignPrincipal("anon:alice", "user:u1")
 
@@ -1028,6 +1116,15 @@ class SessionServiceTest {
     }
 
     private companion object {
-        const val FIXED_NOW = 1_764_000_000_000L
+        // A date far in the future, not the date this suite once used. A later task adds a TTL
+        // index on this module's own collection, and the container's real TTL monitor deletes any
+        // document whose stored expiry is already in the past — see `SessionRepositoryTest`'s own
+        // note on the same trap. The value matches `FUTURE` in `QuotaServiceTest` and elsewhere.
+        const val FIXED_NOW = 4_102_444_800_000L
+
+        /** 30 days, in millis. Matches the completion rule under test, not `SessionService`'s own
+         * private constant — a suite that read the production value could not tell a wrong constant
+         * from a correct one. */
+        const val THIRTY_DAYS_MILLIS = 30L * 24 * 60 * 60 * 1000
     }
 }
