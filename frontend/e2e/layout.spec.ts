@@ -1664,10 +1664,40 @@ test('the account card does not scroll the page sideways at 390px, and the meter
   const cardBox = (await card.boundingBox())!;
   const detailBox = (await detail.boundingBox())!;
   expect(detailBox.x, 'the detail text starts inside the card').toBeGreaterThanOrEqual(cardBox.x);
-  expect(
-    detailBox.x + detailBox.width,
-    'the detail text ends inside the card',
-  ).toBeLessThanOrEqual(cardBox.x + cardBox.width);
+  expect(detailBox.x + detailBox.width, 'the detail text ends inside the card').toBeLessThanOrEqual(
+    cardBox.x + cardBox.width,
+  );
+});
+
+/**
+ * Animation I. The header's own meter is a single, long-lived instance — it lives in the shell,
+ * outside every route's own outlet — so it survives an in-app navigation. Two SPA visits to
+ * `/account`, each answering a different `remaining`, both drive `AccountStore.load()` without
+ * ever remounting the meter: a hard `page.goto` would instead reload the whole application, and
+ * lose that shared instance. The first visit is the meter's first render, which never ticks (see
+ * the component's own tests); the second is the real change this animation answers. Under
+ * reduced motion, the tick class still applies — it is what marks the moment a test can key off
+ * — but its own reduced-motion override in allowance-meter.component.ts silences the animation.
+ */
+test('under reduced motion, the header meter tick carries no animation', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  let calls = 0;
+  await page.route('**/api/account', (route) =>
+    route.fulfill({ json: accountView({ remaining: calls++ === 0 ? 12 : 11 }) }),
+  );
+
+  await page.goto('/');
+  const count = page.locator('header.bar .allowance-meter__count');
+  await page.locator('a.bar__account').click();
+  await expect(count).toContainText('12 of 40 left today');
+
+  await page.locator('a.bar__mark').click();
+  await page.locator('a.bar__account').click();
+  await expect(count).toContainText('11 of 40 left today');
+
+  await expect(count).toHaveClass(/allowance-meter__count--tick/);
+  const animationName = await count.evaluate((el) => getComputedStyle(el).animationName);
+  expect(animationName, 'the tick class applies no animation under reduced motion').toBe('none');
 });
 
 test('the mark draws at 28px, left of the wordmark', async ({ page }) => {

@@ -113,6 +113,65 @@ describe('AllowanceMeterComponent', () => {
     expect(text()).toContain('9 of 25');
   });
 
+  /**
+   * Animation I. The count ticks — a brief lift and a small scale-up — when `remaining` changes
+   * from one real value to another. Cleared by its own `animationend`, and not by a timer: a
+   * timer in a zoneless component needs its own destroy guard, and `animationend` needs none —
+   * the same rule animation A's `landed` class follows in `focus-card.component.ts`.
+   */
+  describe('animation I, the count tick', () => {
+    function countEl(): HTMLElement {
+      return fixture.nativeElement.querySelector('.allowance-meter__count') as HTMLElement;
+    }
+
+    it('does not tick on the first render', () => {
+      store.view.set(active);
+      fixture.detectChanges();
+
+      expect(countEl().classList).not.toContain('allowance-meter__count--tick');
+    });
+
+    it('ticks once remaining changes from one real value to another', () => {
+      store.view.set(active);
+      fixture.detectChanges();
+
+      store.view.set({ ...active, remaining: active.remaining - 1 });
+      fixture.detectChanges();
+
+      expect(countEl().classList).toContain('allowance-meter__count--tick');
+    });
+
+    it('does not tick when the view changes but remaining stays the same', () => {
+      store.view.set(active);
+      fixture.detectChanges();
+
+      store.view.set({ ...active });
+      fixture.detectChanges();
+
+      expect(countEl().classList).not.toContain('allowance-meter__count--tick');
+    });
+
+    it('clears the tick once its own animation ends, and ignores an unrelated one', () => {
+      store.view.set(active);
+      fixture.detectChanges();
+      store.view.set({ ...active, remaining: active.remaining - 1 });
+      fixture.detectChanges();
+      expect(countEl().classList).toContain('allowance-meter__count--tick');
+
+      countEl().dispatchEvent(
+        Object.assign(new Event('animationend'), { animationName: 'some-other-animation' }),
+      );
+      fixture.detectChanges();
+      expect(countEl().classList).toContain('allowance-meter__count--tick');
+
+      countEl().dispatchEvent(
+        Object.assign(new Event('animationend'), { animationName: 'meter-tick' }),
+      );
+      fixture.detectChanges();
+      expect(countEl().classList).not.toContain('allowance-meter__count--tick');
+    });
+  });
+
   it('the meter says nothing about a trial end when there is none', () => {
     // The counterpart to the reset-text guard above, for the trial branch: a `TRIALING` row whose
     // `trialEndsAtEpochMillis` is `null` must print no sentinel value either.

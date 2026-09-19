@@ -1,4 +1,4 @@
-import { Component, inject, signal } from '@angular/core';
+import { Component, effect, inject, signal } from '@angular/core';
 import { AccountStore } from '../core/account.store';
 import { ApiService } from '../core/api.service';
 
@@ -28,7 +28,11 @@ const METERED_STATUSES: ReadonlySet<string> = new Set([
     @if (view(); as account) {
       <div class="allowance-meter">
         @if (metered(account.status)) {
-          <span class="allowance-meter__count">
+          <span
+            class="allowance-meter__count"
+            [class.allowance-meter__count--tick]="ticked()"
+            (animationend)="onCountAnimationEnd($event)"
+          >
             {{ account.remaining }} of {{ account.allowance }} left
             {{ periodWords(account.status) }}
           </span>
@@ -74,6 +78,27 @@ const METERED_STATUSES: ReadonlySet<string> = new Set([
       .allowance-meter__count {
         font-weight: 700;
         min-width: 0;
+      }
+      /* Animation I. A brief lift and a small scale-up when the count changes — never drawing
+         more attention than the answer that just spent it. 160ms and 2px is the whole budget. */
+      .allowance-meter__count--tick {
+        animation: meter-tick var(--mt-dur-state) var(--mt-ease-settle) both;
+      }
+      @keyframes meter-tick {
+        0% {
+          transform: none;
+        }
+        40% {
+          transform: translateY(calc(-1 * var(--mt-move-press))) scale(1.06);
+        }
+        100% {
+          transform: none;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .allowance-meter__count--tick {
+          animation: none;
+        }
       }
       .allowance-meter__detail {
         color: var(--mt-muted);
@@ -149,6 +174,35 @@ export class AllowanceMeterComponent {
   private readonly account = inject(AccountStore);
   private readonly api = inject(ApiService);
   readonly view = this.account.view;
+
+  /** Animation I. True for the one render after `remaining` changes from one real value to
+   * another — never on the first render, and never when the view changes but the count does
+   * not. Cleared by [onCountAnimationEnd], not by a timer: a timer in a zoneless component needs
+   * its own destroy guard, and `animationend` needs none — the same rule `landed` follows on
+   * `focus-card.component.ts`. */
+  protected readonly ticked = signal(false);
+  private previousRemaining: number | null = null;
+
+  constructor() {
+    effect(() => {
+      const remaining = this.view()?.remaining ?? null;
+      if (
+        remaining !== null &&
+        this.previousRemaining !== null &&
+        remaining !== this.previousRemaining
+      ) {
+        this.ticked.set(true);
+      }
+      this.previousRemaining = remaining;
+    });
+  }
+
+  /** Ends animation I's tick, on the animation's own last frame rather than on a timer. Guards
+   * `event.animationName` the same way [onBodyAnimationEnd] on `focus-card.component.ts` does,
+   * so an unrelated animationend bubbling up from a child never clears this early. */
+  onCountAnimationEnd(event: AnimationEvent): void {
+    if (event.animationName === 'meter-tick') this.ticked.set(false);
+  }
 
   /** True while a checkout request is in flight. The button stays disabled during this time.
    * This stops a second click from sending a second request before the redirect happens. See
