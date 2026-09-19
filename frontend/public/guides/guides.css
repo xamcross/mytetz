@@ -71,6 +71,7 @@
   --mt-coral: #ff5d5d;
   --mt-coral-deep: #d63f3f;
   --mt-coral-text: #cc3b3b;
+  --mt-coral-press: #c23636;
 
   --mt-teal: #0f766e;
   --mt-teal-deep: #0a544e;
@@ -161,11 +162,11 @@ a:hover {
 }
 .bar__cta {
   padding: 9px 16px;
-  border: var(--mt-border-w) solid var(--mt-coral-deep);
+  border: var(--mt-border-w) solid var(--mt-coral-press);
   border-radius: var(--mt-r-row);
-  background: var(--mt-coral);
+  background: var(--mt-coral-press);
   box-shadow: 0 4px 0 var(--mt-coral-deep);
-  color: #fff;
+  color: var(--mt-surface);
   font-weight: 700;
   text-decoration: none;
 }
@@ -421,11 +422,11 @@ tbody tr:last-child td {
 .start__cta {
   display: inline-block;
   padding: 13px 22px;
-  border: var(--mt-border-w) solid var(--mt-coral-deep);
+  border: var(--mt-border-w) solid var(--mt-coral-press);
   border-radius: var(--mt-r-row);
-  background: var(--mt-coral);
+  background: var(--mt-coral-press);
   box-shadow: 0 4px 0 var(--mt-coral-deep);
-  color: #fff;
+  color: var(--mt-surface);
   font-size: 17px;
   font-weight: 700;
   text-decoration: none;
