@@ -249,6 +249,29 @@ class SitemapRoutesTest {
         assertFalse("/explain/k-0<" in body, "k-0 has the lowest demand and must be the one entry left out")
     }
 
+    // ------------------------------------------------------------- /glossary (round 2)
+
+    @Test
+    fun `the sitemap does not list glossary on a fresh database`() = testApplication {
+        val fx = SitemapFixture()
+        application { routing { sitemapRoutes(fx.catalog, fx.explanations, FAKE_MODEL_FAMILY) } }
+
+        val body = client.get("/sitemap.xml").bodyAsText()
+
+        assertFalse("<loc>https://mytetz.com/glossary</loc>" in body, "an empty glossary must not be in the sitemap")
+    }
+
+    @Test
+    fun `the sitemap lists glossary once a published explanation exists`() = testApplication {
+        val fx = SitemapFixture(Topic(slug = "quantum-physics", title = "Quantum Physics", category = "Physics", summary = "s"))
+        runBlocking { fx.explanation("abcdef0123456789" + "0".repeat(48), "quantum-physics", published = true) }
+        application { routing { sitemapRoutes(fx.catalog, fx.explanations, FAKE_MODEL_FAMILY) } }
+
+        val body = client.get("/sitemap.xml").bodyAsText()
+
+        assertTrue("<loc>https://mytetz.com/glossary</loc>" in body)
+    }
+
     // ------------------------------------------------------------- hostile input
 
     @Test

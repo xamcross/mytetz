@@ -40,6 +40,15 @@ class GlossaryHtmlTest {
     }
 
     @Test
+    fun `an empty glossary links to the catalogue`() {
+        val html = render(emptyList())
+
+        assertTrue("no entry yet" in html, "the empty state must say there is no entry yet")
+        assertTrue("review" in html, "the empty state must say entries come after a review")
+        assertTrue("""<a href="/">""" in html, "the empty state must link to the catalogue")
+    }
+
+    @Test
     fun `the page lists each entry with a link to its explanation page`() {
         val html = render(
             listOf(

@@ -74,7 +74,8 @@ fun Route.sitemapRoutes(
         // Issue #48: one <url> per published explanation page, capped hard at
         // MAX_PUBLISHED_EXPLANATIONS by publicExplanationSitemapEntries itself — see that
         // function's own KDoc for why the cap is enforced there and not repeated here.
-        val explanationUrls = publicExplanationSitemapEntries(explanations).map { entry ->
+        val publicExplanations = publicExplanationSitemapEntries(explanations)
+        val explanationUrls = publicExplanations.map { entry ->
             SitemapUrl(
                 loc = SITE_URL + entry.path,
                 lastmod = lastModifiedFor(entry.createdAtEpochMillis, reviewedAtEpochMillis = null),
@@ -86,6 +87,14 @@ fun Route.sitemapRoutes(
             addAll(topicUrls)
             addAll(GuidePages.paths.map { SitemapUrl(loc = SITE_URL + it) })
             addAll(explanationUrls)
+            // Round 2: /glossary joins the sitemap only once it has one entry or more. An empty
+            // glossary is a real page (see GlossaryHtml.kt's own empty state), but it names
+            // nothing yet, so a crawler gains nothing from indexing it before then. The list this
+            // route already read above (`publicExplanations`) answers the question at no extra
+            // database read.
+            if (publicExplanations.isNotEmpty()) {
+                add(SitemapUrl(loc = "$SITE_URL/glossary"))
+            }
         }
 
         call.response.header(HttpHeaders.CacheControl, "public, max-age=3600")

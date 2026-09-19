@@ -68,7 +68,12 @@ fun HTML.glossaryHtml(entries: List<GlossaryEntryView>) {
         main(classes = "wrap") {
             h1 { +"Glossary" }
             if (entries.isEmpty()) {
-                p { +"No explanation has been reviewed and published yet." }
+                p {
+                    +"The glossary has no entry yet. An entry appears here after a person has "
+                    +"reviewed it. Go to the "
+                    a(href = "/") { +"catalogue" }
+                    +" to start with a topic."
+                }
             } else {
                 ul {
                     entries.forEach { entry ->
