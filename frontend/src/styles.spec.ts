@@ -316,6 +316,29 @@ describe('a hover state for the controls that are not .mt-pill', () => {
   });
 });
 
+describe('animation N, the change between routes', () => {
+  it('declares the route transition rules inside @media (prefers-reduced-motion: no-preference)', () => {
+    const start = css.indexOf('@media (prefers-reduced-motion: no-preference)');
+    if (start === -1) {
+      throw new Error('styles.css must declare a prefers-reduced-motion: no-preference block');
+    }
+    const block = blockBodyAt(css, css.indexOf('{', start));
+    expect(hasSelector(block, '::view-transition-old(root)')).toBe(true);
+    expect(hasSelector(block, '::view-transition-new(root)')).toBe(true);
+    expect(block).toMatch(/animation:\s*vt-out var\(--mt-dur-route\)/);
+    expect(block).toMatch(/animation:\s*vt-in\s+var\(--mt-dur-route\)/);
+  });
+
+  it('declares no ::view-transition rule outside that guard', () => {
+    // A rule outside the guard would run for every learner, including one who asked for less
+    // motion — the opposite of what this animation promises.
+    const start = css.indexOf('@media (prefers-reduced-motion: no-preference)');
+    const guarded = blockBodyAt(css, css.indexOf('{', start));
+    const withoutGuardedBlock = css.replace(guarded, '');
+    expect(hasSelector(withoutGuardedBlock, '::view-transition')).toBe(false);
+  });
+});
+
 describe('the shared .legal-page block (design review, section 1.4, item 6)', () => {
   const files = [
     'src/app/legal/privacy-page.component.ts',
