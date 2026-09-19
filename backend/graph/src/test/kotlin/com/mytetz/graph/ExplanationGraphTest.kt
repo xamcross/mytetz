@@ -648,6 +648,31 @@ class ExplanationGraphTest {
     }
 
     @Test
+    fun `a malformed SVG still announces its cost before the sanitiser rejects it`() = runTest {
+        // The same property GraphChunk.Spent exists for on the streaming path
+        // (`a generation that is billed and then rejected announces its cost before it raises`),
+        // asserted here for the structured one: a refused SVG is still a paid-for model call, so
+        // the ledger must hear about it before the collector ever sees the failure.
+        llm.nextStructuredJson = """{"explanation":"A short valid sentence about the span.","svg":"<svg><circle cx=\"1\" cy=\"1\" r=\"1\"></svg>"}"""
+
+        val chunks = mutableListOf<GraphChunk>()
+        assertFailsWith<GenerationFailedException> {
+            graph.getOrGenerate(request(verb = Verb.VISUALIZE)).collect { chunks += it }
+        }
+
+        val spent = assertNotNull(
+            chunks.filterIsInstance<GraphChunk.Spent>().singleOrNull(),
+            "a visualize call was billed and raised without ever announcing its cost",
+        )
+        assertTrue(spent.costMicros > 0, "the announced cost must be the real one")
+        assertTrue(
+            chunks.none { it is GraphChunk.Done },
+            "fixture error: this path must have no terminal chunk, or it proves nothing",
+        )
+        assertNull(repository.findByKey(graph.keyFor(request(verb = Verb.VISUALIZE))))
+    }
+
+    @Test
     fun `a VISUALIZE key moves when visualizePromptVersion changes, and not when promptVersion changes`() {
         val visualizeRequest = request(verb = Verb.VISUALIZE)
         val key = graph.keyFor(visualizeRequest)
