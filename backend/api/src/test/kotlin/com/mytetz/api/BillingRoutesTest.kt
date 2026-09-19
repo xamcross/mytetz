@@ -51,6 +51,9 @@ private const val BILLING_ROUTES_LOGGER = "com.mytetz.api.BillingRoutes"
 /** `2025-12-31 23:59:59` UTC, computed independently with `date -u -d ... +%s`. */
 private const val DEC_31_2025_UTC_EPOCH_MILLIS = 1_767_225_599_000L
 
+/** `2026-01-31 23:59:59` UTC, computed the same independent way. */
+private const val JAN_31_2026_UTC_EPOCH_MILLIS = 1_769_903_999_000L
+
 /**
  * Builds one full `subscription.created` event, in the exact shape
  * `packages/sdk/src/webhook/subscription.events.ts` declares. It carries a learner's own [email]
@@ -70,6 +73,29 @@ private fun subscriptionCreatedBody(
         """"subscription":{"id":"$freemiusSubscriptionId"},""" +
         """"license":{"expiration":"$licenseExpiration"}},""" +
         """"data":{"subscription_id":"$freemiusSubscriptionId"}}"""
+
+/**
+ * Builds one full `license.extended` event, in the exact shape
+ * `packages/sdk/src/webhook/license.events.ts` declares: `objects.license.user_id`, and
+ * `data.to` as the new expiration date. [email] is left out unless a caller names one:
+ * `objects.user` is optional on this event, and a renewal in the wild can carry none — the exact
+ * case `BillingRoutes.kt`'s email resolver, and the [freemiusUserId] fallback behind it, both
+ * exist for.
+ */
+private fun licenseExtendedBody(
+    id: String,
+    to: String,
+    from: String = "2025-01-01 00:00:00",
+    created: String = to,
+    freemiusUserId: String = "1001",
+    email: String? = null,
+    licenseId: String = "3001",
+): String {
+    val user = email?.let { ""","user":{"id":"$freemiusUserId","email":"$it"}""" }.orEmpty()
+    return """{"id":"$id","type":"license.extended","created":"$created",""" +
+        """"objects":{"license":{"user_id":"$freemiusUserId"}$user},""" +
+        """"data":{"from":"$from","to":"$to","license_id":"$licenseId","is_renewal":true}}"""
+}
 
 /**
  * The exact HMAC-SHA256-over-raw-bytes computation Freemius documents, kept as its own copy so
@@ -431,6 +457,57 @@ class BillingRoutesTest {
         assertEquals(HttpStatusCode.NoContent, response.status)
         val stored = requireNotNull(billingRepository.find(userId))
         assertEquals(SubscriptionStatus.ACTIVE, stored.status)
+    }
+
+    // ------------------------------------------------------------------ license.extended, the renewal event
+
+    @Test
+    fun `a signed license extended event moves the period end to data to`() = app {
+        val email = signIn()
+        val userId = requireNotNull(account.findByEmail(email)).id
+        val created = webhook(subscriptionCreatedBody(id = "evt-extended-setup", email = email))
+        assertEquals(HttpStatusCode.NoContent, created.status)
+        val before = requireNotNull(billingRepository.find(userId))
+        assertEquals(SubscriptionStatus.ACTIVE, before.status)
+
+        val response = webhook(
+            licenseExtendedBody(
+                id = "evt-extended",
+                to = "2026-01-31 23:59:59",
+                email = email,
+                freemiusUserId = requireNotNull(before.freemiusUserId),
+            ),
+        )
+
+        assertEquals(HttpStatusCode.NoContent, response.status)
+        val stored = requireNotNull(billingRepository.find(userId))
+        assertEquals(SubscriptionStatus.ACTIVE, stored.status)
+        assertEquals(
+            JAN_31_2026_UTC_EPOCH_MILLIS,
+            stored.currentPeriodEndsAtEpochMillis,
+            "the period end must come from data.to",
+        )
+    }
+
+    @Test
+    fun `a license extended event with no objects user still finds the row by freemiusUserId`() = app {
+        // license.events.ts types objects.user as optional on license.extended. This body carries
+        // none, so BillingRoutes.kt's email resolver has no email to resolve, and userReference
+        // stays null. The row must still be found, by objects.license.user_id.
+        val email = signIn()
+        val userId = requireNotNull(account.findByEmail(email)).id
+        val created = webhook(subscriptionCreatedBody(id = "evt-extended-setup-2", email = email, freemiusUserId = "5001"))
+        assertEquals(HttpStatusCode.NoContent, created.status)
+        assertEquals("5001", billingRepository.find(userId)?.freemiusUserId)
+
+        val response = webhook(
+            licenseExtendedBody(id = "evt-extended-no-user", to = "2026-01-31 23:59:59", freemiusUserId = "5001"),
+        )
+
+        assertEquals(HttpStatusCode.NoContent, response.status)
+        val stored = requireNotNull(billingRepository.find(userId))
+        assertEquals(SubscriptionStatus.ACTIVE, stored.status)
+        assertEquals(JAN_31_2026_UTC_EPOCH_MILLIS, stored.currentPeriodEndsAtEpochMillis)
     }
 
     // ------------------------------------------------------------------ the entitlement pipeline
