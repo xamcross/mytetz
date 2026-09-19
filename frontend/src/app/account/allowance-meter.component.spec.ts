@@ -169,9 +169,7 @@ describe('AllowanceMeterComponent', () => {
   it('a click on Subscribe in the meter starts the checkout', async () => {
     store.view.set(expired);
     fixture.detectChanges();
-    const redirect = vi
-      .spyOn(fixture.componentInstance, 'redirect')
-      .mockImplementation(() => {});
+    const redirect = vi.spyOn(fixture.componentInstance, 'redirect').mockImplementation(() => {});
 
     subscribeButton().click();
 
