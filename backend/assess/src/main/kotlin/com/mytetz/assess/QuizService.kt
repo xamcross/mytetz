@@ -71,6 +71,15 @@ class QuizService(
     suspend fun findTemplate(key: String): QuizTemplate? = repository.findByKey(key)
 
     /**
+     * Removes every attempt that belongs to [principalId]. Reports how many it removed.
+     *
+     * Account deletion calls this. See [QuizRepository.deleteForPrincipal] for what it does and
+     * does not touch. `com.mytetz.session.SessionService.deleteForPrincipal` forwards to its own
+     * repository the same way, for the same reason.
+     */
+    suspend fun deleteForPrincipal(principalId: String): Long = repository.deleteForPrincipal(principalId)
+
+    /**
      * A cache hit costs nothing and calls no model.
      *
      * A cache miss generates a quiz once. If that attempt yields zero valid questions, this
