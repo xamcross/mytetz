@@ -83,7 +83,7 @@ const POLL_TIMEOUT_MILLIS = 30000;
               moment.
             </p>
           } @else if (pollTimedOut()) {
-            <p class="account-page__poll-status">
+            <p class="account-page__poll-status" role="status">
               The confirmation is not here yet. Load this page again in a minute.
             </p>
           }

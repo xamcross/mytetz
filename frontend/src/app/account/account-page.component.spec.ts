@@ -403,12 +403,10 @@ describe('AccountPageComponent — the post-purchase poll', () => {
   /**
    * Settles every microtask still queued, without `whenStable`.
    *
-   * `whenStable` waits on Angular's own pending-task count, which clears the moment a flushed
-   * `HttpTestingController` request settles — a tick before `ngOnInit`'s own continuation (the
-   * mocked `Router.navigate` call, then the poll decision) actually runs. Under the fake clock
-   * every spec in this describe block installs, that gap between "task cleared" and "our own
-   * `await` resolves" leaves `whenStable` with nothing left to wait for, so it settles too early.
-   * A fixed small number of bare microtask turns drains the rest, regardless of that gap.
+   * `whenStable` is a trap here. It waits on Angular's pending-task count, which clears the
+   * moment a flushed `HttpTestingController` request settles — one tick before `ngOnInit`'s own
+   * continuation (the `Router.navigate` call, then the poll decision) actually runs. A fixed
+   * small number of bare microtask turns drains that remaining continuation instead.
    */
   async function settle(): Promise<void> {
     for (let i = 0; i < 4; i++) await Promise.resolve();
@@ -476,6 +474,10 @@ describe('AccountPageComponent — the post-purchase poll', () => {
 
     http.expectNone('/api/account');
     expect(text()).toContain('The confirmation is not here yet');
+    // The learner takes no action to reach this message, so a screen reader must announce it on
+    // its own — the same reason the waiting message above carries the same role.
+    const timedOut = fixture.nativeElement.querySelector('.account-page__poll-status');
+    expect(timedOut?.getAttribute('role')).toBe('status');
   });
 
   it('stops the poll when the page is destroyed', async () => {
