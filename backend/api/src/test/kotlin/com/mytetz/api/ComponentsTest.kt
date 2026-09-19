@@ -32,6 +32,7 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.server.testing.testApplication
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
@@ -402,6 +403,55 @@ class ComponentsTest {
             explain.status,
             "the explain route did not run; the catch-all or the SPA answered: ${explain.bodyAsText()}",
         )
+    }
+
+    /**
+     * Deviation from the plan, recorded here: the plan (Task 1.5) asks for this test in
+     * `ApplicationTest.kt`, "next to the existing SPA-fallback and API-catch-all tests". On
+     * 2026-09-19 `ApplicationTest.kt` holds only the `resolvePort` tests — the real SPA-fallback
+     * and API-catch-all tests against the real module (`an unknown api path is a json 404, not the
+     * single-page app with a 200`, and `the real module routes the session endpoints ahead of the
+     * api catch-all and the spa`, above) live here, in `ComponentsTest.kt`. This test joins them,
+     * for the same reason: it needs the real `module()` and the real `Components`, which this file
+     * already wires for every test above it.
+     */
+    @Test
+    fun `a topics path is served by the dedicated route, not the SPA fallback`() = testApplication {
+        val components = Components(
+            mongo = Mongo(MongoConfig(TestFixtures.connectionString, "test_api_topics_precedence")),
+            cookies = TestFixtures.cookieConfig,
+            llmFactory = { FakeLlmClient() },
+        )
+        runBlocking {
+            com.mytetz.catalog.TopicRepository(components.mongo.database).upsert(
+                com.mytetz.catalog.Topic(
+                    slug = "quantum-physics", title = "Quantum Physics", category = "Physics", summary = "s",
+                )
+            )
+        }
+        application { module(components) }
+        awaitReady(client)
+
+        val response = client.get("/topics/quantum-physics")
+
+        assertEquals(HttpStatusCode.OK, response.status)
+        // The Angular shell is a single-page app entry point and carries this marker; the
+        // Ktor-rendered topic page does not. Asserting its absence is what tells the two templates
+        // apart — a 200 alone would also pass if the SPA fallback had answered instead.
+        assertFalse(response.bodyAsText().contains("<app-root"), "the SPA shell answered, not the topic-page route")
+    }
+
+    @Test
+    fun `an unknown topics slug answers 404, not the SPA shell's 200`() = testApplication {
+        val components = Components(
+            mongo = Mongo(MongoConfig(TestFixtures.connectionString, "test_api_topics_precedence_404")),
+            cookies = TestFixtures.cookieConfig,
+            llmFactory = { FakeLlmClient() },
+        )
+        application { module(components) }
+        awaitReady(client)
+
+        assertEquals(HttpStatusCode.NotFound, client.get("/topics/no-such-topic").status)
     }
 
     @Test
