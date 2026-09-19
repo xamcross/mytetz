@@ -611,12 +611,21 @@ return address is a Freemius dashboard setting, not a request parameter. An oper
 by hand, once, on the product's own checkout page in the Freemius dashboard.
 
 **Set the post-purchase redirect to `{MYTETZ_PUBLIC_BASE_URL}/account`.** One example is
-`https://mytetz.com/account`.
+`https://mytetz.com/account`. The dashboard path is `Plans` > `Customization` > `Redirect
+Checkout to a custom URL`.
 
 `AccountPageComponent` reads a fresh `GET /api/account` on every mount. This is why the redirect
 matters: the account page shows the learner's new allowance only after this mount. A wrong
 redirect still lets the learner sign in. But the learner then does not see the new allowance
 until they open `/account` by hand.
+
+**Freemius may still be sending its webhook when the browser lands back on `/account`.** The
+return and the webhook are two separate requests, and no vendor source states which one arrives
+first. The return URL carries an `action` query parameter for exactly this case. The account page
+reads `action` only as a hint, and starts no poll without it. When the hint is present, the page
+reads `GET /api/account` again every 2 seconds, until the status or the period end changes, or 30
+seconds pass. A learner who still sees the old allowance after that wait can load `/account`
+again in a minute.
 
 ---
 
