@@ -192,8 +192,11 @@ break that session's trail, so the job checks every candidate against that colle
 deletes anything.
 
 The job runs once at boot, at the end of `Components.bootstrap`, and once a day after that, from a
-loop in `Application.kt`. One run reads one bounded batch and never scans the whole collection.
-Grep the boot log for `EVICTION` to see what one run removed and what it scanned.
+loop in `Application.kt`. One run reads 5,000 candidates at most, in pages, and never scans the
+whole collection. The next run continues after where the last one stopped, rather than reading the
+same oldest candidates again, so a large collection of mostly-referenced candidates does not stall
+the job for ever. A full pass of a large collection can therefore take more than one day. Grep the
+boot log for `EVICTION` to see what one run removed and what it scanned.
 
 ### Atlas network access — known constraint
 
