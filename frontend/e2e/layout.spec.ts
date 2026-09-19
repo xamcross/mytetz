@@ -499,7 +499,10 @@ test('the leaving stream box cannot be selected, and the status paragraph change
 
   await stream.send(sseFrame('done', { contentKey: 'k1', grounded: true }));
   await stream.close();
-  await expect(page.getByText(/subatomic scale/)).toBeVisible();
+  // `page.getByTestId('focus-body')`, and not `page.getByText(...)`: this claim is about the
+  // landed answer, and the leaving stream box holds the same words for the whole close
+  // animation, so a page-wide text search can match both and fail with a strict mode violation.
+  await expect(page.getByTestId('focus-body')).toContainText('subatomic scale');
 
   // Still frozen and still unselectable while it fades — the moment this issue's round 2 adds.
   const userSelectWhileLeaving = await page
@@ -948,7 +951,10 @@ test.describe('with a reduced-motion preference', () => {
     await stream.send(sseFrame('done', { contentKey: 'k1', grounded: true }));
     await stream.close();
 
-    await expect(page.getByText(/subatomic scale/)).toBeVisible();
+    // The body, not a page-wide text search: the leaving box holds the same words while it
+    // fades, even at 1ms, so a page-wide search could resolve to both and fail with a strict
+    // mode violation.
+    await expect(page.getByTestId('focus-body')).toContainText('subatomic scale');
     await expect(page.locator('.focus__streaming')).toHaveCount(0);
     // Animation A's other half: the body settles at full opacity, and not stuck at the 0.25 the
     // keyframe's `from` step declares.
