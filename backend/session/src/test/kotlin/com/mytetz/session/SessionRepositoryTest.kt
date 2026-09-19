@@ -186,6 +186,23 @@ class SessionRepositoryTest {
             byName["principal_recent"]?.get("key"),
         )
         assertEquals(Document("topicSlug", 1), byName["by_topic"]?.get("key"))
+        assertEquals(Document("nodes.explanationKey", 1), byName["by_explanation_key"]?.get("key"))
+    }
+
+    @Test
+    fun `referencedExplanationKeys returns only the keys a session node still points at`() = runTest {
+        repository.insert(session)
+
+        val referenced = repository.referencedExplanationKeys(listOf("child-key", "unknown-key"))
+
+        assertEquals(setOf("child-key"), referenced)
+    }
+
+    @Test
+    fun `referencedExplanationKeys on an empty candidate list returns nothing and asks Mongo nothing`() = runTest {
+        repository.insert(session)
+
+        assertEquals(emptySet(), repository.referencedExplanationKeys(emptyList()))
     }
 
     // ------------------------------------------------------------------ the anonymous TTL

@@ -148,7 +148,7 @@ live in the process, so they reset whenever the machine cold-starts.
 
 ### 2.2 Every variable the backend reads
 
-42 variables, and each one is listed here and in `.env.example`. The Default
+44 variables, and each one is listed here and in `.env.example`. The Default
 column gives `none` for a name with no default in code, and the real default
 for every other name.
 
@@ -204,6 +204,36 @@ needs it, until an operator sets it.
 | `MYTETZ_TURNSTILE_SITE_KEY` | none | the Turnstile site key, reported to the browser at `GET /api/auth/config`. With this unset, the sign-in panel renders no widget. Section "Turnstile" below explains it. |
 | `MYTETZ_MAIL_API_KEY` | none | the Resend API key. Needed only when `MYTETZ_MAIL_MODE` is `resend`; without it, email sign-in in that mode answers `503`. |
 | `MYTETZ_PUBLIC_BASE_URL` | none | the absolute base url of this deployment, such as `https://mytetz.com`. Email sign-in and Google sign-in both answer `503` until this is set. |
+| `MYTETZ_EVICTION_MAX_REQUEST_COUNT` | `0` | the most times a candidate document may have been read and still be evicted. `0` is a legal value, and it is also the default. |
+| `MYTETZ_EVICTION_MAX_AGE_DAYS` | `90` | how old a document must be before it is a candidate. `0` falls back to the default, because it would mark every document as old enough at once. |
+
+### Explanation-store eviction
+
+The `explanations` collection grows and never shrinks on its own. The Atlas M0 cluster has a
+512 MB limit. A full cluster refuses every write, and every new explanation then fails.
+`Components.evictExplanations` removes a document that nothing needs any more, so the collection
+stays bounded.
+
+A document is a candidate for eviction when all three of these are true:
+
+- It is not a seed. A seed keeps the pre-warm contract, so eviction never touches it.
+- Its `requestCount` is at or below `MYTETZ_EVICTION_MAX_REQUEST_COUNT`.
+- Its `createdAtEpochMillis` is older than `MYTETZ_EVICTION_MAX_AGE_DAYS`.
+
+`createdAtEpochMillis` is a plain number, not a BSON date, so a TTL index cannot serve this rule.
+The `created_at` index on `explanations` serves the age filter and the sort instead.
+
+A candidate document still survives when a session node points at it, through
+`nodes.explanationKey` in the `sessions` collection. Deleting the target of a live node would
+break that session's trail, so the job checks every candidate against that collection before it
+deletes anything.
+
+The job runs once at boot, at the end of `Components.bootstrap`, and once a day after that, from a
+loop in `Application.kt`. One run reads 5,000 candidates at most, in pages, and never scans the
+whole collection. The next run continues after where the last one stopped, rather than reading the
+same oldest candidates again, so a large collection of mostly-referenced candidates does not stall
+the job for ever. A full pass of a large collection can therefore take more than one day. Grep the
+boot log for `EVICTION` to see what one run removed and what it scanned.
 
 ### Atlas network access — known constraint
 
@@ -362,6 +392,7 @@ token the codebase writes has one row somewhere in this document.
 | `BILLING_UNPARSEABLE_EVENT` | `BILLING_UNPARSEABLE_EVENT` | WARN | High | any occurrence; a signed payment event was rejected, and no row changed |
 | `BILLING_UNREADABLE_PERIOD_END` | `BILLING_UNREADABLE_PERIOD_END` | WARN | Medium | any occurrence; the event was applied, with a fall-back period end |
 | `RECONCILE_SKIPPED` | `RECONCILE_SKIPPED` | WARN | Medium | any occurrence |
+| `EVICTION_LOOP_FAILED` | `EVICTION_LOOP_FAILED` | ERROR | Medium | any occurrence; one run of the eviction job failed, and the next run tries again |
 | `TRIAL_CAP_REACHED` | `TRIAL_CAP_REACHED` | INFO | Info | no alert; a rate signal only |
 | `MIGRATION` and `PREWARM`, the INFO lines | `MIGRATION removed` or `PREWARM pre-warmed` | INFO | Info | no alert; read by hand, see "The B0 model migration" |
 | `PREWARM`, the WARN lines | `PREWARM_SKIPPED`, `PREWARM stopped early` or `PREWARM failed to pre-warm` | WARN | Medium | any occurrence; the pre-warm runs on each boot, so a line can appear on each boot |
@@ -737,6 +768,7 @@ operator, and no line ever reaches a learner.
 | `ACCOUNT_LINK_CONFLICT` | `AuthRoutes` | a Google sign-in's email is already linked to a different Google account | a real conflict, not a bug; the learner needs the sign-in method their account already used |
 | `MAIL_SEND_FAILED` | `MailSender` | a magic-link email could not be sent | check the mail provider's status and `MYTETZ_MAIL_API_KEY`; a learner is currently unable to sign in by email |
 | `CONFIG_MISSING` | `ConfigGate`, from `AuthRoutes` and `BillingRoutes` | a route needs an environment variable that is not set, so it answers `503` rather than `500`. One line names only the first missing variable in that route's own chain; a second variable, if one is also missing, only appears after the first is set | set the named variable. The next request retries on its own. No restart is needed |
+| `EVICTION_LOOP_FAILED` | `Components.bootstrap` (the boot-time run), and the daily loop in `Application.kt` | one explanation-eviction run raised an exception and did not complete | read the log line's own exception. Nothing else fails because of this: the boot still completes, and the next run — the next day, or the next boot — retries on its own |
 | `SPEND_UNRECORDED` | `SessionRoutes.recordSpend` | a generation was paid for, but the quota ledger did not record the cost | read the principal and the cost in the line; the daily spend ceiling in section 2.1 is understating the true spend by that amount |
 | `CORRUPT_SESSION` | `ErrorMapping.logCorruptSession` | a stored session no longer describes a tree; no retry fixes it | read the session id in the line; a person must read the document by hand |
 | `unrecognised stop reason` | `ExplanationValidator.validate`, through `ErrorMapping.installErrorMapping` and `ErrorMapping.sseErrorFor` | the model answered with a stop reason the validator does not know; the validator rejects every such answer, and keeps rejecting until a person acts | read the exact reason in the line under `generation failed`; add the new reason to the validator's allowlist if it is a real success case |

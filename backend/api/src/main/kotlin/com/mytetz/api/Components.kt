@@ -19,6 +19,7 @@ import com.mytetz.billing.Reconciliation
 import com.mytetz.catalog.CatalogService
 import com.mytetz.catalog.TopicRepository
 import com.mytetz.catalog.TopicRequestRepository
+import com.mytetz.graph.Explanation
 import com.mytetz.graph.ExplanationGraph
 import com.mytetz.graph.ExplanationRepository
 import com.mytetz.graph.ExplanationValidator
@@ -42,6 +43,16 @@ import org.slf4j.LoggerFactory
 import kotlin.coroutines.cancellation.CancellationException
 
 private val log = LoggerFactory.getLogger("com.mytetz.api.Components")
+
+private const val DAY_MILLIS = 86_400_000L
+
+/**
+ * The ERROR token a failed eviction run is logged under. [Components.bootstrap]'s own guard
+ * around [Components.evictExplanations] logs it, and so does the daily loop in `Application.kt`
+ * that calls the same method — one token for an operator to grep either source under, stated in
+ * `docs/deploy.md`'s "Operator alert tokens" table.
+ */
+internal const val EVICTION_LOOP_FAILED_TOKEN: String = "EVICTION_LOOP_FAILED"
 
 /**
  * The whole object graph, wired by hand.
@@ -108,6 +119,17 @@ open class Components(
     private val explanations = ExplanationRepository(mongo.database)
     private val sessionRepository = SessionRepository(mongo.database)
     private val quizRepository = QuizRepository(mongo.database)
+
+    /** The two settings [evictExplanations] reads: how quiet, and how old, a document must be. */
+    private val evictionConfig = EvictionConfig()
+
+    /**
+     * Where the last call to [evictExplanations] stopped reading, or `null` when the next call
+     * must start from the single oldest candidate — either because no call has run yet, or
+     * because the last call read all the way to the end of the candidate set. See
+     * [evictExplanations]'s own KDoc for why this lives here, in memory, and nowhere else.
+     */
+    private var evictionCursor: Explanation? = null
 
     /** Public so `Application.kt` can pass it to `authRoutes`, which reads a counter for `GET /api/account`. */
     val quotaRepository = QuotaRepository(mongo.database)
@@ -253,6 +275,25 @@ open class Components(
         migrate()
         prewarm()
         reconcile()
+
+        // Guarded, unlike the six calls above: eviction is housekeeping, not correctness. Every
+        // ensureIndexes() and seedFromResource() above must stop the boot on failure — a missing
+        // index or an unseeded catalogue is a real incident. A missed eviction run is not: the
+        // daily loop in `Application.kt` retries tomorrow, and nothing else in this class depends
+        // on the collection shrinking. Letting it fail loudly here would instead take
+        // `ready` down for the life of the machine — see `Application.bootstrap`'s own KDoc for
+        // what that flag guards.
+        try {
+            evictExplanations()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.error(
+                "$EVICTION_LOOP_FAILED_TOKEN — the boot-time eviction run did not complete; the " +
+                    "daily loop retries on its own schedule",
+                e,
+            )
+        }
     }
 
     /**
@@ -402,6 +443,121 @@ open class Components(
         log.info("RECONCILE corrected {} drifted subscription(s)", corrected)
     }
 
+    /**
+     * Removes what it can of the explanations that nothing needs any more, across one or more
+     * pages within one run. Logs `EVICTION removed={} scanned={}` at INFO, where `scanned` is the
+     * total read across every page this call made.
+     *
+     * The rule: a document is removable when it is not a seed, when its `requestCount` is at or
+     * below [EvictionConfig.maxRequestCount], and when it is older than
+     * [EvictionConfig.maxAgeDays]. A removable document is still not deleted while a session node
+     * points at it — deleting the target of a live node would break that session's trail, the
+     * fault [CorruptSessionException] exists to catch. See `SessionService.hydrate`'s own KDoc.
+     *
+     * ## Why the reference check sits here, and not in `ExplanationRepository`
+     *
+     * `:backend:graph` does not depend on `:backend:session`, so `ExplanationRepository` cannot
+     * ask whether a session still references a key. `Components` sees both repositories, so the
+     * two-step rule lives here: read one page of candidates, remove the keys a session still
+     * points at, and delete the rest.
+     *
+     * ## The bound of one run
+     *
+     * A session belonging to a signed-in learner is not deleted until account deletion, so the
+     * oldest candidates are, in practice, disproportionately the ones a session still references.
+     * A single page ordered oldest-first can therefore be entirely referenced, while an
+     * unreferenced document waits just behind it. This method walks forward with [pageSize]-sized
+     * pages, using [ExplanationRepository.findEvictionCandidates]'s `after` cursor, until one page
+     * comes back short — meaning there is nothing left to read — or it has read [maxPagesPerRun]
+     * pages, whichever comes first. **[maxPagesPerRun] pages of [pageSize] each is the fixed bound
+     * for one run**; it is not a full sweep of the collection, and one page is one `find`, one
+     * `distinct` and at most one `deleteMany`, so one run is a small, predictable number of
+     * database round trips.
+     *
+     * ## The position carries over, so every candidate gets a turn
+     *
+     * A single run's bound is not, on its own, enough: a collection can hold far more than
+     * [maxPagesPerRun] × [pageSize] contiguous referenced candidates ahead of the next removable
+     * one, and a job that started over from the oldest candidate on every call would then never
+     * reach anything behind them, on any later call either. So [evictionCursor] remembers, across
+     * calls, the last candidate a run actually read. The next call resumes strictly past it — see
+     * [ExplanationRepository.findEvictionCandidates]'s own KDoc on the `after` parameter — rather
+     * than reading the same oldest page again. When a run's last page comes back short, the scan
+     * has reached the end of the whole candidate set, and [evictionCursor] is cleared, so the next
+     * call wraps around and starts again from the single oldest candidate — the same as if no call
+     * had ever run.
+     *
+     * [evictionCursor] lives in memory only, on this instance, and needs no persistence and no new
+     * failure handling: a position that names a document another run already deleted is not a
+     * fault, because [ExplanationRepository.findEvictionCandidates]'s cursor filter compares
+     * `createdAtEpochMillis` and `_id` values and needs no document to exist at them. A process
+     * restart clears it, which is correct — the position is a resume point for an unfinished
+     * sweep, not a record that must survive one.
+     *
+     * A full pass of a collection of `N` candidates therefore takes
+     * `ceil(N / (maxPagesPerRun × pageSize))` calls to this method — with the daily loop in
+     * `Application.kt`, that many days — after which every candidate that was ever unreferenced
+     * and stayed that way has had its turn, however many referenced candidates sit ahead of it.
+     *
+     * ## The check-then-delete race, and how far the delete closes it
+     *
+     * A learner can turn a candidate into a cache hit between the reference check below and the
+     * delete that follows it. `ExplanationGraph.getOrGenerate` raises `requestCount` on a cache
+     * hit, and it does this *before* `SessionService` appends the node that then references the
+     * key. [ExplanationRepository.deleteEvictable] repeats the `requestCount` filter, so Mongo
+     * checks that filter against the document as it stands at delete time — a key raised in that
+     * window no longer matches, and it survives. This closes most of the window. It does not
+     * close every case; `SessionService.hydrate`'s own KDoc names the residual one.
+     *
+     * `open` only so a test can shrink [pageSize] and [maxPagesPerRun], or replace this method
+     * outright to prove a caller survives its failure — see [bootstrap] and the daily loop in
+     * `Application.kt`. There is no production subclass.
+     */
+    open suspend fun evictExplanations(
+        pageSize: Int = EVICTION_PAGE_SIZE,
+        maxPagesPerRun: Int = EVICTION_MAX_PAGES_PER_RUN,
+    ) {
+        var removed = 0L
+        var scanned = 0
+        var cursor: Explanation? = evictionCursor
+        var pagesRead = 0
+        var reachedEnd = false
+
+        while (pagesRead < maxPagesPerRun) {
+            val page = explanations.findEvictionCandidates(
+                maxRequestCount = evictionConfig.maxRequestCount,
+                olderThanEpochMillis = System.currentTimeMillis() - evictionConfig.maxAgeDays * DAY_MILLIS,
+                pageSize = pageSize,
+                after = cursor,
+            )
+            pagesRead++
+            if (page.isEmpty()) {
+                reachedEnd = true
+                break
+            }
+
+            scanned += page.size
+            val keys = page.map { it.key }
+            val referenced = sessionRepository.referencedExplanationKeys(keys)
+            val evictable = keys.filterNot { it in referenced }
+            if (evictable.isNotEmpty()) {
+                removed += explanations.deleteEvictable(evictable, evictionConfig.maxRequestCount)
+            }
+
+            cursor = page.last()
+            if (page.size < pageSize) {
+                reachedEnd = true // a short page: nothing is left behind it
+                break
+            }
+        }
+
+        // A run that reached the end wraps around; a run that only hit its page bound resumes
+        // from here next time, so the candidates behind it still get their turn.
+        evictionCursor = if (reachedEnd) null else cursor
+
+        log.info("EVICTION removed={} scanned={}", removed, scanned)
+    }
+
     companion object {
 
         /**
@@ -411,6 +567,26 @@ open class Components(
          * the Freemius API. Five hundred is generous for this product's expected scale.
          */
         const val RECONCILE_LIMIT: Int = 500
+
+        /** The default page size [evictExplanations] reads with, absent an override. */
+        const val EVICTION_PAGE_SIZE: Int = 250
+
+        /**
+         * How many pages [evictExplanations] reads in one run, at most.
+         *
+         * [EVICTION_PAGE_SIZE] × [EVICTION_MAX_PAGES_PER_RUN] is therefore the most documents one
+         * run scans — 5,000 by default, the same reasoning [RECONCILE_LIMIT] states: a bound
+         * keeps one run predictable, rather than scanning the whole collection in one sweep. Each
+         * page costs one `find`, one `distinct` and at most one `deleteMany`, so a full run of
+         * twenty pages is at most sixty small database round trips — cheap enough that this bound
+         * is about predictability, not about protecting the database from one run.
+         *
+         * Reading that bound in pages, rather than in one query, is what lets a run walk past a
+         * page that held nothing removable. `evictionCursor` is what lets the *next* run resume
+         * where this one stopped, rather than reading the same oldest page again — see
+         * [evictExplanations]'s own KDoc for both.
+         */
+        const val EVICTION_MAX_PAGES_PER_RUN: Int = 20
 
         const val MIGRATE_ON_BOOT_ENV: String = "MYTETZ_MIGRATE_ON_BOOT"
         const val PUBLIC_BASE_URL_ENV: String = "MYTETZ_PUBLIC_BASE_URL"

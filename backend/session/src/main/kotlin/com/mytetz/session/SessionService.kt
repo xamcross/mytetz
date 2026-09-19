@@ -144,10 +144,15 @@ class ExplainPlan internal constructor(
  *
  * Two facts, and only the first is comfortable.
  *
- * **A hit stays a hit.** Nothing ever deletes an explanation — `ExplanationRepository` has no delete
- * method and the collection carries no TTL index — so a key that existed at [prepare] still exists
- * at [explain]. `cached = true` never becomes false, and no generation can slip past an exhausted
- * budget on a stale plan.
+ * **A hit stays a hit, except across the eviction job.** `Components.evictExplanations` is the one
+ * caller that deletes an explanation, and it deletes a document only when it is not a seed, when no
+ * session references it, and when its `requestCount` is still low. So a key that existed at
+ * [prepare] can be gone by [explain], in the rare case where the job runs in that exact window. The
+ * generation that follows then runs with no quota check, because `SessionRoutes.kt` skips the quota
+ * gate for a cached plan. The spend record still stays correct: `GraphChunk.Spent` reports what this
+ * one call actually costs, not what `cached` predicted. Outside that one job, the old rule still
+ * holds — no other caller in `ExplanationRepository` deletes a document, and the collection carries
+ * no TTL index.
  *
  * **A miss frequently becomes a hit, and refusing it is a real failure.** Another caller can persist
  * the same key between [prepare] and [explain]. An API layer that has already turned
@@ -263,7 +268,9 @@ class SessionService(
      * new sessions; a learner already inside one may finish it. Yanking a live session mid-read is
      * the worse failure for what unpublishing actually means in this catalogue (not ready for
      * browsing), and if a topic ever has to be withdrawn because its content is harmful, nothing in
-     * this slice can do that anyway — the explanations are already immutable and undeletable.
+     * this slice can do that anyway. `Components.evictExplanations` deletes a document, but only one
+     * that is old, low-demand and unreferenced — an operator cannot point it at one topic on demand,
+     * and a document a learner still reads survives it no matter what the topic's status is.
      * Recorded as a decision rather than left as an omission.
      *
      * [anonymous] sets [LearningSession.expiresAtEpochMillis] to 90 days from [clock] when true, and
@@ -728,8 +735,12 @@ class SessionService(
      * A key that does not resolve is [CorruptSessionException] and not `error(...)`: Task 1.9
      * introduced the type for exactly this class of fault — a stored reference that does not
      * resolve — so that Task 1.11 can map corruption to a 500 with an alert, separately from caller
-     * error. Nothing deletes explanations, so a dangling key here means the document was never
-     * written or the collection was damaged; either way somebody should look.
+     * error. A dangling key here almost always means the document was never written or the
+     * collection was damaged; either way somebody should look.
+     *
+     * `Components.evictExplanations` is the one narrow exception. Its own reference check can race a
+     * session append that has not yet landed, and the conditional delete's `requestCount` filter
+     * closes most, but not all, of that window — see that method's own KDoc for the bound.
      */
     private suspend fun hydrate(sessionId: String, keys: List<String>): Map<String, Explanation> =
         keys.distinct().associateWith { key ->
