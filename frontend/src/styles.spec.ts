@@ -19,6 +19,46 @@ function rootBlock(source: string): string {
   return root[1];
 }
 
+/** The body of the block that opens at `openIndex` (the index of its `{`), found by counting
+ * braces instead of a fixed amount of indentation, so a reformat cannot break this. */
+function blockBodyAt(source: string, openIndex: number): string {
+  let depth = 0;
+  for (let i = openIndex; i < source.length; i++) {
+    if (source[i] === '{') depth++;
+    if (source[i] === '}') {
+      depth--;
+      if (depth === 0) return source.slice(openIndex + 1, i);
+    }
+  }
+  throw new Error('a block opened here never closes');
+}
+
+/**
+ * The body of the first `@media (prefers-reduced-motion: reduce) { ... }` block.
+ */
+function reducedMotionBlock(source: string): string {
+  const start = source.indexOf('@media (prefers-reduced-motion: reduce)');
+  if (start === -1) throw new Error('the file must declare a prefers-reduced-motion block');
+  return blockBodyAt(source, source.indexOf('{', start));
+}
+
+/**
+ * The body of every `@media (hover: hover) { ... }` block, joined into one string. A hover rule
+ * that stays outside every such block never appears here, even if it appears elsewhere in the
+ * file — so a test that reads only this text finds a rule solely because it is properly guarded.
+ */
+function hoverGuardedText(source: string): string {
+  let text = '';
+  let from = 0;
+  for (;;) {
+    const start = source.indexOf('@media (hover: hover)', from);
+    if (start === -1) return text;
+    const open = source.indexOf('{', start);
+    text += blockBodyAt(source, open) + '\n';
+    from = open + 1;
+  }
+}
+
 /** The value of one custom property inside a token block, for example `--mt-dur-press`. */
 function readToken(block: string, name: string): string {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -27,10 +67,16 @@ function readToken(block: string, name: string): string {
   return declaration[1].trim();
 }
 
+/** A comment's own text can hold a class name too. Strip every `/* ... *\/` block first, so a
+ * mention inside a comment never counts as a rule. */
+function stripComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, '');
+}
+
 /** True when the file declares at least one rule whose selector list holds `selector`. */
 function hasSelector(source: string, selector: string): boolean {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`(^|[,{}]|\\s)${escaped}(\\s|,|\\{)`, 'm').test(source);
+  return new RegExp(`(^|[,{}]|\\s)${escaped}(\\s|,|\\{)`, 'm').test(stripComments(source));
 }
 
 /**
@@ -40,7 +86,7 @@ function hasSelector(source: string, selector: string): boolean {
  */
 function hasHoverRule(source: string, className: string): boolean {
   const escaped = className.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`${escaped}(:not\\([^)]*\\))?:hover`).test(source);
+  return new RegExp(`${escaped}(:not\\([^)]*\\))?:hover`).test(stripComments(source));
 }
 
 /** Every `.ts` file under a directory, walked without a third-party glob package. */
@@ -105,13 +151,32 @@ describe('the shadow tokens of styles.css', () => {
   it('names the hover lift', () => {
     expect(readToken(root, '--mt-lift-hover')).toBe('0 5px 0 var(--mt-border)');
   });
+  it('names the coral hover lift', () => {
+    expect(readToken(root, '--mt-lift-hover-coral')).toBe('0 5px 0 var(--mt-coral-deep)');
+  });
+  it('names the teal hover lift', () => {
+    expect(readToken(root, '--mt-lift-hover-teal')).toBe('0 5px 0 var(--mt-teal-deep)');
+  });
+
+  it('uses the named coral and teal hover lifts, and not a raw value, everywhere they repeat', () => {
+    // .mt-pill--coral/--teal draw this in styles.css. .picker__verb--primary and
+    // .trail__item--current draw the same value on purpose (see each file's own comment on the
+    // duplication), so they take the same token and not their own raw copy.
+    const files = [
+      'src/styles.css',
+      'src/app/ui/verb-picker.component.ts',
+      'src/app/reader/trail-rail.component.ts',
+    ].map((f) => readFileSync(f, 'utf8'));
+    for (const text of files) {
+      expect(text).not.toMatch(/box-shadow:\s*0 5px 0 var\(--mt-coral-deep\)/);
+      expect(text).not.toMatch(/box-shadow:\s*0 5px 0 var\(--mt-teal-deep\)/);
+    }
+  });
 });
 
 describe('the reduced-motion token override', () => {
   it('replaces the blanket rule with a duration and a distance of zero', () => {
-    const block = css.match(/@media \(prefers-reduced-motion: reduce\)\s*\{([\s\S]*)\}\s*$/);
-    if (!block) throw new Error('styles.css must keep one prefers-reduced-motion block');
-    const body = block[1];
+    const body = reducedMotionBlock(css);
     expect(body).toMatch(/--mt-dur-press:\s*1ms/);
     expect(body).toMatch(/--mt-dur-state:\s*1ms/);
     expect(body).toMatch(/--mt-dur-panel:\s*1ms/);
@@ -121,12 +186,21 @@ describe('the reduced-motion token override', () => {
     expect(body).toMatch(/--mt-move-far:\s*0px/);
   });
 
-  it('keeps an explicit rule for the skeleton, the caret and the band', () => {
-    const block = css.match(/@media \(prefers-reduced-motion: reduce\)\s*\{([\s\S]*)\}\s*$/);
-    if (!block) throw new Error('styles.css must keep one prefers-reduced-motion block');
-    expect(hasSelector(block[1], '.mt-skeleton')).toBe(true);
-    expect(hasSelector(block[1], '.focus__caret')).toBe(true);
-    expect(hasSelector(block[1], '.focus__band')).toBe(true);
+  it('keeps an explicit rule for the skeleton, a global class', () => {
+    expect(hasSelector(reducedMotionBlock(css), '.mt-skeleton')).toBe(true);
+  });
+
+  it('keeps the caret and the band rule next to their own animation, in the component file', () => {
+    // Angular gives a component's own rule a higher specificity than a plain class in the
+    // global stylesheet can reach, so this override cannot live in styles.css. It lives in
+    // focus-card.component.ts instead, and styles.css no longer names either class.
+    expect(hasSelector(css, '.focus__caret')).toBe(false);
+    expect(hasSelector(css, '.focus__band')).toBe(false);
+
+    const text = readFileSync('src/app/reader/focus-card.component.ts', 'utf8');
+    const block = reducedMotionBlock(text);
+    expect(hasSelector(block, '.focus__caret')).toBe(true);
+    expect(hasSelector(block, '.focus__band')).toBe(true);
   });
 
   it('does not blank every animation and every transition on the page', () => {
@@ -134,9 +208,7 @@ describe('the reduced-motion token override', () => {
     // That silenced an animation that carries meaning, which is the defect issue #102 fixes.
     // The reset block earlier in the file also selects `*, *::before, *::after`, so the check
     // reads only the reduced-motion block and not the whole file.
-    const block = css.match(/@media \(prefers-reduced-motion: reduce\)\s*\{([\s\S]*)\}\s*$/);
-    if (!block) throw new Error('styles.css must keep one prefers-reduced-motion block');
-    expect(block[1]).not.toMatch(/animation-duration|transition-duration/);
+    expect(reducedMotionBlock(css)).not.toMatch(/animation-duration|transition-duration/);
   });
 });
 
@@ -144,7 +216,10 @@ describe('.mt-pill answers hover, press and the disabled state', () => {
   const variants = ['.mt-pill', '.mt-pill--coral', '.mt-pill--teal', '.mt-pill--ghost'];
 
   for (const variant of variants) {
-    it(`gives ${variant} a hover rule`, () => {
+    it(`gives ${variant} a hover rule, guarded by (hover: hover)`, () => {
+      // A touch screen keeps a :hover match after a tap until the learner taps elsewhere, so
+      // every hover rule of this issue sits inside `@media (hover: hover)`.
+      expect(hasSelector(hoverGuardedText(css), `${variant}:hover:not(:disabled)`)).toBe(true);
       expect(hasSelector(css, `${variant}:hover:not(:disabled)`)).toBe(true);
     });
 
@@ -193,18 +268,27 @@ describe('the screen-reader-only helper', () => {
 });
 
 describe('a hover state for the controls that are not .mt-pill', () => {
-  it('gives .picker__verb a hover rule', () => {
+  it('gives .picker__verb a hover rule, guarded by (hover: hover)', () => {
     const text = readFileSync('src/app/ui/verb-picker.component.ts', 'utf8');
     expect(hasHoverRule(text, '.picker__verb')).toBe(true);
+    expect(hasHoverRule(hoverGuardedText(text), '.picker__verb')).toBe(true);
   });
 
-  it('gives .trail__item a hover rule', () => {
+  it('gives .trail__item a hover rule, guarded by (hover: hover)', () => {
     const text = readFileSync('src/app/reader/trail-rail.component.ts', 'utf8');
     expect(hasHoverRule(text, '.trail__item')).toBe(true);
+    expect(hasHoverRule(hoverGuardedText(text), '.trail__item')).toBe(true);
   });
 
-  it('gives .crumb__button a hover rule', () => {
+  it('gives .crumb__button a hover rule, guarded by (hover: hover)', () => {
     const text = readFileSync('src/app/reader/breadcrumb.component.ts', 'utf8');
     expect(hasSelector(text, '.crumb__button:hover:not(:disabled)')).toBe(true);
+    expect(hasSelector(hoverGuardedText(text), '.crumb__button:hover:not(:disabled)')).toBe(true);
+  });
+
+  it('gives .topic__tile a hover rule, guarded by (hover: hover)', () => {
+    const text = readFileSync('src/app/catalog/catalog-page.component.ts', 'utf8');
+    expect(hasSelector(text, '.topic__tile:hover')).toBe(true);
+    expect(hasSelector(hoverGuardedText(text), '.topic__tile:hover')).toBe(true);
   });
 });
