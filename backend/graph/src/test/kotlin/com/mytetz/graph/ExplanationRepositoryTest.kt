@@ -163,13 +163,13 @@ class ExplanationRepositoryTest {
             explanation("unread", "an old unread body", verb = Verb.EXPLAIN, requestCount = 0, createdAtEpochMillis = cutoff - 1),
         )
 
-        val candidates = repository.findEvictionCandidates(maxRequestCount = 0, olderThanEpochMillis = cutoff, limit = 10)
+        val candidates = repository.findEvictionCandidates(maxRequestCount = 0, olderThanEpochMillis = cutoff, pageSize = 10)
 
-        assertEquals(listOf("unread"), candidates)
+        assertEquals(listOf("unread"), candidates.map { it.key })
     }
 
     @Test
-    fun `findEvictionCandidates applies the batch limit`() = runTest {
+    fun `findEvictionCandidates applies the page size`() = runTest {
         val cutoff = 1_700_000_000_000L
         repeat(5) { i ->
             repository.insertIfAbsent(
@@ -183,11 +183,62 @@ class ExplanationRepositoryTest {
             )
         }
 
-        val candidates = repository.findEvictionCandidates(maxRequestCount = 0, olderThanEpochMillis = cutoff, limit = 3)
+        val candidates = repository.findEvictionCandidates(maxRequestCount = 0, olderThanEpochMillis = cutoff, pageSize = 3)
 
         // The oldest three, in age order — not just any three.
-        assertEquals(listOf("old-0", "old-1", "old-2"), candidates)
+        assertEquals(listOf("old-0", "old-1", "old-2"), candidates.map { it.key })
     }
+
+    @Test
+    fun `findEvictionCandidates with after starts strictly past that candidate, not from the top again`() = runTest {
+        val cutoff = 1_700_000_000_000L
+        repeat(5) { i ->
+            repository.insertIfAbsent(
+                explanation(
+                    "old-$i",
+                    "body $i",
+                    verb = Verb.EXPLAIN,
+                    requestCount = 0,
+                    createdAtEpochMillis = cutoff - 1000 + i,
+                ),
+            )
+        }
+
+        val firstPage = repository.findEvictionCandidates(maxRequestCount = 0, olderThanEpochMillis = cutoff, pageSize = 2)
+        val secondPage = repository.findEvictionCandidates(
+            maxRequestCount = 0,
+            olderThanEpochMillis = cutoff,
+            pageSize = 2,
+            after = firstPage.last(),
+        )
+
+        assertEquals(listOf("old-0", "old-1"), firstPage.map { it.key })
+        assertEquals(listOf("old-2", "old-3"), secondPage.map { it.key }, "the second page must not repeat the first")
+    }
+
+    @Test
+    fun `findEvictionCandidates breaks a tie in createdAtEpochMillis by key, so a page never repeats or skips`() =
+        runTest {
+            val cutoff = 1_700_000_000_000L
+            val sameAge = cutoff - 1
+            repository.insertIfAbsent(
+                explanation("b", "body b", verb = Verb.EXPLAIN, requestCount = 0, createdAtEpochMillis = sameAge),
+            )
+            repository.insertIfAbsent(
+                explanation("a", "body a", verb = Verb.EXPLAIN, requestCount = 0, createdAtEpochMillis = sameAge),
+            )
+
+            val firstPage = repository.findEvictionCandidates(maxRequestCount = 0, olderThanEpochMillis = cutoff, pageSize = 1)
+            val secondPage = repository.findEvictionCandidates(
+                maxRequestCount = 0,
+                olderThanEpochMillis = cutoff,
+                pageSize = 1,
+                after = firstPage.last(),
+            )
+
+            assertEquals(listOf("a"), firstPage.map { it.key })
+            assertEquals(listOf("b"), secondPage.map { it.key })
+        }
 
     @Test
     fun `deleteEvictable removes a listed key only while its requestCount is still at or below the limit`() = runTest {
