@@ -9,6 +9,7 @@ import kotlinx.html.footer
 import kotlinx.html.h1
 import kotlinx.html.h2
 import kotlinx.html.head
+import kotlinx.html.lang
 import kotlinx.html.header
 import kotlinx.html.li
 import kotlinx.html.link
@@ -72,6 +73,10 @@ private const val GUIDES_STYLESHEET = "/guides/guides.css"
  * — so the one `unsafe { }` block on this page stays the JSON-LD block alone.
  */
 fun HTML.topicPageHtml(view: TopicPageView) {
+    // Set before the first child. The stream writer of `kotlinx.html` writes the `<html>` start
+    // tag when the first child opens, and an attribute that is set after that point is lost.
+    lang = "en"
+
     val pageTitle = pageTitleFor(view.title)
     val canonical = "$SITE_URL/topics/${view.slug}"
 
