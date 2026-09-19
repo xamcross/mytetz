@@ -1,4 +1,4 @@
-import { Component, computed, input, signal } from '@angular/core';
+import { Component, computed, effect, input, signal } from '@angular/core';
 import { Media } from '../core/models';
 
 /** The fixed word an image gets when its SVG carries no `<title>` element. */
@@ -25,6 +25,25 @@ const FALLBACK_ALT = 'Diagram';
  * `https://developer.mozilla.org/en-US/docs/Web/SVG/Guides/SVG_as_an_image` on 2026-09-19 — states
  * that a script inside such an SVG does not run, and an external reference inside it does not
  * load, and that both restrictions apply to an `<img>` element specifically.
+ *
+ * **The namespace matters.** A `data:image/svg+xml` URL is parsed as a standalone XML document,
+ * never merged into the host page, and a browser decodes it as an image only when its root
+ * element carries `xmlns="http://www.w3.org/2000/svg"`. Without that attribute the `<img>` never
+ * fires `load`, and a learner sees a broken image with no console error — the server's own
+ * sanitiser adds it to every document this component ever receives, so a hand-written fixture
+ * that drops it, in a test or anywhere else, no longer describes a document this feature can
+ * actually produce.
+ *
+ * ## A diagram that fails to decode
+ *
+ * A learner must never see a bare broken-image icon after a generation that spent one unit of
+ * their allowance. The `<img>`'s own `(error)` event — raised whenever the browser could not
+ * decode the `src` it was given, the missing-namespace case above among them — sets
+ * [diagramFailed], which swaps the diagram frame and the zoom control for one `role="status"`
+ * line instead. [diagramFailed] resets on its own the moment [media] changes to a different
+ * diagram, through the constructor's own `effect`: this component's instance can outlive one
+ * focus node (`SessionStore.currentMedia` supplies a new value as the learner moves between
+ * nodes), so a failure recorded for an earlier diagram must not haunt a later, working one.
  *
  * ## The accessible title
  *
@@ -80,17 +99,26 @@ const FALLBACK_ALT = 'Diagram';
   imports: [],
   template: `
     <figure class="media">
-      <div class="media__diagram-frame" [class.media__diagram-frame--zoomed]="zoomed()">
-        <img class="media__diagram" [src]="diagramSrc()" [alt]="diagramAlt()" />
-      </div>
-      <button
-        type="button"
-        class="media__zoom mt-pill mt-pill--ghost"
-        [attr.aria-pressed]="zoomed()"
-        (click)="toggleZoom()"
-      >
-        {{ zoomed() ? 'Fit to card' : 'View larger' }}
-      </button>
+      @if (diagramFailed()) {
+        <p class="media__diagram-fallback" role="status">The diagram could not be shown.</p>
+      } @else {
+        <div class="media__diagram-frame" [class.media__diagram-frame--zoomed]="zoomed()">
+          <img
+            class="media__diagram"
+            [src]="diagramSrc()"
+            [alt]="diagramAlt()"
+            (error)="onDiagramError()"
+          />
+        </div>
+        <button
+          type="button"
+          class="media__zoom mt-pill mt-pill--ghost"
+          [attr.aria-pressed]="zoomed()"
+          (click)="toggleZoom()"
+        >
+          {{ zoomed() ? 'Fit to card' : 'View larger' }}
+        </button>
+      }
 
       @if (media().image; as image) {
         <div class="media__image">
@@ -148,6 +176,16 @@ const FALLBACK_ALT = 'Diagram';
       .media__zoom {
         align-self: flex-start;
       }
+      .media__diagram-fallback {
+        margin: 0;
+        padding: 14px 16px;
+        border-radius: var(--mt-r-panel);
+        background: var(--mt-err-bg);
+        border: var(--mt-border-w) solid var(--mt-err-border);
+        color: var(--mt-err-ink);
+        font-size: 13px;
+        font-weight: 700;
+      }
       .media__image {
         display: flex;
         flex-direction: column;
@@ -180,6 +218,10 @@ export class MediaRendererComponent {
    * does not outlive the card, and no other component reads it. */
   protected readonly zoomed = signal(false);
 
+  /** Whether the diagram's own `<img>` raised `error` — see this class's own doc comment, "A
+   * diagram that fails to decode". */
+  protected readonly diagramFailed = signal(false);
+
   protected readonly diagramSrc = computed(
     () => 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(this.media().diagram.source),
   );
@@ -194,7 +236,20 @@ export class MediaRendererComponent {
     return title && title.length > 0 ? title : FALLBACK_ALT;
   });
 
+  constructor() {
+    // A new diagram deserves a fresh attempt — see this class's own doc comment for why an
+    // earlier failure must not carry over.
+    effect(() => {
+      this.diagramSrc();
+      this.diagramFailed.set(false);
+    });
+  }
+
   protected toggleZoom(): void {
     this.zoomed.update((z) => !z);
+  }
+
+  protected onDiagramError(): void {
+    this.diagramFailed.set(true);
   }
 }

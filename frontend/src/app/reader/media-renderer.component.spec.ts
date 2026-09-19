@@ -10,6 +10,13 @@ const IMAGE: ImageMedia = {
   commonsPageUrl: 'https://commons.wikimedia.org/wiki/File:Example.jpg',
 };
 
+/**
+ * No test in this file asserts a decoded diagram's `naturalWidth`, unlike
+ * `frontend/e2e/visualize.spec.ts`. Checked by hand: jsdom's own `<img>` never fires `load` or
+ * `error` for a `data:` URL at all, and `naturalWidth` stays `0` forever, whether or not the
+ * source is well-formed SVG with the correct namespace. jsdom does no image decoding of any
+ * kind, so this proof exists only in Playwright, against a real browser.
+ */
 describe('MediaRendererComponent', () => {
   let fixture: ComponentFixture<MediaRendererComponent>;
 
@@ -171,5 +178,44 @@ describe('MediaRendererComponent', () => {
     fixture.detectChanges();
     expect(button.getAttribute('aria-pressed')).toBe('false');
     expect(frame().classList.contains('media__diagram-frame--zoomed')).toBe(false);
+  });
+
+  it('shows a fallback message and hides the zoom control when the diagram fails to decode', () => {
+    // A learner must not see a broken-image icon after a generation that spent one unit of their
+    // allowance. This dispatches the real `error` event the `<img>` element itself raises when
+    // its `src` fails to decode — jsdom never raises this on its own (see the class comment
+    // above), so the event is dispatched by hand, the same way `focus-card.component.spec.ts`
+    // dispatches `mouseup` by hand rather than driving a real browser selection.
+    fixture.componentRef.setInput('media', media());
+    fixture.detectChanges();
+
+    diagramImg().dispatchEvent(new Event('error'));
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('img.media__diagram')).toBeNull();
+    expect(fixture.nativeElement.querySelector('button.media__zoom')).toBeNull();
+
+    const status: HTMLElement | null = fixture.nativeElement.querySelector('[role="status"]');
+    expect(status).not.toBeNull();
+    expect(status!.textContent).toContain('The diagram could not be shown.');
+  });
+
+  it('recovers from a previous failure once a different diagram is given', () => {
+    // The component instance can outlive one focus node — see SessionStore.currentMedia — so a
+    // failure flag set for one diagram must not haunt the next one the learner opens.
+    fixture.componentRef.setInput('media', media());
+    fixture.detectChanges();
+    diagramImg().dispatchEvent(new Event('error'));
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('[role="status"]')).not.toBeNull();
+
+    fixture.componentRef.setInput(
+      'media',
+      media({ diagram: { kind: 'SVG', source: '<svg><circle cx="2" cy="2" r="2"/></svg>' } }),
+    );
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('[role="status"]')).toBeNull();
+    expect(fixture.nativeElement.querySelector('img.media__diagram')).not.toBeNull();
   });
 });
