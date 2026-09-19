@@ -228,6 +228,31 @@ describe('the non-text contrast of the controls (issue #103)', () => {
     );
     expect(contrast(track, band)).toBeGreaterThanOrEqual(AA_LARGE);
   });
+
+  /**
+   * Round 2 of issue #103. The chosen and the unchosen quiz option share one edge, --mt-edge on
+   * --mt-surface, at 3.26:1. Their difference is the check glyph and the heavier edge, not a
+   * colour, so the glyph itself is the one graphic that must still clear 3:1 against the fill it
+   * sits on.
+   *
+   * No pair of edge colours reaches 3:1 between the two states themselves. The unchosen edge is
+   * #4a9d84. An amber dark enough to reach 3:1 against that value has to go past #573d00, a
+   * near-black brown that no longer reads as amber at all — computed at 3.11:1, only just over
+   * the line, and already unrecognisable as the system's amber. The glyph-against-fill pair below
+   * is the one comparison this design can actually keep in the amber family.
+   */
+  it('gives the check glyph a boundary of 3:1 or more against the chosen option it sits on', () => {
+    const componentCss = readFileSync('src/app/assess/quiz-panel.component.ts', 'utf8');
+    const glyph = resolveColor(
+      readDeclaration(readRule(componentCss, '.quiz-panel__check'), 'color'),
+      tokens,
+    );
+    const fill = resolveColor(
+      readDeclaration(readRule(componentCss, '.quiz-panel__option--chosen'), 'background'),
+      tokens,
+    );
+    expect(contrast(glyph, fill)).toBeGreaterThanOrEqual(AA_LARGE);
+  });
 });
 
 describe('the guide page buttons', () => {
