@@ -24,6 +24,34 @@ class FreemiusWebhookTest {
 
     companion object {
         private const val SECRET_KEY = "a-test-secret-key"
+
+        /** `2025-01-01 00:00:00` UTC, computed independently with `date -u -d ... +%s`. */
+        private const val JAN_1_2025_UTC_EPOCH_MILLIS = 1_735_689_600_000L
+
+        /** `2025-02-01 00:00:00` UTC, computed the same independent way. */
+        private const val FEB_1_2025_UTC_EPOCH_MILLIS = 1_738_368_000_000L
+
+        /** `2025-12-31 23:59:59` UTC, computed the same independent way. */
+        private const val DEC_31_2025_UTC_EPOCH_MILLIS = 1_767_225_599_000L
+
+        /**
+         * One `subscription.created` event in the exact shape
+         * `packages/sdk/src/webhook/subscription.events.ts` declares. See
+         * [FreemiusWebhookPayload]'s own KDoc for the three source files this shape comes from.
+         */
+        private val VENDOR_SHAPED_BODY = """
+            {
+              "id": "evt-1",
+              "type": "subscription.created",
+              "created": "2025-01-01 00:00:00",
+              "objects": {
+                "user": { "id": "1001", "email": "learner@example.com" },
+                "subscription": { "id": "2001", "next_payment": "2025-02-01 00:00:00" },
+                "license": { "id": "3001", "expiration": "2025-12-31 23:59:59" }
+              },
+              "data": { "subscription_id": "2001", "license_id": "3001" }
+            }
+        """.trimIndent()
     }
 
     private fun hmacLowerHex(rawBody: ByteArray, secretKey: String): String {
@@ -36,7 +64,7 @@ class FreemiusWebhookTest {
 
     @Test
     fun `a correct signature verifies`() {
-        val body = """{"id":"evt-1","type":"subscription.created","created":1000}""".toByteArray(Charsets.UTF_8)
+        val body = VENDOR_SHAPED_BODY.toByteArray(Charsets.UTF_8)
         val signature = hmacLowerHex(body, SECRET_KEY)
 
         assertTrue(FreemiusWebhook.verify(body, signature, SECRET_KEY))
@@ -58,7 +86,7 @@ class FreemiusWebhookTest {
 
     @Test
     fun `a wrong signature is refused`() {
-        val body = """{"id":"evt-1","type":"subscription.created","created":1000}""".toByteArray(Charsets.UTF_8)
+        val body = VENDOR_SHAPED_BODY.toByteArray(Charsets.UTF_8)
         val signedUnderAWrongKey = hmacLowerHex(body, "a-different-secret-key")
 
         assertFalse(FreemiusWebhook.verify(body, signedUnderAWrongKey, SECRET_KEY))
@@ -66,7 +94,7 @@ class FreemiusWebhookTest {
 
     @Test
     fun `an uppercase hex signature is refused`() {
-        val body = """{"id":"evt-1","type":"subscription.created","created":1000}""".toByteArray(Charsets.UTF_8)
+        val body = VENDOR_SHAPED_BODY.toByteArray(Charsets.UTF_8)
         val signature = hmacLowerHex(body, SECRET_KEY)
         // A sanity check on the fixture: an all-digit or already-uppercase-invariant hex string
         // would make the assertion below pass for a reason that has nothing to do with case.
@@ -77,7 +105,7 @@ class FreemiusWebhookTest {
 
     @Test
     fun `a signature of the wrong length is refused`() {
-        val body = """{"id":"evt-1","type":"subscription.created","created":1000}""".toByteArray(Charsets.UTF_8)
+        val body = VENDOR_SHAPED_BODY.toByteArray(Charsets.UTF_8)
         val signature = hmacLowerHex(body, SECRET_KEY)
 
         assertFalse(FreemiusWebhook.verify(body, signature.dropLast(2), SECRET_KEY), "a shorter header must be refused")
@@ -88,7 +116,7 @@ class FreemiusWebhookTest {
     fun `an empty secret key refuses rather than raises`() {
         // verify is public and it takes a raw String. SecretKeySpec raises IllegalArgumentException
         // on an empty key. A refusal is the correct answer for a caller that holds no key.
-        val body = """{"id":"evt-1","type":"subscription.created","created":1000}""".toByteArray(Charsets.UTF_8)
+        val body = VENDOR_SHAPED_BODY.toByteArray(Charsets.UTF_8)
         val signature = hmacLowerHex(body, SECRET_KEY)
 
         assertFalse(FreemiusWebhook.verify(body, signature, ""))
@@ -96,7 +124,7 @@ class FreemiusWebhookTest {
 
     @Test
     fun `a signature over a re-serialized body is refused`() {
-        val original = """{ "id": "evt-1", "type": "subscription.created", "created": 1000 }"""
+        val original = """{ "id": "evt-1", "type": "subscription.created", "created": "2025-01-01 00:00:00" }"""
             .toByteArray(Charsets.UTF_8)
         val signature = hmacLowerHex(original, SECRET_KEY)
         // The signature must verify against the exact bytes it was computed over, or the
@@ -119,22 +147,92 @@ class FreemiusWebhookTest {
 
     @Test
     fun `a payload missing its id raises`() {
-        val body = """{"type":"subscription.created","created":1000}""".toByteArray(Charsets.UTF_8)
+        val body = """{"type":"subscription.created","created":"2025-01-01 00:00:00"}"""
+            .toByteArray(Charsets.UTF_8)
 
         assertFailsWith<SerializationException> { FreemiusWebhook.parse(body) }
     }
 
     @Test
     fun `an unknown field in the payload is ignored`() {
-        val body =
-            """{"id":"evt-1","type":"subscription.created","created":1000,"a_field_freemius_adds_later":true}"""
-                .toByteArray(Charsets.UTF_8)
+        val body = (
+            """{"id":"evt-1","type":"subscription.created","created":"2025-01-01 00:00:00",""" +
+                """"a_field_freemius_adds_later":true}"""
+            ).toByteArray(Charsets.UTF_8)
 
         val event = FreemiusWebhook.parse(body)
 
         assertEquals("evt-1", event.id)
         assertEquals("subscription.created", event.type)
-        assertEquals(1000L, event.occurredAtEpochMillis)
+        assertEquals(JAN_1_2025_UTC_EPOCH_MILLIS, event.occurredAtEpochMillis)
+    }
+
+    // ------------------------------------------------------------------ the vendor shape
+    //
+    // Each body here is a `subscription.created` event. Each has the exact shape
+    // `packages/sdk/src/webhook/subscription.events.ts` declares: a top-level `id`, `type` and
+    // `created`, one `objects` object, and one `data` object. See `FreemiusWebhookPayload`'s own
+    // KDoc for the three source files this shape comes from.
+
+    @Test
+    fun `a vendor-shaped payload fills every field from its real location`() {
+        val body = VENDOR_SHAPED_BODY.toByteArray(Charsets.UTF_8)
+
+        val event = FreemiusWebhook.parse(body)
+
+        assertEquals("evt-1", event.id)
+        assertEquals("subscription.created", event.type)
+        assertEquals(JAN_1_2025_UTC_EPOCH_MILLIS, event.occurredAtEpochMillis)
+        assertEquals("learner@example.com", event.email)
+        assertEquals("1001", event.freemiusUserId)
+        assertEquals("2001", event.freemiusSubscriptionId)
+        assertEquals(DEC_31_2025_UTC_EPOCH_MILLIS, event.periodEndsAtEpochMillis)
+    }
+
+    @Test
+    fun `the ISO 8601 form of created gives the same instant as the space form`() {
+        val spaceForm = FreemiusWebhook.parse(VENDOR_SHAPED_BODY.toByteArray(Charsets.UTF_8))
+        val isoBody = VENDOR_SHAPED_BODY.replace(
+            """"created":"2025-01-01 00:00:00"""",
+            """"created":"2025-01-01T00:00:00Z"""",
+        )
+
+        val isoForm = FreemiusWebhook.parse(isoBody.toByteArray(Charsets.UTF_8))
+
+        assertEquals(spaceForm.occurredAtEpochMillis, isoForm.occurredAtEpochMillis)
+        assertEquals(JAN_1_2025_UTC_EPOCH_MILLIS, isoForm.occurredAtEpochMillis)
+    }
+
+    @Test
+    fun `freemiusSubscriptionId falls back to objects subscription id when data carries none`() {
+        val body = """
+            {"id":"evt-2","type":"subscription.created","created":"2025-01-01 00:00:00",
+            "objects":{"subscription":{"id":"2002"}}}
+        """.trimIndent().toByteArray(Charsets.UTF_8)
+
+        val event = FreemiusWebhook.parse(body)
+
+        assertEquals("2002", event.freemiusSubscriptionId)
+    }
+
+    @Test
+    fun `periodEndsAtEpochMillis falls back to subscription next_payment when the license has no expiration`() {
+        val body = """
+            {"id":"evt-3","type":"subscription.created","created":"2025-01-01 00:00:00",
+            "objects":{"subscription":{"next_payment":"2025-02-01 00:00:00"},"license":{}}}
+        """.trimIndent().toByteArray(Charsets.UTF_8)
+
+        val event = FreemiusWebhook.parse(body)
+
+        assertEquals(FEB_1_2025_UTC_EPOCH_MILLIS, event.periodEndsAtEpochMillis)
+    }
+
+    @Test
+    fun `a created value in neither known date form raises`() {
+        val body = """{"id":"evt-4","type":"subscription.created","created":"not a date"}"""
+            .toByteArray(Charsets.UTF_8)
+
+        assertFailsWith<SerializationException> { FreemiusWebhook.parse(body) }
     }
 
     // ------------------------------------------------------------------ FreemiusConfig
