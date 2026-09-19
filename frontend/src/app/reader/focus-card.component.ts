@@ -280,6 +280,12 @@ export class FocusCardComponent {
   readonly body = input.required<string>();
   readonly streamingText = input.required<string>();
   readonly isStreaming = input.required<boolean>();
+  /** True when the stream that just ended did not succeed. The reader page binds this from
+   * `SessionStore.error() !== null`, read at the same point `isStreaming()` turns false — see the
+   * class doc comment on `SessionStore.explain` for why the write order makes that safe. A failed
+   * stream must not say "The explanation is ready.", because it is not. The learner already reads
+   * why, from the reader page's own error banner, sign-in panel, or subscribe wall. */
+  readonly explainFailed = input.required<boolean>();
   /** The step number and the verb of the node in focus, for the eyebrow. The reader page supplies
    * both from `NodeView`. */
   readonly step = input<number | null>(null);
@@ -388,6 +394,12 @@ export class FocusCardComponent {
         this.clearReadyStatusTimer();
         this.streamAnnouncement.set('The explanation is on its way.');
       } else if (!streaming && wasStreaming) {
+        if (this.explainFailed()) {
+          // The stream ended, but it did not succeed. "Ready" would be false, so the element goes
+          // quiet instead. See [explainFailed]'s own comment for where the learner reads why.
+          this.streamAnnouncement.set('');
+          return;
+        }
         this.streamAnnouncement.set('The explanation is ready.');
         // See [READY_STATUS_MILLIS] for how long this text stays. Cleared on destroy below, so a
         // card the learner has already left never writes to a signal nobody reads any more.

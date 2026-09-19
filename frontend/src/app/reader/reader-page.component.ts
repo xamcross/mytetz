@@ -179,6 +179,7 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
                 [body]="store.currentBody()"
                 [streamingText]="store.streamingText()"
                 [isStreaming]="store.isStreaming()"
+                [explainFailed]="store.error() !== null"
                 [step]="step()"
                 [verbLabel]="verbLabel()"
                 [topicLabel]="topicLabel()"
