@@ -162,7 +162,7 @@ own already-checked list, not by a fresh fetch in this session.
 
 | Sentence on the page | URL opened | Verbatim quote |
 |---|---|---|
-| "Working memory holds about seven items at once... (Miller, 1956)" | `https://psychclassics.yorku.ca/Miller/` | "the span of immediate memory seems to be almost independent of the number of bits per chunk"; the paper's title itself gives "seven, plus or minus two" |
+| "Immediate memory holds about seven chunks at once (Miller, 1956)." | `https://psychclassics.yorku.ca/Miller/` | "the span of immediate memory seems to be almost independent of the number of bits per chunk"; the paper's title itself gives "seven, plus or minus two" |
 | "A famous 1956 paper found that a small number of chunks, and not a small number of words, sets the limit" | same | same quote; the paper's own argument is that "the number of chunks of information is constant for immediate memory" |
 | "the tested group recalled 61% of the passage and the reread group recalled 40%" (one week later) | reused, #63 | "Students who took three recall tests recalled 61% after one week. Students who reread the passage four times recalled 40%." (issue #63's verified list) |
 | "the reread group scored 83% and the tested group scored 71%" (five minutes after study) | `https://r.jina.ai/https://learninglab.psych.purdue.edu/downloads/2006/2006_Roediger_Karpicke_PsychSci.pdf` | "The SSSS group recalled more than the SSST group (83% vs. 78%), who in turn recalled more than the STTT group (71%)" |
@@ -244,3 +244,12 @@ issue #63's verified list.
 5. "147 students in the final analysis" — replaced with the correct 145, and the exclusion counts that produce it.
 6. "even though it felt harder at the time" — replaced with the paper's own description (read more slowly, predicted lower success, lower on-task focus).
 7. The round-1 "correction card" on `how-students-study-now`, which told the reader that 88% was wrong and 92% was right — removed in full; both claims were wrong, and the section now states no global adoption number.
+
+## Step 7: three sentences that the coordinator corrected on 2026-09-19
+
+The review of round 2 found three sentences that said more than their source.
+
+1. The AI page, key points: "found AI inside many courses" became "only 15% of students said that AI is part of many of their courses". The source says 15% for many courses, 43% for a few, and 43% for none.
+2. The difficult-text page, key points: "a long sentence with no chunks overflows it (Miller, 1956)" gave Miller a statement about sentences. The sentence now gives Miller only the limit of about seven chunks, in his term "immediate memory", and the advice stands alone.
+3. The page `how-students-study-now`: the card "A number this page does not use" made a statement about other sites with no source, and the sentence "no Digital Education Council page states one" covered pages that nobody opened. The card now says only that the public page of the global survey gives no single percentage, and it names the Latin America survey as a separate study.
+
