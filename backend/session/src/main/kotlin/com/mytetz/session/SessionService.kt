@@ -480,8 +480,23 @@ class SessionService(
      *
      * Does **not** check that the principal owns the session; see "Authorisation is the caller's".
      * Each [ExplainPlan] may be collected once — see [ExplainPlan].
+     *
+     * A caller with no cancelled-or-truncated-stream estimate to record can use this form. See the
+     * two-argument overload for [onEstimatedSpend]'s own contract.
      */
-    fun explain(plan: ExplainPlan): Flow<GraphChunk> = flow {
+    fun explain(plan: ExplainPlan): Flow<GraphChunk> = explain(plan) { _, _ -> }
+
+    /**
+     * [onEstimatedSpend] is [ExplanationGraph.getOrGenerate]'s own callback, threaded straight
+     * through: this class has no view of the model call that [ExplanationGraph] makes and nothing
+     * to add to the estimate it reports. See that function's KDoc for the full contract, and
+     * `SessionRoutes.kt`'s `streamExplanation` for the one caller that supplies a real callback
+     * rather than the one-argument overload's no-op.
+     */
+    fun explain(
+        plan: ExplainPlan,
+        onEstimatedSpend: suspend (costMicros: Long, reason: String) -> Unit,
+    ): Flow<GraphChunk> = flow {
         // Before anything, and inside the flow builder so it fires per collection rather than per
         // call: this plan carries ceiling decisions taken against the session as it was at prepare
         // time, and nothing below re-checks them.
@@ -493,7 +508,7 @@ class SessionService(
 
         var generated: Explanation? = null
 
-        graph.getOrGenerate(plan.request).collect { chunk ->
+        graph.getOrGenerate(plan.request, onEstimatedSpend).collect { chunk ->
             if (chunk is GraphChunk.Done) generated = chunk.explanation
             emit(chunk)
         }
@@ -532,8 +547,18 @@ class SessionService(
         selection: SpanSelection,
         verb: Verb,
         requestedVariant: Int?,
+    ): Flow<GraphChunk> = explain(sessionId, parentNodeId, selection, verb, requestedVariant) { _, _ -> }
+
+    /** [onEstimatedSpend] carries the same contract as the two-argument [explain] plan overload. */
+    fun explain(
+        sessionId: String,
+        parentNodeId: String,
+        selection: SpanSelection,
+        verb: Verb,
+        requestedVariant: Int?,
+        onEstimatedSpend: suspend (costMicros: Long, reason: String) -> Unit,
     ): Flow<GraphChunk> = flow {
-        emitAll(explain(prepare(sessionId, parentNodeId, selection, verb, requestedVariant)))
+        emitAll(explain(prepare(sessionId, parentNodeId, selection, verb, requestedVariant), onEstimatedSpend))
     }
 
     // ------------------------------------------------------------------ ownership
