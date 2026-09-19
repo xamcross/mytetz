@@ -1,6 +1,17 @@
 import { test, expect, type Page } from '@playwright/test';
-import type { SessionView, TopicSummary } from '../src/app/core/models';
-import { SEED, openQuantumPhysicsSession, selectPhrase, stubCatalogueAndSession } from './support';
+import type {
+  QuizResultView,
+  QuizTemplateView,
+  SessionView,
+  TopicSummary,
+} from '../src/app/core/models';
+import {
+  SEED,
+  mockQuiz,
+  openQuantumPhysicsSession,
+  selectPhrase,
+  stubCatalogueAndSession,
+} from './support';
 
 /**
  * What only a real browser can check about the Candy design.
@@ -489,6 +500,72 @@ test('every control still draws its focus ring', async ({ page }) => {
   expect(ring.color, 'the ring is teal').toBe('rgb(15, 118, 110)');
   expect(ring.width).toBe('3px');
   expect(ring.offset).toBe('2px');
+});
+
+/** One question, so the quiz reaches its coral pill in one click. The score is not read here. */
+const PRESS_TEMPLATE: QuizTemplateView = {
+  attemptId: 'attempt-98',
+  kind: 'TEST_ME',
+  questions: [
+    {
+      questionId: 'q1',
+      stem: 'What does quantum mechanics describe?',
+      options: ['Matter and light', 'Only sound'],
+    },
+  ],
+};
+
+const PRESS_RESULT: QuizResultView = {
+  score: 1,
+  total: 1,
+  correctIndices: { q1: 0 },
+  rationales: { q1: 'Quantum mechanics describes matter and light.' },
+};
+
+test('a ghost pill draws no shadow while a learner presses it', async ({ page }) => {
+  await stubCatalogueAndSession(page);
+  await gotoReader(page);
+
+  const exam = page.getByTestId('exam');
+  const box = await exam.boundingBox();
+  if (box === null) throw new Error('the Exam pill has no box to press');
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  // `.mt-pill`'s transition takes 80ms, so this polls the computed value. It does not read the
+  // value right after `mouse.down()`, and it does not wait with a fixed sleep.
+  await expect
+    .poll(() => exam.evaluate((el) => getComputedStyle(el).boxShadow), {
+      message: 'a ghost pill must draw no shadow while a learner presses it',
+    })
+    .toBe('none');
+  await page.mouse.up();
+});
+
+test('a coral pill keeps its smaller shadow while a learner presses it', async ({ page }) => {
+  // The ghost fix above must change no other pill. This presses the coral pill of the Test Me
+  // quiz and checks that its press shadow still only shrinks, from a 4px lift to a 2px lift.
+  await stubCatalogueAndSession(page);
+  await mockQuiz(page, 's1', PRESS_TEMPLATE, PRESS_RESULT);
+  await gotoReader(page);
+
+  await page.getByTestId('test-me').click();
+  const quiz = page.locator('[role="dialog"]');
+  await quiz.getByText(PRESS_TEMPLATE.questions[0].stem).waitFor();
+  await quiz
+    .getByRole('button', { name: PRESS_TEMPLATE.questions[0].options[0], exact: true })
+    .click();
+
+  const seeResults = quiz.getByRole('button', { name: 'See results', exact: true });
+  const box = await seeResults.boundingBox();
+  if (box === null) throw new Error('the "See results" pill has no box to press');
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await expect
+    .poll(() => seeResults.evaluate((el) => getComputedStyle(el).boxShadow), {
+      message: 'a coral pill keeps a smaller shadow, not no shadow, while a learner presses it',
+    })
+    .toBe('rgb(214, 63, 63) 0px 2px 0px 0px');
+  await page.mouse.up();
 });
 
 test('Tab and Shift+Tab cycle inside the picker and never leave it', async ({ page }) => {

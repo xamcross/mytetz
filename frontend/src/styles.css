@@ -254,6 +254,14 @@ button:disabled {
   box-shadow: none;
   color: var(--mt-teal);
 }
+/* A ghost pill has no shadow at rest, so it must stay flat on a press too. Without this rule,
+   `.mt-pill:active:not(:disabled)` wins on specificity and draws a shadow. The pill then appears
+   to grow, and not to move down. */
+.mt-pill--ghost:active:not(:disabled) {
+  transform: translateY(1px);
+  box-shadow: none;
+  background: var(--mt-chip);
+}
 .mt-pill:disabled {
   opacity: 0.55;
   box-shadow: none;
