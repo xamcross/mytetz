@@ -79,14 +79,28 @@ sealed interface SvgSanitizeResult {
  *
  * ## The value rule
  *
- * A name check alone cannot remove "every external reference": an allowed attribute's own value
- * can still carry one, for example `fill="url(https://evil.example/x)"`. So, for `fill`, `stroke`,
- * `marker-start`, `marker-mid`, `marker-end` and `clip-path`, a value that contains the text
- * `url(` passes only when it matches [LOCAL_URL_REFERENCE] exactly — a reference to an element
- * inside the same document, by its `id`, and nothing else. For `href` and `xlink:href`, a value
- * passes only when it starts with `#` and carries no other scheme marker. A `<use>` element that
- * loses its `href` this way renders nothing, which is the safe outcome, not a document-wide
- * refusal — the same choice this file already makes for a dropped, unlisted element.
+ * A name check alone cannot remove "every external reference": an allowed attribute's own value can
+ * still carry one. The rule below is a positive one — a value passes only when it matches one of a
+ * small set of known-safe shapes — rather than a search for a bad one: an earlier version of this
+ * file searched the value for the literal text `url(`, and that search is both case-sensitive
+ * (`fill="URL(https://evil.example/x)"` never contains lowercase `url(`) and blind to a CSS escape
+ * (`fill="u\72l(https://evil.example/x)"` decodes to `url(` in a real CSS engine but contains no
+ * such substring at all). Every check below folds case first, and a value carrying a backslash never
+ * passes any rule — a legitimate diagram's `fill` and `stroke` values never need one.
+ *
+ * For `fill` and `stroke`, a value passes only when the whole trimmed value, without case, is one
+ * of: `none`; `currentcolor`; a colour name of letters only; a hexadecimal colour (`#` and 3 to 8
+ * hexadecimal digits); an `rgb()`, `rgba()`, `hsl()` or `hsla()` function whose parentheses hold only
+ * digits, dots, commas, percent signs and spaces; or [LOCAL_URL_REFERENCE] — a `url(#id)` reference
+ * to an element inside the same document, by its `id`, and nothing else.
+ *
+ * For `marker-start`, `marker-mid`, `marker-end` and `clip-path`, a value passes only as `none` or
+ * as [LOCAL_URL_REFERENCE].
+ *
+ * For `href` and `xlink:href`, a value passes only when it starts with `#` and carries no other
+ * scheme marker. A `<use>` element that loses its `href` this way renders nothing, which is the
+ * safe outcome, not a document-wide refusal — the same choice this file already makes for a
+ * dropped, unlisted element.
  */
 object SvgSanitizer {
 
@@ -109,16 +123,21 @@ object SvgSanitizer {
         "marker-mid", "marker-end", "clip-path", "href", "xlink:href",
     )
 
-    /** Attributes whose value must pass [LOCAL_URL_REFERENCE], not merely be present. */
-    private val URL_FUNCTION_ATTRIBUTES = setOf(
-        "fill", "stroke", "marker-start", "marker-mid", "marker-end", "clip-path",
-    )
+    /** `fill` and `stroke`: colour shapes, or a same-document reference. See [isSafeFillOrStrokeValue]. */
+    private val FILL_STROKE_ATTRIBUTES = setOf("fill", "stroke")
+
+    /** A same-document reference only, or `none`. See [isSafeReferenceValue]. */
+    private val REFERENCE_ONLY_ATTRIBUTES = setOf("marker-start", "marker-mid", "marker-end", "clip-path")
 
     /** Attributes whose value must be a same-document fragment, checked by [isLocalFragment]. */
     private val FRAGMENT_ATTRIBUTES = setOf("href", "xlink:href")
 
+    private val COLOR_NAME = Regex("^[A-Za-z]+$")
+    private val HEX_COLOR = Regex("^#[0-9A-Fa-f]{3,8}$")
+    private val COLOR_FUNCTION = Regex("^(rgb|rgba|hsl|hsla)\\([0-9.,%\\s]*\\)$", RegexOption.IGNORE_CASE)
+
     /** A `url(#id)` reference to an element inside the same document, and nothing else. */
-    private val LOCAL_URL_REFERENCE = Regex("^url\\(#[A-Za-z0-9_-]+\\)$")
+    private val LOCAL_URL_REFERENCE = Regex("^url\\(#[A-Za-z0-9_-]+\\)$", RegexOption.IGNORE_CASE)
 
     private const val MAX_DEPTH = 40
 
@@ -221,7 +240,8 @@ object SvgSanitizer {
             val keep = when {
                 localName.startsWith("on") -> false
                 localName !in ALLOWED_ATTRIBUTES && qualifiedName.lowercase() !in ALLOWED_ATTRIBUTES -> false
-                localName in URL_FUNCTION_ATTRIBUTES -> isSafeUrlFunctionValue(attribute.nodeValue)
+                localName in FILL_STROKE_ATTRIBUTES -> isSafeFillOrStrokeValue(attribute.nodeValue)
+                localName in REFERENCE_ONLY_ATTRIBUTES -> isSafeReferenceValue(attribute.nodeValue)
                 localName in FRAGMENT_ATTRIBUTES -> isLocalFragment(attribute.nodeValue)
                 else -> true
             }
@@ -232,10 +252,24 @@ object SvgSanitizer {
         toRemove.forEach { element.removeAttribute(it) }
     }
 
-    /** A value containing `url(` passes only as an exact same-document reference. A value that does
-     * not mention `url(` at all — an ordinary colour name or a hex colour — needs no such check. */
-    private fun isSafeUrlFunctionValue(value: String): Boolean =
-        if ("url(" in value) LOCAL_URL_REFERENCE.matches(value.trim()) else true
+    /** See this file's own "The value rule" section for `fill` and `stroke`. */
+    private fun isSafeFillOrStrokeValue(value: String): Boolean {
+        if ("\\" in value) return false
+        val trimmed = value.trim()
+        return trimmed.equals("none", ignoreCase = true) ||
+            trimmed.equals("currentcolor", ignoreCase = true) ||
+            COLOR_NAME.matches(trimmed) ||
+            HEX_COLOR.matches(trimmed) ||
+            COLOR_FUNCTION.matches(trimmed) ||
+            LOCAL_URL_REFERENCE.matches(trimmed)
+    }
+
+    /** See this file's own "The value rule" section for `marker-*` and `clip-path`. */
+    private fun isSafeReferenceValue(value: String): Boolean {
+        if ("\\" in value) return false
+        val trimmed = value.trim()
+        return trimmed.equals("none", ignoreCase = true) || LOCAL_URL_REFERENCE.matches(trimmed)
+    }
 
     /** `#id`, and nothing else: no scheme marker, and no `//` that a scheme-relative URL would carry. */
     private fun isLocalFragment(value: String): Boolean {

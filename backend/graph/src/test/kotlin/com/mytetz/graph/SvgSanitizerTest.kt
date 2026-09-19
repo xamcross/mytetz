@@ -180,6 +180,49 @@ class SvgSanitizerTest {
         assertIs<SvgSanitizeResult.Refused>(result)
     }
 
+    // ------------------------------------------------------------------ the value rule (positive, case-insensitive)
+
+    @Test
+    fun `the fill value rule is case-insensitive to a bad shape, not just a lowercase literal url(`() {
+        val badValues = listOf(
+            "URL(https://evil.example/x)",
+            "Url( https://evil.example/x )",
+        )
+        badValues.forEach { bad ->
+            val result = SvgSanitizer.sanitize("""<svg><circle cx="1" cy="1" r="1" fill="$bad"/></svg>""")
+            val clean = assertIs<SvgSanitizeResult.Clean>(result, "for fill=\"$bad\"")
+            assertTrue("evil.example" !in clean.svg, "for fill=\"$bad\": ${clean.svg}")
+            assertTrue("fill=" !in clean.svg, "the whole attribute must be dropped for fill=\"$bad\": ${clean.svg}")
+        }
+    }
+
+    @Test
+    fun `a fill value with a backslash never passes, even a CSS escape of url(`() {
+        // u\72l( is the CSS escape for the letter r; a real CSS engine reads this as url(. A
+        // search for the literal text "url(" never finds it, so a value carrying a backslash at
+        // all is refused instead of trying to decode every possible escape.
+        val result = SvgSanitizer.sanitize(
+            """<svg><circle cx="1" cy="1" r="1" fill="u\72l(https://evil.example/x)"/></svg>"""
+        )
+        val clean = assertIs<SvgSanitizeResult.Clean>(result)
+        assertTrue("fill=" !in clean.svg, clean.svg)
+    }
+
+    @Test
+    fun `the fill value rule keeps every allowed positive shape, in the case the model wrote it`() {
+        val goodValues = listOf("url(#a)", "URL(#a)", "#fff", "rgb(1, 2, 3)", "currentColor", "red")
+        goodValues.forEach { good ->
+            val result = SvgSanitizer.sanitize(
+                """<svg><defs><linearGradient id="a"/></defs><circle cx="1" cy="1" r="1" fill="$good"/></svg>"""
+            )
+            val clean = assertIs<SvgSanitizeResult.Clean>(result, "for fill=\"$good\"")
+            assertTrue(
+                "fill=\"$good\"" in clean.svg,
+                "expected fill=\"$good\" to survive unchanged in: ${clean.svg}",
+            )
+        }
+    }
+
     @Test
     fun `nesting past the depth bound is refused`() {
         val nested = "<g>".repeat(41) + "<circle cx=\"1\" cy=\"1\" r=\"1\"/>" + "</g>".repeat(41)
