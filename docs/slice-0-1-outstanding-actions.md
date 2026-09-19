@@ -211,10 +211,10 @@ The code already writes three tokens. A person sees them today only by chance.
 
 ### Step 4.1 — Add a log drain and the alerts
 
-`docs/deploy.md`, section "Log drain, alert rules, and uptime check", now holds the full alert
-rule table, the catch-all for a line with no token, and the uptime check. Do the steps there
-instead of the four below. This document still names the four highest-urgency strings, so a
-reader sees the stakes without opening the other file.
+Do this step in `docs/deploy.md`, section "Log drain, alert rules, and uptime check". That
+section holds the full alert rule table, the catch-all for a line with no token, and the uptime
+check. The table below names only the four highest-urgency strings, so a reader sees the stakes
+without opening the other file.
 
 | String | What it means | Urgency |
 |---|---|---|
