@@ -113,6 +113,7 @@ class QuizRoutesTest {
                     account = account, sessions = { stack.sessions }, magicLink = { magicLink },
                     google = { error("google sign-in is not exercised by QuizRoutesTest") },
                     cookies = TestFixtures.cookieConfig, quotaRepository = stack.quotaRepository, billing = billing,
+                    quizzes = { quiz.service },
                     clientAddresses = ClientAddressConfig(trustedHeader = null),
                 )
             }

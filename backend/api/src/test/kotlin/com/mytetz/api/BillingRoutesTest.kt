@@ -219,6 +219,7 @@ class BillingRoutesTest {
                     cookies = TestFixtures.cookieConfig,
                     quotaRepository = stack.quotaRepository,
                     billing = billing,
+                    quizzes = { error("quizzes are not exercised by BillingRoutesTest") },
                     clientAddresses = ClientAddressConfig(trustedHeader = null),
                 )
                 billingRoutes(
