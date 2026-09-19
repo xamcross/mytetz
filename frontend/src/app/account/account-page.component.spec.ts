@@ -243,6 +243,28 @@ describe('AccountPageComponent', () => {
     expect(store.view()).toEqual(active);
   });
 
+  it('a rate-limited portal request shows its own message', async () => {
+    await mount((req) => req.flush(active));
+
+    const manage = fixture.nativeElement.querySelector(
+      '[data-action="manage-subscription"]',
+    ) as HTMLButtonElement;
+    manage.click();
+
+    http
+      .expectOne('/api/billing/portal')
+      .flush(
+        { code: 'RATE_LIMITED', message: 'too many portal requests; try again shortly' },
+        { status: 429, statusText: 'Too Many Requests' },
+      );
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(text()).toContain('Too many requests. Wait a few minutes and try again.');
+    expect(text()).not.toContain('Could not open the customer portal');
+    expect(store.view()).toEqual(active);
+  });
+
   it('links to the terms next to the subscribe control', async () => {
     await mount((req) => req.flush(active));
 

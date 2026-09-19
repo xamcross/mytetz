@@ -366,9 +366,13 @@ export class AccountPageComponent implements OnInit {
    * Sends `POST /api/billing/portal`, then sends the browser to the returned link.
    *
    * The server reads the signed-in learner's own email from the session. This method sends no
-   * email and no id. A `404 NO_SUBSCRIPTION` and every other failure share one message: this
-   * method cannot tell a missing subscription apart from a vendor outage, and a learner does not
-   * need that difference to know what to try next.
+   * email and no id. A `404 NO_SUBSCRIPTION` and every other failure share one message, with one
+   * exception below: this method cannot tell a missing subscription apart from a vendor outage,
+   * and a learner does not need that difference to know what to try next.
+   *
+   * A `429` gets its own message. The backend's own rate limiter answers `429` for a loop, not
+   * for an outage, and "check your connection" is the wrong advice for a loop. `confirmDelete`
+   * reads `HttpErrorResponse.status` the same way, for its own one-status exception.
    */
   async manageSubscription(): Promise<void> {
     if (this.openingPortal()) return;
@@ -380,10 +384,14 @@ export class AccountPageComponent implements OnInit {
       // This method leaves `openingPortal` set to true after success. See `WallPanelComponent.subscribe`
       // for the reason: the browser is about to leave this page, and nothing here must enable the
       // button again.
-    } catch {
-      this.actionError.set(
-        'Could not open the customer portal. Check your connection and try again.',
-      );
+    } catch (err) {
+      if (err instanceof HttpErrorResponse && err.status === 429) {
+        this.actionError.set('Too many requests. Wait a few minutes and try again.');
+      } else {
+        this.actionError.set(
+          'Could not open the customer portal. Check your connection and try again.',
+        );
+      }
       this.openingPortal.set(false);
     }
   }
