@@ -10,23 +10,31 @@ import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertNotNull
-import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
  * Every test here runs against a real Mongo container through [MongoTestSupport], the project's
  * own Testcontainers fixture — never against a live database. This file is the proof this issue's
  * safety rule asks for: the review path is built and tested against Testcontainers only.
+ *
+ * Round 2 replaces the bulk-publish tests this file held before. The owner reads one explanation
+ * at a time (issue #49: "Read each explanation. Mark an accurate one as published. Leave a wrong
+ * one unpublished."), so the write path must act on an explicit list of keys the owner chose, and
+ * never on "the top N" as a group.
  */
 class PublishTopExplanationsTest {
 
     private val database = MongoTestSupport.database("publish_top_explanations")
     private val repository = ExplanationRepository(database)
 
-    private fun explanation(key: String, requestCount: Long, published: Boolean = false) = Explanation(
+    private fun explanation(
+        key: String,
+        requestCount: Long,
+        published: Boolean = false,
+        verb: Verb = Verb.EXPLAIN,
+    ) = Explanation(
         key = key, topicSlug = "quantum-physics", parentKey = "p", span = "span-$key", spanSentence = "s",
-        verb = Verb.EXPLAIN, variant = 0, depth = 1, body = "b", grounded = false, sources = emptyList(),
+        verb = verb, variant = 0, depth = 1, body = "A body for $key.", grounded = false, sources = emptyList(),
         promptVersion = "v1", modelFamily = "fake-model", modelId = "fake-model",
         inputTokens = 1, outputTokens = 1, costMicros = 0, requestCount = requestCount,
         createdAtEpochMillis = 0, published = published,
@@ -38,83 +46,222 @@ class PublishTopExplanationsTest {
         repository.ensureIndexes()
     }
 
+    // ------------------------------------------------------------------ listTopCandidates
+
     @Test
-    fun `a dry run lists the top nodes and writes nothing`() = runTest {
+    fun `listTopCandidates lists unpublished EXPLAIN nodes ordered by requestCount, highest first`() = runTest {
         repository.insertIfAbsent(explanation("low", requestCount = 1))
         repository.insertIfAbsent(explanation("high", requestCount = 9))
 
-        val selected = publishTopExplanations(repository, dryRun = true)
+        val candidates = listTopCandidates(repository, limit = 10)
 
-        assertEquals(listOf("high", "low"), selected.map { it.key })
-        assertFalse(repository.findByKey("high")!!.published, "a dry run must write nothing")
-        assertFalse(repository.findByKey("low")!!.published, "a dry run must write nothing")
+        assertEquals(listOf("high", "low"), candidates.map { it.key })
     }
 
     @Test
-    fun `a live run sets published on each selected node`() = runTest {
-        repository.insertIfAbsent(explanation("low", requestCount = 1))
-        repository.insertIfAbsent(explanation("high", requestCount = 9))
-
-        val selected = publishTopExplanations(repository, dryRun = false)
-
-        assertEquals(listOf("high", "low"), selected.map { it.key })
-        assertTrue(repository.findByKey("high")!!.published)
-        assertTrue(repository.findByKey("low")!!.published)
-    }
-
-    @Test
-    fun `an already-published node is not selected again`() = runTest {
-        repository.insertIfAbsent(explanation("already", requestCount = 9))
-        repository.setPublished("already", true)
+    fun `listTopCandidates excludes an already-published node`() = runTest {
+        repository.insertIfAbsent(explanation("already", requestCount = 9, published = true))
         repository.insertIfAbsent(explanation("new", requestCount = 5))
 
-        val selected = publishTopExplanations(repository, dryRun = false)
+        val candidates = listTopCandidates(repository, limit = 10)
 
-        assertEquals(listOf("new"), selected.map { it.key })
+        assertEquals(listOf("new"), candidates.map { it.key })
     }
 
     @Test
-    fun `the cap is never crossed — publishing stops at exactly the room the cap still allows`() = runTest {
-        // 99 already published, one under the cap of 100. Two more candidates compete for that
-        // one remaining slot; only the higher-demand one may be selected.
-        repeat(99) { i ->
-            repository.insertIfAbsent(explanation("already-$i", requestCount = 1000L - i))
-            repository.setPublished("already-$i", true)
+    fun `listTopCandidates applies the limit`() = runTest {
+        repeat(5) { i -> repository.insertIfAbsent(explanation("k-$i", requestCount = i.toLong())) }
+
+        assertEquals(2, listTopCandidates(repository, limit = 2).size)
+    }
+
+    @Test
+    fun `listTopCandidates excludes a SEED and a VISUALIZE node`() = runTest {
+        repository.insertIfAbsent(explanation("seed", requestCount = 100, verb = Verb.SEED))
+        repository.insertIfAbsent(explanation("visualize", requestCount = 100, verb = Verb.VISUALIZE))
+        repository.insertIfAbsent(explanation("explain", requestCount = 1))
+
+        val candidates = listTopCandidates(repository, limit = 10)
+
+        assertEquals(listOf("explain"), candidates.map { it.key })
+    }
+
+    // ------------------------------------------------------------------ renderCandidateReport
+
+    @Test
+    fun `renderCandidateReport shows the full key, the short key, the path, the count and the body`() {
+        val candidate = explanation("abcdef0123456789" + "0".repeat(48), requestCount = 7)
+            .copy(span = "wave function")
+
+        val report = renderCandidateReport(listOf(candidate))
+
+        assertTrue(candidate.key in report, "the full key must appear, so the owner can copy it")
+        assertTrue("abcdef012345" in report, "the short key must appear")
+        assertTrue("/topics/quantum-physics/explain/abcdef012345" in report, "the public path must appear")
+        assertTrue("wave function" in report)
+        assertTrue("7" in report, "the request count must appear")
+        assertTrue(candidate.body in report, "the full body text must appear, so the owner can read it")
+    }
+
+    // ------------------------------------------------------------------ publishByKeys
+
+    @Test
+    fun `publishByKeys publishes exactly the given keys`() = runTest {
+        repository.insertIfAbsent(explanation("a", requestCount = 1))
+        repository.insertIfAbsent(explanation("b", requestCount = 1))
+        repository.insertIfAbsent(explanation("c", requestCount = 1))
+
+        val outcome = publishByKeys(repository, listOf("a", "b"))
+
+        assertEquals(PublishOutcome.Applied(listOf("a", "b")), outcome)
+        assertTrue(repository.findByKey("a")!!.published)
+        assertTrue(repository.findByKey("b")!!.published)
+        assertFalse(repository.findByKey("c")!!.published, "a key not given must not be touched")
+    }
+
+    @Test
+    fun `publishByKeys is all-or-nothing — one bad key among good keys writes nothing`() = runTest {
+        repository.insertIfAbsent(explanation("good-1", requestCount = 1))
+        repository.insertIfAbsent(explanation("good-2", requestCount = 1))
+
+        val outcome = publishByKeys(repository, listOf("good-1", "no-such-key", "good-2"))
+
+        assertTrue(outcome is PublishOutcome.Rejected)
+        assertTrue((outcome as PublishOutcome.Rejected).problems.any { "no-such-key" in it })
+        assertFalse(repository.findByKey("good-1")!!.published, "a good key must not be published when another key fails")
+        assertFalse(repository.findByKey("good-2")!!.published, "a good key must not be published when another key fails")
+    }
+
+    @Test
+    fun `publishByKeys refuses a VISUALIZE key`() = runTest {
+        repository.insertIfAbsent(explanation("diagram", requestCount = 1, verb = Verb.VISUALIZE))
+
+        val outcome = publishByKeys(repository, listOf("diagram"))
+
+        assertTrue(outcome is PublishOutcome.Rejected)
+        assertTrue((outcome as PublishOutcome.Rejected).problems.any { "diagram" in it && "VISUALIZE" in it })
+        assertFalse(repository.findByKey("diagram")!!.published)
+    }
+
+    @Test
+    fun `publishByKeys refuses a SEED key`() = runTest {
+        repository.insertIfAbsent(explanation("seed-key", requestCount = 1, verb = Verb.SEED))
+
+        val outcome = publishByKeys(repository, listOf("seed-key"))
+
+        assertTrue(outcome is PublishOutcome.Rejected)
+        assertTrue((outcome as PublishOutcome.Rejected).problems.any { "seed-key" in it && "SEED" in it })
+        assertFalse(repository.findByKey("seed-key")!!.published)
+    }
+
+    @Test
+    fun `publishByKeys refuses an already-published key`() = runTest {
+        repository.insertIfAbsent(explanation("already", requestCount = 1, published = true))
+
+        val outcome = publishByKeys(repository, listOf("already"))
+
+        assertTrue(outcome is PublishOutcome.Rejected)
+        assertTrue((outcome as PublishOutcome.Rejected).problems.any { "already" in it })
+    }
+
+    @Test
+    fun `publishByKeys refuses an unknown key`() = runTest {
+        val outcome = publishByKeys(repository, listOf("no-such-key"))
+
+        assertTrue(outcome is PublishOutcome.Rejected)
+        assertTrue((outcome as PublishOutcome.Rejected).problems.any { "no-such-key" in it })
+    }
+
+    @Test
+    fun `publishByKeys with no keys is rejected, and writes nothing`() = runTest {
+        val outcome = publishByKeys(repository, emptyList())
+
+        assertTrue(outcome is PublishOutcome.Rejected)
+    }
+
+    @Test
+    fun `publishByKeys at the cap boundary succeeds when the new total lands exactly at the cap`() = runTest {
+        repeat(MAX_PUBLISHED_EXPLANATIONS - 1) { i ->
+            repository.insertIfAbsent(explanation("already-$i", requestCount = 1, published = true))
         }
-        repository.insertIfAbsent(explanation("candidate-low", requestCount = 1))
-        repository.insertIfAbsent(explanation("candidate-high", requestCount = 2))
+        repository.insertIfAbsent(explanation("one-more", requestCount = 1))
 
-        val selected = publishTopExplanations(repository, dryRun = false, cap = MAX_PUBLISHED_EXPLANATIONS)
+        val outcome = publishByKeys(repository, listOf("one-more"))
 
-        assertEquals(listOf("candidate-high"), selected.map { it.key })
+        assertEquals(PublishOutcome.Applied(listOf("one-more")), outcome)
         assertEquals(MAX_PUBLISHED_EXPLANATIONS, repository.findPublished().size)
     }
 
     @Test
-    fun `at the cap already, a run selects nothing and writes nothing`() = runTest {
-        repeat(100) { i ->
-            repository.insertIfAbsent(explanation("already-$i", requestCount = 1))
-            repository.setPublished("already-$i", true)
+    fun `publishByKeys refuses a key list that would cross the cap, and writes nothing`() = runTest {
+        repeat(MAX_PUBLISHED_EXPLANATIONS) { i ->
+            repository.insertIfAbsent(explanation("already-$i", requestCount = 1, published = true))
         }
-        repository.insertIfAbsent(explanation("never", requestCount = 1000))
+        repository.insertIfAbsent(explanation("over-the-cap", requestCount = 1))
 
-        val selected = publishTopExplanations(repository, dryRun = false, cap = 100)
+        val outcome = publishByKeys(repository, listOf("over-the-cap"))
 
-        assertEquals(emptyList(), selected)
-        assertNull(repository.findByKey("never")?.published?.takeIf { it }, "the 101st node stays unpublished")
-        assertEquals(100, repository.findPublished().size)
+        assertTrue(outcome is PublishOutcome.Rejected)
+        assertTrue((outcome as PublishOutcome.Rejected).problems.any { "cap" in it })
+        assertFalse(repository.findByKey("over-the-cap")!!.published)
+        assertEquals(MAX_PUBLISHED_EXPLANATIONS, repository.findPublished().size)
+    }
+
+    // ------------------------------------------------------------------ unpublishByKeys
+
+    @Test
+    fun `unpublishByKeys unpublishes exactly the given keys`() = runTest {
+        repository.insertIfAbsent(explanation("a", requestCount = 1, published = true))
+        repository.insertIfAbsent(explanation("b", requestCount = 1, published = true))
+
+        val outcome = unpublishByKeys(repository, listOf("a"))
+
+        assertEquals(PublishOutcome.Applied(listOf("a")), outcome)
+        assertFalse(repository.findByKey("a")!!.published)
+        assertTrue(repository.findByKey("b")!!.published, "a key not given must not be touched")
     }
 
     @Test
-    fun `a custom, smaller cap is honoured too`() = runTest {
-        repository.insertIfAbsent(explanation("a", requestCount = 3))
-        repository.insertIfAbsent(explanation("b", requestCount = 2))
-        repository.insertIfAbsent(explanation("c", requestCount = 1))
+    fun `unpublishByKeys refuses a key that is not published`() = runTest {
+        repository.insertIfAbsent(explanation("not-published", requestCount = 1, published = false))
 
-        val selected = publishTopExplanations(repository, dryRun = false, cap = 2)
+        val outcome = unpublishByKeys(repository, listOf("not-published"))
 
-        assertEquals(listOf("a", "b"), selected.map { it.key })
-        assertNotNull(repository.findByKey("c"))
-        assertFalse(repository.findByKey("c")!!.published)
+        assertTrue(outcome is PublishOutcome.Rejected)
+        assertTrue((outcome as PublishOutcome.Rejected).problems.any { "not-published" in it })
+    }
+
+    @Test
+    fun `unpublishByKeys is all-or-nothing — an unknown key among good keys writes nothing`() = runTest {
+        repository.insertIfAbsent(explanation("good", requestCount = 1, published = true))
+
+        val outcome = unpublishByKeys(repository, listOf("good", "no-such-key"))
+
+        assertTrue(outcome is PublishOutcome.Rejected)
+        assertTrue(repository.findByKey("good")!!.published, "a good key must not be unpublished when another key fails")
+    }
+
+    @Test
+    fun `unpublishByKeys with no keys is rejected`() = runTest {
+        val outcome = unpublishByKeys(repository, emptyList())
+
+        assertTrue(outcome is PublishOutcome.Rejected)
+    }
+
+    // ------------------------------------------------------------------ small parsers
+
+    @Test
+    fun `parseKeysArg splits on a comma and trims each key`() {
+        assertEquals(listOf("a", "b", "c"), parseKeysArg(" a, b ,c"))
+    }
+
+    @Test
+    fun `parseKeysArg drops an empty entry`() {
+        assertEquals(listOf("a", "b"), parseKeysArg("a,,b,"))
+    }
+
+    @Test
+    fun `parseKeysFileText reads one key per line and drops a blank line`() {
+        assertEquals(listOf("a", "b"), parseKeysFileText("a\n\n b \n"))
     }
 }
