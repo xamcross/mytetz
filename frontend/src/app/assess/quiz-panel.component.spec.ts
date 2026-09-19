@@ -431,8 +431,12 @@ describe('QuizPanelComponent', () => {
       // styles.css cannot reach them. The override lives here, next to the rule it silences —
       // the same rule #102 set for a component's own animation.
       const start = source.indexOf('@media (prefers-reduced-motion: reduce)');
-      if (start === -1) throw new Error('quiz-panel.component.ts must declare its own reduced-motion block');
-      const block = source.slice(start, source.indexOf('}', source.indexOf('.review--in', start)) + 1);
+      if (start === -1)
+        throw new Error('quiz-panel.component.ts must declare its own reduced-motion block');
+      const block = source.slice(
+        start,
+        source.indexOf('}', source.indexOf('.review--in', start)) + 1,
+      );
       expect(block).toMatch(/\.review--in\s*\{\s*animation-delay:\s*0ms/);
     });
   });

@@ -163,12 +163,15 @@ describe('AccountPageComponent', () => {
     ['CANCELLED', 'Your subscription is cancelled.'],
     ['EXPIRED', 'Your subscription has expired.'],
     ['SOME_FUTURE_STATUS', 'We do not recognize this account status.'],
-  ])('finding F15: status %s shows the sentence %j, never the raw value', async (status, sentence) => {
-    await mount((req) => req.flush({ ...active, status }));
+  ])(
+    'finding F15: status %s shows the sentence %j, never the raw value',
+    async (status, sentence) => {
+      await mount((req) => req.flush({ ...active, status }));
 
-    expect(text()).toContain(sentence);
-    expect(text()).not.toContain(status);
-  });
+      expect(text()).toContain(sentence);
+      expect(text()).not.toContain(status);
+    },
+  );
 
   it('the account page shows no "Invalid Date" when the wire body has no period-end key', async () => {
     // The route serializer once omitted `currentPeriodEndsAtEpochMillis` from the wire body of a

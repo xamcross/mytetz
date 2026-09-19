@@ -81,9 +81,15 @@ function sentenceForStatus(status: string): string {
              four placeholder rows too. -->
         <div class="mt-card mt-card--raised account-page__skeleton" aria-hidden="true">
           <span class="mt-skeleton account-page__skeleton-row"></span>
-          <span class="mt-skeleton account-page__skeleton-row account-page__skeleton-row--76"></span>
-          <span class="mt-skeleton account-page__skeleton-row account-page__skeleton-row--60"></span>
-          <span class="mt-skeleton account-page__skeleton-row account-page__skeleton-row--40"></span>
+          <span
+            class="mt-skeleton account-page__skeleton-row account-page__skeleton-row--76"
+          ></span>
+          <span
+            class="mt-skeleton account-page__skeleton-row account-page__skeleton-row--60"
+          ></span>
+          <span
+            class="mt-skeleton account-page__skeleton-row account-page__skeleton-row--40"
+          ></span>
         </div>
       }
 
@@ -174,8 +180,8 @@ function sentenceForStatus(status: string): string {
               <div class="mt-card mt-card--dashed account-page__confirm" role="alertdialog">
                 <p class="account-page__confirm-text">
                   This permanently deletes your account, every reading session and the allowance
-                  meter. It does not delete any explanation — those stay in the catalogue for
-                  other learners. This cannot be undone.
+                  meter. It does not delete any explanation — those stay in the catalogue for other
+                  learners. This cannot be undone.
                 </p>
                 <div class="account-page__actions">
                   <button
