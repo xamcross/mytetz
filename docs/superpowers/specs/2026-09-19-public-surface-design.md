@@ -2,7 +2,7 @@
 
 **Project:** mytetz.com
 **Date:** 2026-09-19
-**Status:** Draft for owner review
+**Status:** Approved for planning. The owner approved it on 2026-09-19, in pull request #81.
 **Spec:** C of four (see the Scope section of the learning-engine design)
 
 This document uses ASD-STE100 Simplified Technical English.
@@ -734,7 +734,7 @@ approve this document as a whole first, and answer each question later.
 
 ## 18. Next steps
 
-1. The owner reviews this document and sets its status to "Approved for planning."
+1. Done. The owner approved this document on 2026-09-19, in pull request #81.
 2. An implementation plan follows, under `docs/superpowers/plans/`.
 3. After approval, #45 to #48 are updated where this document differs from their bodies, per
    section 15, and the `blocked` label and first line are removed from #45.
