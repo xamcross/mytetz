@@ -760,6 +760,32 @@ describe('FocusCardComponent', () => {
     expect(bodyEl().classList.contains('focus__body--landed')).toBe(false);
   });
 
+  it('marks the second answer as landed too, even when the first one never got its animationend', async () => {
+    // Round 2 of issue #104. If an animationend is ever missed — the card sits inside a
+    // display: none ancestor at that moment, or the element leaves the DOM mid-animation — the
+    // class stays true, and a class already true does not change when set true again, so the
+    // next answer would not animate. A new stream starting is the smallest correct place to
+    // guard against this: it runs well before the next body ever lands.
+    fixture.componentRef.setInput('body', 'A new pillar of the theory.');
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(bodyEl().classList.contains('focus__body--landed')).toBe(true);
+    // No animationend dispatched here, on purpose — the class is left stuck true.
+
+    fixture.componentRef.setInput('isStreaming', true);
+    fixture.detectChanges();
+    expect(bodyEl().classList.contains('focus__body--landed')).toBe(false);
+
+    fixture.componentRef.setInput('isStreaming', false);
+    fixture.componentRef.setInput('body', 'A second pillar of the theory.');
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(bodyEl().classList.contains('focus__body--landed')).toBe(true);
+  });
+
   it('keeps the selection offsets correct while the landed class is still on the paragraph', async () => {
     // The proof the class comment above the template asks for: a class binding touches no text
     // node, so the offsets `selectionToSpan` reads must be exactly as correct while the landed

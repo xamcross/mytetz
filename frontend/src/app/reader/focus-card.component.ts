@@ -506,6 +506,14 @@ export class FocusCardComponent {
         // stale, so its timer goes too.
         this.clearReadyStatusTimer();
         this.streamAnnouncement.set('The explanation is on its way.');
+        // Also the smallest correct place to guard against a missed animationend: if the last
+        // answer's landed class never got its own end event — the card sat inside a
+        // display: none ancestor at that moment, or the element left the DOM mid-animation — the
+        // class would otherwise still be on the paragraph, and the next answer would not
+        // animate, because a class already true does not change when set true again. Resetting
+        // it here, well before the next body ever lands, guarantees a real false-then-true
+        // transition for it.
+        this.landed.set(false);
       } else if (!streaming && wasStreaming) {
         if (this.explainFailed()) {
           // The stream ended, but it did not succeed. "Ready" would be false, so the element goes
