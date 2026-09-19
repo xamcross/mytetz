@@ -138,12 +138,17 @@ they reset whenever the machine cold-starts.
 
 ### 2.2 Every variable the backend reads
 
-33 variables, and each one is listed here and in `.env.example`. Everything
-except the three secrets above has a default in code, and the defaults are the
-values shown. **An unset, unparseable or non-positive value falls back to its
-default rather than stopping the server**, because these are read while the
-process is starting and a typo must not take the site down.
-`MYTETZ_COOKIE_SIGNING_KEY` is the one deliberate exception: it fails closed.
+42 variables, and each one is listed here and in `.env.example`. The Default
+column gives `none` for a name with no default in code, and the real default
+for every other name.
+
+**A name with a default falls back to it on an unset, unparseable or
+non-positive value, rather than stopping the server.** These values are read
+while the process starts, so a typo must not take the site down. A name with
+no default states its own consequence in its own row.
+`MYTETZ_COOKIE_SIGNING_KEY` is the only one whose absence stops the whole
+server. Every other `none` row only stops the one feature that needs it,
+until an operator sets it.
 
 | Variable | Default | What it decides |
 | --- | --- | --- |
@@ -173,13 +178,22 @@ process is starting and a typo must not take the site down.
 | `MYTETZ_MAIL_FROM` | none | the sender address for a magic-link email. `MYTETZ_MAIL_MODE=resend` needs it. |
 | `MYTETZ_TRIAL_GENERATIONS` | `40` | how many generations a new trial grants in total. |
 | `MYTETZ_TRIAL_DAYS` | `7` | how many days a new trial lasts. |
-| `MYTETZ_GRACE_DAYS` | `3` | how many days access continues after a cancelled subscription's period ends. |
+| `MYTETZ_GRACE_DAYS` | `3` | extra days of access after an active subscription's period end, so a late renewal webhook still finds the learner allowed. A past-due row keeps access for this many days from the event that flagged it. A cancelled row gets no grace: it loses access exactly at its period end. |
 | `MYTETZ_SUBSCRIBER_DAILY_EXPLAINS` | `25` | explanations per day for a paying subscriber. |
 | `MYTETZ_QUIZ_EFFORT` | `LOW` | thinking effort for a quiz: `LOW`, `MEDIUM` or `HIGH`. An unknown name falls back to `LOW`. |
 | `MYTETZ_QUIZ_MAX_OUTPUT_TOKENS` | `2000` | caps thinking and response text together, for one quiz generation call. |
 | `MYTETZ_TEST_ME_MAX_QUESTIONS` | `3` | how many questions one "test me" quiz holds. |
 | `MYTETZ_EXAM_MAX_QUESTIONS` | `8` | how many questions one exam holds. |
 | `MYTETZ_EXAM_MAX_SOURCES` | `20` | how many of a session's most recent nodes an exam may draw from. |
+| `FREEMIUS_SECRET_KEY` | none | signs and verifies the Freemius webhook. Checkout and the webhook route answer `503` until this, `FREEMIUS_PRODUCT_ID` and `FREEMIUS_PLAN_ID` are all set. See the secrets table above. |
+| `FREEMIUS_PRODUCT_ID` | none | the Freemius product id. Checkout and the webhook route answer `503` until this, `FREEMIUS_SECRET_KEY` and `FREEMIUS_PLAN_ID` are all set. |
+| `FREEMIUS_PLAN_ID` | none | the Freemius plan id. Checkout and the webhook route answer `503` until this, `FREEMIUS_SECRET_KEY` and `FREEMIUS_PRODUCT_ID` are all set. |
+| `FREEMIUS_API_KEY` | none | a Bearer token for the Freemius Developer API. With `MYTETZ_RECONCILE_ON_BOOT` on and this unset, the boot logs `RECONCILE_SKIPPED` and reconciliation does nothing. See "Billing reconciliation" below. |
+| `MYTETZ_RECONCILE_ON_BOOT` | off | whether the reconciliation sweep runs at every boot. Only the exact word `true` turns it on. Section "Billing reconciliation" below explains it. |
+| `MYTETZ_TURNSTILE_SECRET` | none | the Turnstile secret key. With this unset, the Turnstile check is skipped, and every sign-in still works. Section "Turnstile" below explains it. |
+| `MYTETZ_TURNSTILE_SITE_KEY` | none | the Turnstile site key, reported to the browser at `GET /api/auth/config`. With this unset, the sign-in panel renders no widget. Section "Turnstile" below explains it. |
+| `MYTETZ_MAIL_API_KEY` | none | the Resend API key. Needed only when `MYTETZ_MAIL_MODE` is `resend`; without it, email sign-in in that mode answers `503`. |
+| `MYTETZ_PUBLIC_BASE_URL` | none | the absolute base url of this deployment, such as `https://mytetz.com`. Email sign-in and Google sign-in both answer `503` until this is set. |
 
 ### Atlas network access — known constraint
 
