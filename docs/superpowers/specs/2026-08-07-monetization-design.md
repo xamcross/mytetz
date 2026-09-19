@@ -28,7 +28,7 @@ the full allowance. Section 3 gives the numbers.
 
 | Decision | Choice | Rationale |
 |---|---|---|
-| Price | €10 each month | Unchanged from the learning-engine specification |
+| Price | €10 each month | Unchanged from the learning-engine specification. **Changed on 2026-09-19:** the owner set the price to $12 each month, in pull request #130. The fee of 4.7% then leaves $11.44 each month. The other rows and sections of this document keep the numbers of 2026-08-07. |
 | Trial | 7 days, 40 explanations, no card | A pool wastes nothing. The cost ceiling for one trial is $0.42. |
 | Gate position | The catalogue and the seeds are open. The reader is gated. | A crawler and a first-time visitor both read real text. Specification C stays possible. |
 | Sign-in | An email magic link **and** Google | Two methods give redundancy. Mail delivery is the least reliable part of this design. |

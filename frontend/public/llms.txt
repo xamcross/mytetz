@@ -15,7 +15,7 @@ The catalogue lists topics by title, category, and summary. A reader can search 
 
 ## Product
 
-- Price: €10 a month, through a Freemius checkout. The trial needs no card.
+- Price: $12 a month, through a Freemius checkout. The trial needs no card.
 - Trial: 40 explanations over 7 days, no credit card.
 - Subscriber allowance: 25 explanations each day.
 - Cancel: the account page, Manage subscription.

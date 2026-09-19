@@ -33,6 +33,18 @@ class FaqRoutesTest {
     )
 
     @Test
+    fun `the price answer states 12 US dollars each month, and no euro price`() = testApplication {
+        // The owner set the price on 2026-09-19, in pull request #130. The plan before that date
+        // was 10 euro, and the first version of this page stated it.
+        application { routing { faqRoutes(billingConfig = BillingConfig()) } }
+
+        val html = client.get("/faq").bodyAsText()
+
+        assertTrue(html.contains("Mytetz costs \$12 each month."), "the price sentence is missing")
+        assertTrue(!html.contains("€"), "the page still holds a euro sign")
+    }
+
+    @Test
     fun `the html element states the language of the page`() = testApplication {
         application { routing { faqRoutes(billingConfig = BillingConfig()) } }
 

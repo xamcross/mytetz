@@ -28,16 +28,15 @@ private const val FAQ_DESCRIPTION =
         "reader can read with no account."
 
 /**
- * The monthly subscription price, in euro, for one reader.
+ * The monthly subscription price, in US dollars, for one reader.
  *
- * No configuration value holds this number. The price lives in the Freemius dashboard, and the
- * only source this project holds for it today is
- * `docs/superpowers/specs/2026-08-07-monetization-design.md:31`, "€10 each month". The owner
- * confirms this figure against the live Freemius dashboard in the pull request of issue #121,
- * before merge — see that issue's own "Owner steps", step 2. One named constant, next to the
+ * No configuration value holds this number. The price lives in the Freemius dashboard. The owner
+ * set it on 2026-09-19, in pull request #130 of issue #121: "the price should be $12". The design
+ * document `docs/superpowers/specs/2026-08-07-monetization-design.md:31` planned "€10 each month"
+ * before that, and it carries a dated note on the change. One named constant, next to the
  * renderer that uses it, so a later price change touches one line.
  */
-internal const val FAQ_PRICE_EUR_PER_MONTH: Int = 10
+internal const val FAQ_PRICE_USD_PER_MONTH: Int = 12
 
 /**
  * One "See ..." link placed under an answer paragraph, kept apart from [FaqEntry.answer] so the
@@ -98,7 +97,7 @@ internal fun faqEntries(billingConfig: BillingConfig): List<FaqEntry> = listOf(
         // subscribes through the checkout link of `POST /api/billing/checkout`. An earlier text
         // said that Freemius bills the subscriber "once the trial ends", which a reader takes as
         // an automatic payment. The review of issue #121 corrected it.
-        answer = "Mytetz costs €$FAQ_PRICE_EUR_PER_MONTH each month. A learner subscribes through " +
+        answer = "Mytetz costs \$$FAQ_PRICE_USD_PER_MONTH each month. A learner subscribes through " +
             "the Freemius checkout. The trial needs no card, so no payment starts when the trial ends.",
         link = FaqLink(href = "/terms", label = "Terms"),
     ),

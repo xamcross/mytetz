@@ -239,7 +239,8 @@ class AnthropicLlmClient(
          * $25 for each 1M tokens. One explanation on Opus 5 therefore costs $0.0175. Sonnet 5 costs
          * $3 and $15. One explanation on Sonnet 5 therefore costs $0.0105.
          *
-         * The subscription is €10 each month. The Freemius fee leaves €9.53. That is about $10.29.
+         * The subscription is $12 each month since 2026-09-19. The plan before that date was €10. The
+         * Freemius fee of 4.7% leaves $11.44.
          * An allowance of 25 each day therefore costs $7.88 on Sonnet 5 and $13.13 on Opus 5. Only
          * the first number leaves a margin.
          *
