@@ -3,13 +3,23 @@ package com.mytetz.api
 import kotlinx.html.HTML
 import kotlinx.html.a
 import kotlinx.html.body
+import kotlinx.html.button
+import kotlinx.html.div
+import kotlinx.html.footer
 import kotlinx.html.h1
+import kotlinx.html.h2
 import kotlinx.html.head
+import kotlinx.html.header
 import kotlinx.html.li
 import kotlinx.html.link
+import kotlinx.html.main
 import kotlinx.html.meta
+import kotlinx.html.nav
+import kotlinx.html.noScript
 import kotlinx.html.p
 import kotlinx.html.script
+import kotlinx.html.section
+import kotlinx.html.span
 import kotlinx.html.title
 import kotlinx.html.ul
 import kotlinx.html.unsafe
@@ -38,6 +48,10 @@ data class TopicPageView(
 
 private const val SITE_URL = "https://mytetz.com"
 
+/** The stylesheet every guide page already links. A topic page reuses it, and not a copy, so one
+ * edit reaches every page outside the Angular application. See `guides.css`'s own header comment. */
+private const val GUIDES_STYLESHEET = "/guides/guides.css"
+
 /**
  * Renders one topic page.
  *
@@ -46,31 +60,112 @@ private const val SITE_URL = "https://mytetz.com"
  * block in this function wraps [jsonLdGraph]'s own output, which is JSON and must not be escaped as
  * HTML; [jsonLdGraph] is what makes that block safe, per `JsonLd.kt`'s own KDoc. See
  * `docs/superpowers/specs/2026-09-19-public-surface-design.md` section 4.6.
+ *
+ * The page reuses the header bar, the `<main class="wrap">` layout and the footer that every guide
+ * page under `/guides` already carries, and the same `guides.css` file, so a learner who reaches
+ * this page from a catalogue tile sees a real page and not bare browser text. See
+ * `frontend/public/guides/index.html` for the page this layout is read from.
+ *
+ * The "Start with this topic" control is a `<button>`, an empty alert paragraph, and a `<noscript>`
+ * sentence, all rendered here through the normal escaped DSL calls. Its behaviour lives in one
+ * external file, `frontend/public/topic-start.js`, loaded with `defer` — never an inline `<script>`
+ * — so the one `unsafe { }` block on this page stays the JSON-LD block alone.
  */
 fun HTML.topicPageHtml(view: TopicPageView) {
     val pageTitle = pageTitleFor(view.title)
     val canonical = "$SITE_URL/topics/${view.slug}"
 
     head {
+        meta(charset = "utf-8")
+        meta(name = "viewport", content = "width=device-width, initial-scale=1")
         title { +pageTitle }
         meta(name = "description", content = view.summary)
         link(rel = "canonical", href = canonical)
-        meta(name = "og:url", content = canonical)
-        meta(name = "og:title", content = pageTitle)
-        meta(name = "og:description", content = view.summary)
-        meta(name = "og:image", content = "$SITE_URL/og-image.png")
+        link(rel = "stylesheet", href = GUIDES_STYLESHEET)
+
+        // The DSL's `meta(name = …)` writes a `name` attribute. Open Graph and Twitter Card tags
+        // need `property` (og:*) or `name` (twitter:*) exactly as a guide page already writes them
+        // — see frontend/public/guides/index.html — so the four og:* tags below set the attribute
+        // by hand.
+        meta { attributes["property"] = "og:type"; attributes["content"] = "article" }
+        meta { attributes["property"] = "og:site_name"; attributes["content"] = "mytetz" }
+        meta { attributes["property"] = "og:url"; attributes["content"] = canonical }
+        meta { attributes["property"] = "og:title"; attributes["content"] = pageTitle }
+        meta { attributes["property"] = "og:description"; attributes["content"] = view.summary }
+        meta { attributes["property"] = "og:image"; attributes["content"] = "$SITE_URL/og-image.png" }
+        meta(name = "twitter:card", content = "summary_large_image")
+
         script(type = "application/ld+json") {
             unsafe { +jsonLdGraph(listOf(learningResourceJsonLd(view, canonical), breadcrumbListJsonLd(view, canonical))) }
         }
+
+        // The one script this page loads for real behaviour, and the only one that is not the
+        // JSON-LD block above. External and deferred: no inline script, so no second `unsafe { }`
+        // use anywhere on this page.
+        script(src = "/topic-start.js") { attributes["defer"] = "defer" }
     }
     body {
-        h1 { +view.title }
-        p { +view.category }
-        p { +(view.seedBody ?: view.summary) }
-        if (view.relatedTopics.isNotEmpty()) {
-            ul {
-                view.relatedTopics.forEach { related ->
-                    li { a(href = "$SITE_URL/topics/${related.slug}") { +related.title } }
+        header(classes = "bar") {
+            a(href = "/", classes = "bar__mark") { +"mytetz" }
+            nav(classes = "bar__nav") {
+                attributes["aria-label"] = "Main"
+                a(href = "/") { +"Catalogue" }
+                a(href = "/guides") { +"Guides" }
+            }
+        }
+
+        main(classes = "wrap") {
+            p(classes = "crumb") {
+                a(href = "/") { +"mytetz" }
+                +" › "
+                +view.title
+            }
+
+            span(classes = "topic__eyebrow") { +view.category }
+            h1 { +view.title }
+            p(classes = "answer") { +(view.seedBody ?: view.summary) }
+
+            section(classes = "start") {
+                h2 { +"Start with this topic" }
+                button {
+                    attributes["type"] = "button"
+                    attributes["id"] = "topic-start-button"
+                    attributes["class"] = "start__cta"
+                    attributes["data-topic-slug"] = view.slug
+                    +"Start with this topic"
+                }
+                p {
+                    attributes["id"] = "topic-start-error"
+                    attributes["role"] = "alert"
+                }
+                noScript {
+                    p { +"The Start with this topic button needs JavaScript." }
+                }
+            }
+
+            if (view.relatedTopics.isNotEmpty()) {
+                section {
+                    h2 { +"Related topics" }
+                    ul(classes = "start__list") {
+                        view.relatedTopics.forEach { related ->
+                            // A relative link: this page's own canonical tag, and the JSON-LD
+                            // above, are the only values that carry the absolute mytetz.com URL.
+                            li { a(href = "/topics/${related.slug}") { +related.title } }
+                        }
+                    }
+                }
+            }
+        }
+
+        footer(classes = "foot") {
+            div(classes = "foot__inner") {
+                nav(classes = "foot__links") {
+                    attributes["aria-label"] = "Footer"
+                    a(href = "/") { +"Catalogue" }
+                    a(href = "/guides") { +"Guides" }
+                    a(href = "/privacy") { +"Privacy" }
+                    a(href = "/terms") { +"Terms" }
+                    a(href = "/imprint") { +"Imprint" }
                 }
             }
         }

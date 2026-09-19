@@ -115,4 +115,64 @@ class TopicPageHtmlTest {
         val parsed = ldJson(html)
         assertTrue(parsed.jsonObject["@graph"]!!.jsonArray.isNotEmpty())
     }
+
+    // ------------------------------------------------------------- the start control
+
+    @Test
+    fun `the start control holds the button with the escaped slug, the alert paragraph and the noscript text`() {
+        val html = render(view(related = emptyList()))
+
+        assertTrue(
+            """<button type="button" id="topic-start-button" class="start__cta" data-topic-slug="special-relativity">""" in html,
+            "the start button, with its data-topic-slug attribute, was not found: $html",
+        )
+        assertTrue("""<p id="topic-start-error" role="alert"></p>""" in html, "the alert paragraph was not found: $html")
+        assertTrue("<noscript>" in html, "no noscript block was found: $html")
+        assertTrue(
+            "needs JavaScript" in html,
+            "the noscript text does not say the control needs JavaScript: $html",
+        )
+    }
+
+    @Test
+    fun `a slug with a quote in it is escaped in the button's data attribute`() {
+        // Real slugs never carry a quote \u2014 this proves the DSL's own attribute escaping runs on
+        // this value too, and not only on learner-facing text.
+        val view = view().copy(slug = "special\"-relativity")
+
+        val html = render(view)
+
+        assertFalse("""data-topic-slug="special"-relativity"""" in html, "the quote broke out of the attribute: $html")
+        assertTrue("""data-topic-slug="special&quot;-relativity"""" in html)
+    }
+
+    // ------------------------------------------------------------- Open Graph
+
+    @Test
+    fun `every og tag uses the property attribute, and the page names its type, site and card`() {
+        val html = render(view())
+
+        assertTrue("""<meta property="og:type" content="article">""" in html, html)
+        assertTrue("""<meta property="og:site_name" content="mytetz">""" in html, html)
+        assertTrue("""<meta property="og:url" content="https://mytetz.com/topics/special-relativity">""" in html, html)
+        assertTrue("""<meta property="og:title" content=""" in html, html)
+        assertTrue("""<meta property="og:description" content=""" in html, html)
+        assertTrue("""<meta property="og:image" content="https://mytetz.com/og-image.png">""" in html, html)
+        assertTrue("""<meta name="twitter:card" content="summary_large_image">""" in html, html)
+        // The DSL's own meta(name = …) call writes a name attribute — asserting its absence here
+        // is what tells apart "the og tags use property" from "the html happens to also contain
+        // the text og:type somewhere".
+        assertFalse("""<meta name="og:""" in html, "an og:* tag used name instead of property: $html")
+    }
+
+    @Test
+    fun `the page loads exactly one external script, and exactly one other script, the JSON-LD one`() {
+        val html = render(view())
+
+        val scriptSrcCount = Regex("""<script src="/topic-start\.js" defer[^>]*></script>""").findAll(html).count()
+        assertEquals(1, scriptSrcCount, "expected exactly one topic-start.js script tag: $html")
+
+        val totalScriptTags = Regex("<script[ >]").findAll(html).count()
+        assertEquals(2, totalScriptTags, "expected exactly two <script tags in total (JSON-LD and topic-start.js): $html")
+    }
 }
