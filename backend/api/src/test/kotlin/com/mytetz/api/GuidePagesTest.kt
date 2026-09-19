@@ -105,6 +105,26 @@ class GuidePagesTest {
         }
     }
 
+    /**
+     * Task 3.4 of #47's own plan: each page's existing `Organization` node (shipped by #63) becomes
+     * the `author`, referenced by its own `@id` — a standard JSON-LD internal reference, so nothing
+     * is duplicated.
+     */
+    @Test
+    fun `every guide page carries an author node in its JSON-LD`() = testApplication {
+        application { routing { spaRoutes() } }
+
+        assertTrue(GuidePages.paths.isNotEmpty(), "the guide list must not be empty")
+        for (path in GuidePages.paths) {
+            val body = client.get(path).bodyAsText()
+            assertTrue("\"author\"" in body, "$path carries no author node")
+            assertTrue(
+                """"author": { "@id": "https://mytetz.com/#organization" }""" in body,
+                "$path's author node does not reference the existing Organization node: $body",
+            )
+        }
+    }
+
     @Test
     fun `every guide path is lowercase and carries no trailing slash`() {
         assertTrue(GuidePages.paths.isNotEmpty(), "the guide list must not be empty")
