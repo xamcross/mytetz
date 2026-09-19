@@ -21,9 +21,10 @@ const POLL_TIMEOUT_MILLIS = 30000;
  *
  * The page loads the account on every visit. Freemius sends the browser back here after
  * checkout. The return URL carries an `action` query parameter and other values, including the
- * learner's own email. The page reads only `action`, and only as a hint to poll. It takes no
- * status, no date and no allowance from the URL. A fresh `GET /api/account` stays the only
- * trusted source.
+ * learner's own email. The page reads only `action`, and only as a hint to poll. It reads that
+ * hint one time, from the route the page opened with, before it removes the query string. It
+ * takes no status, no date and no allowance from the URL. A fresh `GET /api/account` stays the
+ * only trusted source.
  *
  * When the hint is present, the page reads the account again every 2 seconds. The poll stops on
  * a changed status, on a changed period end, after 30 seconds, or when the page closes. [polling]
@@ -277,15 +278,23 @@ export class AccountPageComponent implements OnInit {
   }
 
   ngOnInit(): void {
-    void this.loadAndMaybePoll();
+    // Read now, before the first `await` below, and keep the answer in [pollHint]. A later read
+    // of `route.snapshot` is not safe: `removeQueryString`'s own `Router.navigate` call reuses
+    // this component once it completes, and the router replaces `ActivatedRoute.snapshot` with
+    // the snapshot of the cleared URL — one with no `action` parameter left to find.
+    const pollHint = this.route.snapshot.queryParamMap.has('action');
+    void this.loadAndMaybePoll(pollHint);
   }
 
   /** Reads the account, clears Freemius's return parameters from the address bar, then starts
-   * the poll if the `action` hint is present and the first read left a signed-in view. */
-  private async loadAndMaybePoll(): Promise<void> {
+   * the poll when [pollHint] is true and the first read left a signed-in view. */
+  private async loadAndMaybePoll(pollHint: boolean): Promise<void> {
     await this.account.load();
     await this.removeQueryString();
-    this.maybeStartPoll();
+    if (!pollHint) return;
+    const view = this.account.view();
+    if (view === null) return;
+    this.startPoll(view.status, view.currentPeriodEndsAtEpochMillis);
   }
 
   /** Drops every query parameter from the current URL, with no new history entry. A no-op when
@@ -293,16 +302,6 @@ export class AccountPageComponent implements OnInit {
   private async removeQueryString(): Promise<void> {
     if (Object.keys(this.route.snapshot.queryParams).length === 0) return;
     await this.router.navigate([], { queryParams: {}, replaceUrl: true });
-  }
-
-  /** Starts the poll when Freemius's `action` hint is present and the learner is signed in. The
-   * hint is read once, from the route the page opened with — see the class doc comment on why
-   * the page trusts nothing else in the URL. */
-  private maybeStartPoll(): void {
-    if (!this.route.snapshot.queryParamMap.has('action')) return;
-    const view = this.account.view();
-    if (view === null) return;
-    this.startPoll(view.status, view.currentPeriodEndsAtEpochMillis);
   }
 
   /** Reads the account again every [POLL_INTERVAL_MILLIS], until [stopPoll] runs — on a changed
