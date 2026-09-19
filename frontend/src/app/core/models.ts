@@ -23,6 +23,31 @@ export interface NodeView {
  * ever reads the field and never derives it. */
 export type SessionStatus = 'ACTIVE' | 'COMPLETED';
 
+/** One diagram. `kind` names the diagram format. `MERMAID` is reserved for a later slice; today
+ * the server only ever sends `SVG`. `source` is the sanitised SVG markup itself. */
+export interface DiagramMedia {
+  kind: 'SVG' | 'MERMAID';
+  source: string;
+}
+
+/** One licensed image from Wikimedia Commons. `attributionHtml` is a small HTML string the
+ * server built itself from Commons metadata — never a pass-through of a Commons editor's own
+ * markup. The UI must always show it next to the image; this is a licence obligation. */
+export interface ImageMedia {
+  imageUrl: string;
+  title: string;
+  license: string;
+  attributionHtml: string;
+  commonsPageUrl: string;
+}
+
+/** The media a `VISUALIZE` explanation carries. `diagram` is always present. `image` is `null`
+ * when Wikimedia Commons found no licensed image for the span; the diagram still renders alone. */
+export interface Media {
+  diagram: DiagramMedia;
+  image: ImageMedia | null;
+}
+
 export interface SessionView {
   sessionId: string;
   topicSlug: string;
@@ -31,6 +56,11 @@ export interface SessionView {
   nodes: NodeView[];
   status: SessionStatus;
   explanations: Record<string, string>;
+  /** Sparse: an entry exists only for a content key whose explanation is a `VISUALIZE` answer.
+   * Optional, and not just empty, because a session with no `VISUALIZE` node may omit the field
+   * from the wire entirely — the same "a client that never asks for VISUALIZE pays nothing for the
+   * new field" rule the field itself exists to honour. */
+  media?: Record<string, Media>;
 }
 
 export interface SpanPayload {

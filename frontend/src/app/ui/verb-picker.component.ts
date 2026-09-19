@@ -32,17 +32,17 @@ export type PickerDismissal = 'escape' | 'outside-press';
  * string and cannot read a TypeScript constant, so the two are separate literals. Change one and
  * change the other.
  */
-export const PICKER_HEIGHT = 240;
+export const PICKER_HEIGHT = 264;
 
-/** The four verbs a highlight can ask for.
+/** The five verbs a highlight can ask for.
  *
- * `SEED` is the session's own root and belongs to no highlight. `VISUALIZE` is slice 4: the
- * design draws a fifth row for it, and that row arrives with the feature. */
+ * `SEED` is the session's own root and belongs to no highlight. */
 const VERBS: ReadonlyArray<{ verb: Verb; name: string; caption: string }> = [
   { verb: 'EXPLAIN', name: 'Explain it', caption: 'Plain words, no jargon' },
   { verb: 'DIG_DEEPER', name: 'Dig deeper', caption: 'One level more technical' },
   { verb: 'BROADER_PICTURE', name: 'Broader picture', caption: 'Where this sits in the whole' },
   { verb: 'SIDE_VIEW', name: 'Side view', caption: 'The same idea from elsewhere' },
+  { verb: 'VISUALIZE', name: 'Show me a diagram', caption: 'A sketch instead of a paragraph' },
 ];
 
 /**
@@ -108,7 +108,7 @@ const VERBS: ReadonlyArray<{ verb: Verb; name: string; caption: string }> = [
         left: var(--picker-left, 0);
         z-index: 20;
         width: min(520px, 100%);
-        max-height: 240px;
+        max-height: 264px;
         overflow: auto;
         padding: 16px;
         display: flex;

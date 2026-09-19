@@ -46,12 +46,12 @@ describe('VerbPickerComponent', () => {
     fixture.detectChanges();
   };
 
-  it('offers the four text verbs and no other', () => {
-    // SEED is the session's own root and VISUALIZE is slice 4. Neither belongs to a highlight.
+  it('offers the five verbs and no other', () => {
+    // SEED is the session's own root and belongs to no highlight.
     const verbs = Array.from(fixture.nativeElement.querySelectorAll('button[data-verb]')).map((b) =>
       (b as HTMLElement).getAttribute('data-verb'),
     );
-    expect(verbs).toEqual(['EXPLAIN', 'DIG_DEEPER', 'BROADER_PICTURE', 'SIDE_VIEW']);
+    expect(verbs).toEqual(['EXPLAIN', 'DIG_DEEPER', 'BROADER_PICTURE', 'SIDE_VIEW', 'VISUALIZE']);
   });
 
   it('names each verb briefly, and describes it separately', () => {
@@ -113,7 +113,8 @@ describe('VerbPickerComponent', () => {
   });
 
   it('wraps Tab from the last verb back to the first', () => {
-    button('SIDE_VIEW').focus();
+    // VISUALIZE is the fifth row, added in slice 4, and is now the last button.
+    button('VISUALIZE').focus();
     pressTab(false);
     expect(document.activeElement).toBe(button('EXPLAIN'));
   });
@@ -123,7 +124,7 @@ describe('VerbPickerComponent', () => {
     // the modifiers that are held, so `keydown.tab` alone never fires while Shift is down.
     button('EXPLAIN').focus();
     pressTab(true);
-    expect(document.activeElement).toBe(button('SIDE_VIEW'));
+    expect(document.activeElement).toBe(button('VISUALIZE'));
   });
 
   it('leaves Tab alone away from the two ends', () => {

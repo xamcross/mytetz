@@ -7,7 +7,7 @@ const VERB_LABELS: Readonly<Record<string, string>> = {
   DIG_DEEPER: 'Deeper',
   BROADER_PICTURE: 'Broader',
   SIDE_VIEW: 'Side view',
-  VISUALIZE: 'Visual',
+  VISUALIZE: 'Diagram',
 };
 
 /**

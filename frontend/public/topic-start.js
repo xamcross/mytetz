@@ -60,6 +60,17 @@
     button.textContent = isBusy ? 'Starting…' : idleLabel;
   }
 
+  // A browser can keep this page in its back/forward cache, with its script state. A learner who
+  // goes to the reader and then presses Back gets the page as it was at the moment of the
+  // navigation: a disabled button with the label "Starting…". The `pageshow` event with
+  // `persisted` set to true marks that case. The button then goes back to its idle state. No test
+  // covers this: an automated browser does not use the back/forward cache.
+  window.addEventListener('pageshow', function (event) {
+    if (event.persisted) {
+      setBusy(false);
+    }
+  });
+
   button.addEventListener('click', function () {
     // A second click while the first request is still in flight sends no second request.
     if (busy) {

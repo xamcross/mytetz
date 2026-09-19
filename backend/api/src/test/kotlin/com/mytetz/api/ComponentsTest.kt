@@ -19,8 +19,11 @@ import com.mytetz.persistence.MongoConfig
 import com.mytetz.session.LearningSession
 import com.mytetz.session.SessionNode
 import com.mytetz.session.SessionRepository
+import com.mytetz.session.SpanSelection
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
+import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.respond
 import io.ktor.client.plugins.cookies.HttpCookies
 import io.ktor.client.request.get
 import io.ktor.client.request.head
@@ -28,14 +31,19 @@ import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
+import io.ktor.http.headersOf
 import io.ktor.server.testing.testApplication
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.bson.Document
 import org.slf4j.LoggerFactory
 import java.util.UUID
@@ -452,6 +460,207 @@ class ComponentsTest {
         awaitReady(client)
 
         assertEquals(HttpStatusCode.NotFound, client.get("/topics/no-such-topic").status)
+    }
+
+    // ------------------------------------------------------------------ the Commons images switch
+
+    /** The JSON body `structured()` answers for a VISUALIZE call, shared by every test below. */
+    private val visualizeStructuredJson = """
+        {"explanation":"A short valid sentence about the span, long enough to pass.",
+         "svg":"<svg><circle cx=\"1\" cy=\"1\" r=\"1\"/></svg>"}
+    """.trimIndent()
+
+    private fun commonsSuccessBody(imageUrl: String) = """
+        {"query":{"pages":[{"title":"File:Wired.jpg","imageinfo":[
+            {"thumburl":"$imageUrl",
+             "descriptionurl":"https://commons.wikimedia.org/wiki/File:Wired.jpg",
+             "mime":"image/jpeg",
+             "extmetadata":{"LicenseShortName":{"value":"CC0"}}}
+        ]}]}}
+    """.trimIndent()
+
+    @Test
+    fun `Commons images are off unless the flag says otherwise`() {
+        assertFalse(Components.resolveCommonsImagesOn(null))
+        assertFalse(Components.resolveCommonsImagesOn(""))
+        assertFalse(Components.resolveCommonsImagesOn("false"))
+        assertFalse(Components.resolveCommonsImagesOn("yes"), "only the word true turns it on")
+        assertFalse(Components.resolveCommonsImagesOn("1"))
+    }
+
+    /**
+     * Copies `resolveMigrateOnBoot`'s own idiom exactly: `raw?.trim()?.equals("true", ignoreCase =
+     * true) == true`. That idiom is case-insensitive and trims whitespace, on the model's own pinned
+     * tests (`the migration is on for the exact word true`, `ReconciliationTest`'s matching case) —
+     * so `" TRUE"` (a leading space, upper case) turns this switch on too, for the same reason a fly
+     * secret's stray newline must not turn reconciliation off by accident. This is not the same rule
+     * as "byte-exact `true`"; it is the rule this codebase already has, copied without narrowing it.
+     */
+    @Test
+    fun `Commons images turn on for the word true, case-insensitively and trimmed`() {
+        assertTrue(Components.resolveCommonsImagesOn("true"))
+        assertTrue(Components.resolveCommonsImagesOn("TRUE"))
+        assertTrue(Components.resolveCommonsImagesOn(" TRUE"), "the same trim-and-fold rule as resolveMigrateOnBoot")
+        assertTrue(Components.resolveCommonsImagesOn("  true \n"), "a fly secret carries a trailing newline")
+    }
+
+    /**
+     * The default state. No flag is passed here, so this pins that a deployment which never sets
+     * `MYTETZ_COMMONS_IMAGES` sends nothing to Wikimedia — not a smaller request, not a request with
+     * an empty answer, no request at all — and still serves a diagram-only `VISUALIZE` document.
+     *
+     * [MockEngine]'s own handler counts every call it receives, so "zero requests" is a fact about
+     * the engine, not an inference from the client's own null answer — a client that called the
+     * engine and merely discarded a real response would look identical to one that never called it,
+     * to any assertion that only reads [ImageMedia]`?.imageUrl`.
+     */
+    @Test
+    fun `with the switch off, a VISUALIZE generation sends no request to Wikimedia, and image stays null`() = runTest {
+        var requests = 0
+        val engine = MockEngine { request ->
+            requests++
+            respond(
+                commonsSuccessBody("https://upload.wikimedia.org/thumb/should-never-be-fetched.jpg"),
+                HttpStatusCode.OK,
+                headersOf(HttpHeaders.ContentType, "application/json"),
+            )
+        }
+        val components = Components(
+            mongo = Mongo(MongoConfig(uri = TestFixtures.connectionString, databaseName = "test_api_commons_switch_off")),
+            cookies = TestFixtures.cookieConfig,
+            llmFactory = { FakeLlmClient().apply { nextStructuredJson = visualizeStructuredJson } },
+            commonsClientFactory = { CommonsClient(HttpClient(engine)) },
+            // commonsImagesOn defaults to false: MYTETZ_COMMONS_IMAGES is not passed here at all.
+        )
+        components.catalog.seedFromResource()
+
+        val created = components.sessions.create("anon:commons-switch-off-test", "quantum-physics", anonymous = true) {}
+        val plan = components.sessions.prepare(
+            sessionId = created.session.id,
+            parentNodeId = created.session.rootNodeId,
+            selection = SpanSelection("A", 0, 1),
+            verb = Verb.VISUALIZE,
+            requestedVariant = null,
+        )
+        components.sessions.explain(plan).toList()
+
+        assertEquals(0, requests, "the switch is off; no request may ever reach the Commons engine")
+        val explanations = ExplanationRepository(components.mongo.database)
+        val stored = explanations.findByKey(plan.contentKey)
+        assertNotNull(stored?.media?.diagram, "the diagram must still persist with the switch off")
+        assertNull(stored?.media?.image, "no lookup ran, so image must stay null")
+    }
+
+    /**
+     * The one test in this file for the Commons wiring itself, with the switch explicitly on.
+     * [CommonsClientTest] already proves the client's own request and its own acceptance rules;
+     * this proves only the seam — `commonsClientFactory`'s default builds a real client, and
+     * `graph`'s own `commonsLookup` lambda really calls it — the same division of labour the
+     * Freemius tests already draw between [CommonsClientTest] and `ComponentsTest`'s own
+     * reconciliation tests.
+     *
+     * Drives `components.sessions` directly, service to service, not through the HTTP routes:
+     * nothing about this test is about routing, and the test below it,
+     * `with the switch on, the request reaches Wikimedia and the image reaches SessionView#media`,
+     * covers the wire shape. Reads the persisted [com.mytetz.graph.Explanation] back through a
+     * second [ExplanationRepository] built on the same database — the same reach-past-the-service
+     * pattern the eviction tests above already use.
+     */
+    @Test
+    fun `with the switch on, Components wires the real Commons client into ExplanationGraph through the port`() = runTest {
+        val wiredImageUrl = "https://upload.wikimedia.org/thumb/wired-example.jpg"
+        val engine = MockEngine {
+            respond(
+                commonsSuccessBody(wiredImageUrl),
+                HttpStatusCode.OK,
+                headersOf(HttpHeaders.ContentType, "application/json"),
+            )
+        }
+        val components = Components(
+            mongo = Mongo(MongoConfig(uri = TestFixtures.connectionString, databaseName = "test_api_commons_wiring")),
+            cookies = TestFixtures.cookieConfig,
+            llmFactory = { FakeLlmClient().apply { nextStructuredJson = visualizeStructuredJson } },
+            commonsClientFactory = { CommonsClient(HttpClient(engine)) },
+            commonsImagesOn = true,
+        )
+        components.catalog.seedFromResource()
+
+        val created = components.sessions.create("anon:commons-wiring-test", "quantum-physics", anonymous = true) {}
+        val plan = components.sessions.prepare(
+            sessionId = created.session.id,
+            parentNodeId = created.session.rootNodeId,
+            selection = SpanSelection("A", 0, 1),
+            verb = Verb.VISUALIZE,
+            requestedVariant = null,
+        )
+        components.sessions.explain(plan).toList()
+
+        val explanations = ExplanationRepository(components.mongo.database)
+        val stored = explanations.findByKey(plan.contentKey)
+        assertEquals(wiredImageUrl, stored?.media?.image?.imageUrl, "the real CommonsClient never reached ExplanationGraph")
+    }
+
+    /**
+     * With the switch on, drives a real `VISUALIZE` explanation through the real HTTP module — sign
+     * in, create a session, explain, then `GET /api/sessions/{id}` — and reads the image straight
+     * off the raw JSON, the same [kotlinx.serialization.json.JsonObject] technique
+     * `SessionRoutesTest`'s own Task 9 test uses. This is the one test in this file that proves the
+     * whole chain end to end: the switch, the real client, the port, and the wire shape together.
+     */
+    @Test
+    fun `with the switch on, the request reaches Wikimedia and the image reaches SessionView#media`() = runTest {
+        val wiredImageUrl = "https://upload.wikimedia.org/thumb/wired-http-example.jpg"
+        val engine = MockEngine {
+            respond(
+                commonsSuccessBody(wiredImageUrl),
+                HttpStatusCode.OK,
+                headersOf(HttpHeaders.ContentType, "application/json"),
+            )
+        }
+        lateinit var mailSender: CapturingMailSender
+        val components = Components(
+            mongo = Mongo(MongoConfig(uri = TestFixtures.connectionString, databaseName = "test_api_commons_wire_shape")),
+            cookies = TestFixtures.cookieConfig,
+            llmFactory = { FakeLlmClient().apply { nextStructuredJson = visualizeStructuredJson } },
+            mailSenderFactory = { CapturingMailSender().also { mailSender = it } },
+            publicBaseUrl = { "http://localhost" },
+            commonsClientFactory = { CommonsClient(HttpClient(engine)) },
+            commonsImagesOn = true,
+        )
+        testApplication {
+            application { module(components) }
+            awaitReady(client)
+
+            val learner = createClient { install(HttpCookies); followRedirects = false }
+            val email = "learner-${UUID.randomUUID()}@example.com"
+            learner.post("/api/auth/magic-link") {
+                contentType(ContentType.Application.Json)
+                setBody("""{"email":"$email"}""")
+            }
+            learner.get("/api/auth/magic-link/${mailSender.tokenFor(email)}")
+
+            val created = learner.post("/api/sessions") {
+                contentType(ContentType.Application.Json)
+                setBody("""{"topicSlug":"quantum-physics"}""")
+            }
+            val sessionId = Regex("\"sessionId\":\"([^\"]+)\"").find(created.bodyAsText())!!.groupValues[1]
+            val rootNodeId = Regex("\"rootNodeId\":\"([^\"]+)\"").find(created.bodyAsText())!!.groupValues[1]
+
+            val explainResponse = learner.post("/api/sessions/$sessionId/explain") {
+                contentType(ContentType.Application.Json)
+                setBody("""{"parentNodeId":"$rootNodeId","span":{"text":"A","start":0,"end":1},"verb":"VISUALIZE"}""")
+            }
+            assertEquals(HttpStatusCode.OK, explainResponse.status, "the explain call failed: ${explainResponse.bodyAsText()}")
+
+            val sessionText = learner.get("/api/sessions/$sessionId").bodyAsText()
+            val media = Json.parseToJsonElement(sessionText).jsonObject.getValue("media").jsonObject
+            val imageEntry = media.values.single().jsonObject.getValue("image").jsonObject
+            assertEquals(
+                wiredImageUrl,
+                imageEntry.getValue("imageUrl").jsonPrimitive.content,
+                "the wired image never reached SessionView#media on the wire: $sessionText",
+            )
+        }
     }
 
     @Test

@@ -11,13 +11,14 @@ import {
   signal,
   viewChild,
 } from '@angular/core';
-import { SpanPayload, Verb } from '../core/models';
+import { Media, SpanPayload, Verb } from '../core/models';
 import {
   PICKER_HEIGHT,
   PickerAnchor,
   PickerDismissal,
   VerbPickerComponent,
 } from '../ui/verb-picker.component';
+import { MediaRendererComponent } from './media-renderer.component';
 import { rootTextMatchesBody, selectionToSpan } from './selection';
 
 /**
@@ -66,7 +67,7 @@ const READY_STATUS_MILLIS = 4000;
  */
 @Component({
   selector: 'app-focus-card',
-  imports: [VerbPickerComponent],
+  imports: [VerbPickerComponent, MediaRendererComponent],
   template: `
     <article #cardEl class="focus mt-card mt-card--raised">
       <div class="focus__head">
@@ -114,6 +115,10 @@ const READY_STATUS_MILLIS = 4000;
         the DOM, so the empty element has to be there first.
       -->
       <p class="visually-hidden focus__stream-status" role="status">{{ streamStatus() }}</p>
+
+      @if (media(); as m) {
+        <app-media-renderer [media]="m" />
+      }
 
       <p class="focus__hint" [class.focus__hint--warning]="!bodyMatches()">{{ hint() }}</p>
 
@@ -280,6 +285,9 @@ export class FocusCardComponent {
   readonly body = input.required<string>();
   readonly streamingText = input.required<string>();
   readonly isStreaming = input.required<boolean>();
+  /** The diagram and image for the node in focus, or `null` when it carries none — every verb but
+   * `VISUALIZE`, and a `VISUALIZE` node before the page supplies the field. */
+  readonly media = input<Media | null>(null);
   /** True when the stream that just ended did not succeed. The reader page binds this from
    * `SessionStore.error() !== null`, read at the same point `isStreaming()` turns false — see the
    * comment in the `finally` block of `SessionStore.explain` for the write order that makes this

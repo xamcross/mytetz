@@ -19,6 +19,8 @@ import com.mytetz.billing.Reconciliation
 import com.mytetz.catalog.CatalogService
 import com.mytetz.catalog.TopicRepository
 import com.mytetz.catalog.TopicRequestRepository
+import com.mytetz.graph.Ancestor
+import com.mytetz.graph.CommonsLookup
 import com.mytetz.graph.Explanation
 import com.mytetz.graph.ExplanationGraph
 import com.mytetz.graph.ExplanationRepository
@@ -37,6 +39,7 @@ import com.mytetz.session.SessionRepository
 import com.mytetz.session.SessionService
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
+import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.defaultRequest
 import io.ktor.client.request.url
 import org.slf4j.LoggerFactory
@@ -45,6 +48,23 @@ import kotlin.coroutines.cancellation.CancellationException
 private val log = LoggerFactory.getLogger("com.mytetz.api.Components")
 
 private const val DAY_MILLIS = 86_400_000L
+
+/** Task 6's own rule: "about 3 seconds in total". Applied to both the connect and the request
+ * timeout on the [HttpClient] [Components] builds for [CommonsClient] — see that class's own KDoc,
+ * "Timeouts", for why the timeout lives here and not inside [CommonsClient] itself. */
+private const val COMMONS_TIMEOUT_MILLIS = 3_000L
+
+/** `ExplanationGraph`'s own no-op default for [CommonsLookup], named here so [Components] can hand
+ * it back explicitly when [Components.commonsImagesOn] is false, rather than leaving a reader to
+ * check `ExplanationGraph`'s constructor to know what a switched-off deployment does. */
+private val NO_COMMONS_LOOKUP: CommonsLookup = { _, _ -> null }
+
+/** Adapts [client] to the [CommonsLookup] port with a lambda, on the model of
+ * `Reconciliation.reconcile`'s own `fetchState` parameter. A named top-level function, not an
+ * inline lambda, because the Kotlin compiler cannot always infer a suspend function type across an
+ * `if`/`?:` branch with no other type hint — see the call site in [Components.commonsLookup]. */
+private fun realCommonsLookup(client: CommonsClient): CommonsLookup =
+    { span, ancestors -> client.findImage(span, ancestors) }
 
 /**
  * The ERROR token a failed eviction run is logged under. [Components.bootstrap]'s own guard
@@ -113,6 +133,12 @@ open class Components(
     googleOAuthFactory: () -> GoogleOAuth = { defaultGoogleOAuth(publicBaseUrl) },
     val migrateOnBoot: Boolean = resolveMigrateOnBoot(System.getenv(MIGRATE_ON_BOOT_ENV)),
     val reconcileOnBoot: Boolean = Reconciliation.resolveReconcileOnBoot(System.getenv(Reconciliation.RECONCILE_ON_BOOT_ENV)),
+    // Off by default. Commons has no safe-search filter this project could confirm, and a search
+    // over its whole File namespace can return an image that does not belong on a page for a
+    // learner. An operator turns this on only after reading real search results for real phrases —
+    // see `CommonsClient`'s own KDoc and `docs/deploy.md`'s Commons section. [commonsClientFactory]
+    // is never even called while this is false — see [commonsClient] below.
+    val commonsImagesOn: Boolean = resolveCommonsImagesOn(System.getenv(COMMONS_IMAGES_ENV)),
     // A factory, for the same reason `mailSenderFactory` and `googleOAuthFactory` are: the
     // production default throws when a credential is absent, and it must not do that until
     // [reconcile] actually needs it. A test overrides this to simulate a missing credential
@@ -127,6 +153,22 @@ open class Components(
     // supported deployment state, not a missing credential. So [turnstile] below is built eagerly,
     // the same as [account].
     turnstileFactory: () -> Turnstile = { Turnstile(HttpClient(CIO), TurnstileConfig().secretKey) },
+    // A factory, on the same model as [turnstileFactory]: [CommonsClient]'s own construction never
+    // throws either. Called at most once, eagerly and not behind a `by lazy`, and only when
+    // [commonsImagesOn] is true — see [commonsClient] below. The three-second connect and request
+    // timeouts live here, on the real, production [HttpClient], and nowhere inside [CommonsClient]
+    // itself — see that class's own KDoc, "Timeouts", for why: its tests then run against a plain,
+    // un-timed [HttpClient] and control the timeout only where one specific test needs it.
+    commonsClientFactory: () -> CommonsClient = {
+        CommonsClient(
+            HttpClient(CIO) {
+                install(HttpTimeout) {
+                    connectTimeoutMillis = COMMONS_TIMEOUT_MILLIS
+                    requestTimeoutMillis = COMMONS_TIMEOUT_MILLIS
+                }
+            },
+        )
+    },
 ) {
 
     private val topics = TopicRepository(mongo.database)
@@ -162,6 +204,23 @@ open class Components(
 
     /** Cheap to build and needs no credential, so — like [account] and unlike [magicLink] — this is not lazy. */
     val turnstile: Turnstile = turnstileFactory()
+
+    /**
+     * Null while [commonsImagesOn] is false. [commonsClientFactory] is then never called at all, so
+     * this deployment builds no `HttpClient` for Commons and opens no connection to it — not merely
+     * "builds one and never uses it". Cheap to build and needs no credential when it does build, so
+     * — like [turnstile] — this is not lazy on its own; [commonsImagesOn] is the only gate here. See
+     * [commonsClientFactory]'s own comment for where its timeouts are set.
+     */
+    private val commonsClient: CommonsClient? = if (commonsImagesOn) commonsClientFactory() else null
+
+    /**
+     * The real [com.mytetz.graph.CommonsLookup] the switch controls. With [commonsImagesOn] false,
+     * this is exactly `ExplanationGraph`'s own no-op default, `{ _, _ -> null }` — spelled out here
+     * so a reader does not have to check that default to know what this deployment does today. A
+     * `VISUALIZE` document then always carries the diagram alone.
+     */
+    private val commonsLookup: CommonsLookup = commonsClient?.let(::realCommonsLookup) ?: NO_COMMONS_LOOKUP
 
     /**
      * The public Cloudflare Turnstile site key this deployment holds, or null.
@@ -249,11 +308,11 @@ open class Components(
             llm = llm,
             validator = ExplanationValidator(),
             config = GraphConfig(),
-            // The real Wikimedia Commons client comes with Task 8. Until then, VISUALIZE serves
-            // the diagram only — the same default ExplanationGraph's own constructor already
-            // gives, spelled out here so a reader does not have to check that default to know
-            // what this deployment does today.
-            commonsLookup = { _, _ -> null },
+            // [commonsLookup] is the port [commonsClient] is adapted through, on the model of
+            // `Reconciliation.reconcile(billingRepository, limit = RECONCILE_LIMIT) { subscription
+            // -> client.fetchState(subscription) }` below: `:backend:graph` calls a lambda, never
+            // `CommonsClient` itself, so it never depends on Ktor.
+            commonsLookup = commonsLookup,
         )
     }
 
@@ -619,6 +678,7 @@ open class Components(
         const val PUBLIC_BASE_URL_ENV: String = "MYTETZ_PUBLIC_BASE_URL"
         const val GOOGLE_CLIENT_ID_ENV: String = "GOOGLE_CLIENT_ID"
         const val GOOGLE_CLIENT_SECRET_ENV: String = "GOOGLE_CLIENT_SECRET"
+        const val COMMONS_IMAGES_ENV: String = "MYTETZ_COMMONS_IMAGES"
 
         /**
          * Only the exact word `true` turns the migration on.
@@ -629,6 +689,20 @@ open class Components(
          * calls a metered API. It must never start by accident.
          */
         internal fun resolveMigrateOnBoot(raw: String?): Boolean =
+            raw?.trim()?.equals("true", ignoreCase = true) == true
+
+        /**
+         * Only the word `true` turns the Commons image lookup on, case-insensitively and trimmed —
+         * the exact idiom [resolveMigrateOnBoot] and `Reconciliation.resolveReconcileOnBoot` already
+         * use, copied without narrowing it: `" TRUE"` and `"  true \n"` turn it on, the same as they
+         * turn the migration on, because a fly secret can carry stray case or a stray newline and
+         * that must not silently keep a feature off.
+         *
+         * An unrecognised value keeps the lookup off. Commons has no safe-search filter this project
+         * confirmed exists, so a wrong guess here must fail toward "no outside image", never toward
+         * "send an unreviewed search to a third party".
+         */
+        internal fun resolveCommonsImagesOn(raw: String?): Boolean =
             raw?.trim()?.equals("true", ignoreCase = true) == true
 
         /**

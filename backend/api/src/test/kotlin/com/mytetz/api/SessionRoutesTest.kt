@@ -45,6 +45,9 @@ import io.ktor.server.testing.testApplication
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.bson.Document
 import org.slf4j.LoggerFactory
 import java.util.UUID
@@ -914,12 +917,12 @@ class SessionRoutesTest {
     }
 
     /** The content key this span will resolve to. `prepare` costs no model call and the plan is dropped. */
-    private suspend fun Scope.keyFor(sessionId: String, span: Span): String =
+    private suspend fun Scope.keyFor(sessionId: String, span: Span, verb: Verb = Verb.EXPLAIN): String =
         stack.sessions.prepare(
             sessionId = sessionId,
             parentNodeId = span.parentNodeId,
             selection = SpanSelection(span.text, span.start, span.end),
-            verb = Verb.EXPLAIN,
+            verb = verb,
             requestedVariant = null,
         ).contentKey
 
@@ -1491,6 +1494,65 @@ class SessionRoutesTest {
         val superseded = eventFor(GraphChunk.Superseded("the authoritative text"))
         assertEquals("superseded", superseded?.event)
         assertTrue(superseded?.data!!.contains("the authoritative text"))
+    }
+
+    /**
+     * The end-to-end proof for Decision 4 (widened after review, see the coordinator's own
+     * Decision B): a `VISUALIZE` explanation must reach the wire on `SessionView.media`, keyed by
+     * its content key, with a real, sanitised SVG diagram and an explicit `null` image — this test
+     * stack wires no Commons client, so every `VISUALIZE` node in it degrades to the diagram alone.
+     *
+     * Asserts on a [kotlinx.serialization.json.JsonObject] parsed from the raw response text, never
+     * on a value decoded into the typed [SessionView] or [MediaView] classes. `media` carries no
+     * default, the same rule `AuthRoutesTest`'s own `"the configured site key is reported, and a
+     * missing one is reported as null and not omitted"` states for `AuthConfigView.turnstileSiteKey`
+     * — a decode alone cannot catch a route that quietly stopped sending the key, because decoding
+     * into a class with no default either finds the key or fails loudly; only a literal check on the
+     * raw text tells "sent, and empty" apart from "sent, with real content".
+     */
+    @Test
+    fun `a VISUALIZE explanation carries a real diagram and a null image on SessionView#media`() = app {
+        val created = createSession()
+        val span = created.spanOn("Quantum mechanics")
+        stack.llm.nextStructuredJson = """
+            {"explanation":"A short valid sentence about the span, long enough to pass the check.",
+             "svg":"<svg><circle cx=\"1\" cy=\"1\" r=\"1\"/></svg>"}
+        """.trimIndent()
+        val contentKey = keyFor(created.sessionId, span, verb = Verb.VISUALIZE)
+
+        val explainResponse = explain(created.sessionId, span, verb = Verb.VISUALIZE)
+        assertEquals(HttpStatusCode.OK, explainResponse.status)
+        assertTrue(
+            explainResponse.bodyAsText().contains("event: done"),
+            "the VISUALIZE generation did not complete: ${explainResponse.bodyAsText()}",
+        )
+
+        val sessionText = client.get("/api/sessions/${created.sessionId}").bodyAsText()
+        val media = Json.parseToJsonElement(sessionText).jsonObject.getValue("media").jsonObject
+
+        assertTrue(media.containsKey(contentKey), "no media entry for the VISUALIZE content key: $sessionText")
+        val mediaEntry = media.getValue(contentKey).jsonObject
+        val diagramSource = mediaEntry.getValue("diagram").jsonObject.getValue("source").jsonPrimitive.content
+        assertTrue(
+            diagramSource.contains("""xmlns="http://www.w3.org/2000/svg""""),
+            "the sanitiser must set the SVG namespace on the root element: $diagramSource",
+        )
+        assertEquals(
+            JsonNull,
+            mediaEntry.getValue("image"),
+            "no Commons client is wired in this test stack, so image must be an explicit null, not absent",
+        )
+    }
+
+    @Test
+    fun `a session with no VISUALIZE node still carries an explicit, empty media object`() = app {
+        val created = createSession()
+
+        val sessionText = client.get("/api/sessions/${created.sessionId}").bodyAsText()
+
+        assertTrue(sessionText.contains("\"media\":{}"), "media must be sent as {}, never omitted: $sessionText")
+        val media = Json.parseToJsonElement(sessionText).jsonObject.getValue("media").jsonObject
+        assertEquals(0, media.size)
     }
 
     @Test

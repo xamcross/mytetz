@@ -99,6 +99,11 @@ fun Application.module(components: Components = Components()) {
         resolveModelForLogging(System.getenv(AnthropicLlmClient.MODEL_FAMILY_ENV)),
     )
 
+    // Whether a VISUALIZE answer may ask Wikimedia Commons for an image, said once, at startup. Off
+    // is the default: Commons has no safe-search filter this project confirmed, so an operator must
+    // turn this on with `MYTETZ_COMMONS_IMAGES=true`, on purpose, after reading real search results.
+    log.info("Commons images are {}", if (components.commonsImagesOn) "on" else "off")
+
     val ready = bootstrap(components)
 
     routing {
