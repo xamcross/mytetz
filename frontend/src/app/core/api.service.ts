@@ -57,6 +57,16 @@ export class ApiService {
   }
 
   /**
+   * Marks a session complete, by the learner's own choice.
+   *
+   * The route answers `204` with no body. `SessionStore.complete` re-reads the session, or updates
+   * it locally, rather than trusting a body this call never receives.
+   */
+  completeSession(id: string): Promise<void> {
+    return firstValueFrom(this.http.post<void>(`/api/sessions/${id}/complete`, null));
+  }
+
+  /**
    * The signed-in learner's account. Answers `401 SIGN_IN_REQUIRED` when the browser holds no
    * session cookie, or an expired one — an ordinary outcome for a caller to expect, not only a
    * server fault. See `AccountStore.load`, which is where that distinction is made.

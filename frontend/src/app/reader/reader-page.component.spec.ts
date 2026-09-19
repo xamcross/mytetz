@@ -35,6 +35,7 @@ const view: SessionView = {
       depth: 1,
     },
   ],
+  status: 'ACTIVE',
   explanations: { k0: 'Quantum mechanics is odd.', k1: 'The pillars of modern physics.' },
 };
 
@@ -127,8 +128,9 @@ describe('ReaderPageComponent', () => {
     }
   }
 
-  /** Highlights `pillars` in the focus card and presses a verb. */
-  function highlightAndExplain(): void {
+  /** Highlights `pillars` in the focus card. Does not assume a picker opens for it — a read-only
+   * session's test needs the highlight without that assumption. */
+  function highlight(): void {
     const bodyEl = harness.routeNativeElement?.querySelector('.focus__body') as HTMLElement;
     const range = document.createRange();
     range.setStart(bodyEl.firstChild as Text, 4);
@@ -138,11 +140,16 @@ describe('ReaderPageComponent', () => {
     selection?.addRange(range);
     bodyEl.dispatchEvent(new Event('mouseup'));
     harness.detectChanges();
+  }
+
+  /** Highlights `pillars` in the focus card and presses a verb. */
+  function highlightAndExplain(): void {
+    highlight();
     const explain =
       harness.routeNativeElement?.querySelector<HTMLButtonElement>('[data-verb="EXPLAIN"]');
     if (!explain) throw new Error('the verb picker did not open for the highlighted phrase');
     explain.click();
-    selection?.removeAllRanges();
+    window.getSelection()?.removeAllRanges();
   }
 
   const text = (): string => harness.routeNativeElement?.textContent ?? '';
@@ -614,5 +621,63 @@ describe('ReaderPageComponent', () => {
 
     expect(harness.routeNativeElement?.querySelector('app-sign-in-panel')).toBeTruthy();
     expect(harness.routeNativeElement?.querySelector('app-wall-panel')).toBeNull();
+  });
+
+  // ------------------------------------------------------------------ completion
+
+  it('a completed session shows no verb picker after a highlight, and offers to start a new one', async () => {
+    await open({ ...view, status: 'COMPLETED' });
+
+    highlight();
+
+    expect(
+      harness.routeNativeElement?.querySelector('[data-verb="EXPLAIN"]'),
+      'the verb picker opened on a completed session',
+    ).toBeNull();
+    expect(harness.routeNativeElement?.querySelector('[data-testid="new-session"]')).toBeTruthy();
+    expect(
+      harness.routeNativeElement?.querySelector('[data-testid="complete-session"]'),
+    ).toBeNull();
+  });
+
+  it('an active session offers to complete it, and completing switches to the read-only control', async () => {
+    const complete = vi
+      .spyOn(TestBed.inject(ApiService), 'completeSession')
+      .mockResolvedValue(undefined);
+    await open();
+
+    expect(harness.routeNativeElement?.querySelector('[data-testid="new-session"]')).toBeNull();
+    harness.routeNativeElement
+      ?.querySelector<HTMLButtonElement>('[data-testid="complete-session"]')
+      ?.click();
+    await harness.fixture.whenStable();
+    harness.detectChanges();
+
+    expect(complete).toHaveBeenCalledWith('s1');
+    expect(
+      harness.routeNativeElement?.querySelector('[data-testid="complete-session"]'),
+    ).toBeNull();
+    expect(harness.routeNativeElement?.querySelector('[data-testid="new-session"]')).toBeTruthy();
+  });
+
+  it('starting a new session on the same topic creates one and navigates to it', async () => {
+    const createSession = vi.spyOn(TestBed.inject(ApiService), 'createSession').mockResolvedValue({
+      ...view,
+      sessionId: 's9',
+    });
+    await open({ ...view, status: 'COMPLETED' });
+
+    harness.routeNativeElement
+      ?.querySelector<HTMLButtonElement>('[data-testid="new-session"]')
+      ?.click();
+    await harness.fixture.whenStable();
+
+    expect(createSession).toHaveBeenCalledWith('quantum-physics');
+    // The route is reused — only the `sessionId` param changed — so the reused component's own
+    // effect reloads the session, which is the observable proof that the navigation landed on `s9`.
+    http.expectOne('/api/sessions/s9').flush({ ...view, sessionId: 's9' });
+    await harness.fixture.whenStable();
+    flushTopic(view.topicSlug, 'Quantum Physics');
+    await harness.fixture.whenStable();
   });
 });

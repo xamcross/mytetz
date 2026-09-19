@@ -58,6 +58,7 @@ describe('ApiService', () => {
       rootNodeId: 'n1',
       currentNodeId: 'n1',
       nodes: [],
+      status: 'ACTIVE',
       explanations: {},
     };
 
@@ -93,6 +94,7 @@ describe('ApiService', () => {
       rootNodeId: 'n1',
       currentNodeId: 'n1',
       nodes: [],
+      status: 'ACTIVE',
       explanations: {},
     };
 
@@ -102,6 +104,15 @@ describe('ApiService', () => {
     req.flush(session);
 
     await expect(promise).resolves.toEqual(session);
+  });
+
+  it('marks a session complete', async () => {
+    const promise = service.completeSession('s1');
+    const req = http.expectOne('/api/sessions/s1/complete');
+    expect(req.request.method).toBe('POST');
+    req.flush(null, { status: 204, statusText: 'No Content' });
+
+    await expect(promise).resolves.toBeNull();
   });
 
   it('fetches the account view', async () => {

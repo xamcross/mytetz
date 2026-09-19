@@ -1,11 +1,12 @@
 import { Component, computed, effect, inject, signal } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { Title } from '@angular/platform-browser';
-import { ActivatedRoute, RouterLink } from '@angular/router';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { map } from 'rxjs';
 import { WallCode, WallPanelComponent } from '../account/wall-panel.component';
 import { QuizPanelComponent } from '../assess/quiz-panel.component';
 import { SignInPanelComponent } from '../auth/sign-in-panel.component';
+import { ApiService } from '../core/api.service';
 import { QuizKind, SpanPayload, Verb } from '../core/models';
 import { BreadcrumbComponent } from './breadcrumb.component';
 import { FocusCardComponent } from './focus-card.component';
@@ -181,9 +182,32 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
                 [step]="step()"
                 [verbLabel]="verbLabel()"
                 [topicLabel]="topicLabel()"
+                [readOnly]="store.isCompleted()"
                 (explainRequested)="explain($event)"
                 (testMeRequested)="testMe()"
               />
+              <!-- One control at a time: a completed session offers to start a new one, and an
+                   active session offers to end itself. Never both — a learner who has just
+                   completed a session has nothing left here to complete again. -->
+              @if (store.isCompleted()) {
+                <button
+                  type="button"
+                  class="mt-pill mt-pill--coral"
+                  data-testid="new-session"
+                  (click)="startNewSession()"
+                >
+                  Start a new session on this topic
+                </button>
+              } @else {
+                <button
+                  type="button"
+                  class="mt-pill mt-pill--ghost"
+                  data-testid="complete-session"
+                  (click)="completeSession()"
+                >
+                  Mark this session complete
+                </button>
+              }
             }
 
             @if (quizKind(); as kind) {
@@ -334,7 +358,9 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
 })
 export class ReaderPageComponent {
   private readonly route = inject(ActivatedRoute);
+  private readonly router = inject(Router);
   private readonly titleService = inject(Title);
+  private readonly api = inject(ApiService);
   readonly store = inject(SessionStore);
 
   /**
@@ -482,6 +508,26 @@ export class ReaderPageComponent {
 
   explain(request: { span: SpanPayload; verb: Verb }): void {
     void this.store.explain(request.span, request.verb);
+  }
+
+  /** Ends the session on the learner's own word. `SessionStore.complete` updates the loaded
+   * session in place, so the read-only card and this control's own replacement follow at once. */
+  completeSession(): void {
+    void this.store.complete();
+  }
+
+  /**
+   * Opens a fresh session on the topic a completed one covered, and moves the reader onto it.
+   *
+   * A completed session stays exactly as it was — see [SessionStore.complete] — so continuing to
+   * read the topic means a new session, not a reopened old one. `ApiService.createSession` is the
+   * same call the catalogue page makes to start one from a topic page.
+   */
+  async startNewSession(): Promise<void> {
+    const topicSlug = this.store.session()?.topicSlug;
+    if (topicSlug === undefined) return;
+    const created = await this.api.createSession(topicSlug);
+    await this.router.navigate(['/learn', created.sessionId]);
   }
 
   /** Which quiz is open, or `null` when none is. Set by [testMe] and [exam], and cleared by

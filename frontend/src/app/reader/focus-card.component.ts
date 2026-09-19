@@ -253,6 +253,10 @@ export class FocusCardComponent {
   /** The topic's name, which the design draws as the card's own heading. It sits outside
    * `.focus__body`, so it contributes no character to the string the offsets index. */
   readonly topicLabel = input<string>('');
+  /** True for a completed session. No new node may join one, so a highlight can open no picker —
+   * the check is added to [canExplain], the one gate every path to the picker already runs
+   * through. The body stays selectable, and still renders correctly, only nothing follows from it. */
+  readonly readOnly = input<boolean>(false);
 
   /** The span *and* the verb, together: the learner picks the phrase first and the verb second, and
    * the request needs both. A bare `spanSelected` output would leave the page holding one half of a
@@ -276,7 +280,8 @@ export class FocusCardComponent {
   private checkedBody: string | null = null;
 
   readonly canExplain = computed(
-    () => this.bodyMatches() && !this.isStreaming() && this.selectedSpan() !== null,
+    () =>
+      !this.readOnly() && this.bodyMatches() && !this.isStreaming() && this.selectedSpan() !== null,
   );
 
   /** The span the picker should show, or `null` when the picker must not be on screen at all. */
@@ -293,6 +298,9 @@ export class FocusCardComponent {
   });
 
   protected readonly hint = computed(() => {
+    if (this.readOnly()) {
+      return 'This session is complete, so it is read-only. Start a new session to keep exploring this topic.';
+    }
     if (!this.bodyMatches()) {
       return 'This passage cannot be highlighted right now — what is on screen does not match the stored explanation. Reload the page to try again.';
     }
