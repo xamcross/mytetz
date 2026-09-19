@@ -233,6 +233,9 @@ learning session already owns that name.
 generate, and the learner keeps a trail that costs nothing to serve. A session is deleted only on
 sign-out, on account deletion, or when an operator suspects a compromise.
 
+Issue #88 removed the sign-out-everywhere control from the account page. The route stays for a
+later security page or an operator.
+
 ### 5.7 Account deletion
 
 `POST /api/account/delete` needs a fresh confirmation token. It removes:
