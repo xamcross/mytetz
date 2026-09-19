@@ -47,6 +47,13 @@ data class TopicPageView(
     val summary: String,
     val seedBody: String?,
     val relatedTopics: List<RelatedTopicView>,
+    /**
+     * When a person last confirmed this topic's text, in epoch milliseconds, or null when nobody
+     * has yet. Null renders no "Last reviewed" line and no `dateModified` field — a missing date
+     * must never show a false one. See `docs/superpowers/specs/2026-09-19-public-surface-design.md`
+     * section 8.
+     */
+    val reviewedAt: Long? = null,
 )
 
 internal const val SITE_URL = "https://mytetz.com"
@@ -169,6 +176,8 @@ fun HTML.topicPageHtml(view: TopicPageView) {
             span(classes = "topic__eyebrow") { +view.category }
             h1 { +view.title }
             p(classes = "answer") { +(view.seedBody ?: view.summary) }
+            // No date means no line, and never a false one — see TopicPageView.reviewedAt's own KDoc.
+            view.reviewedAt?.let { reviewedAt -> p(classes = "topic__reviewed") { +"Last reviewed ${isoDate(reviewedAt)}" } }
 
             section(classes = "start") {
                 h2 { +"Start with this topic" }
@@ -226,7 +235,18 @@ private fun learningResourceJsonLd(view: TopicPageView, canonical: String): Json
     put("name", view.title)
     put("description", view.summary)
     put("url", canonical)
+    view.reviewedAt?.let { put("dateModified", isoDate(it)) }
 }
+
+/**
+ * Formats [epochMillis] as a plain UTC calendar date, `yyyy-MM-dd`.
+ *
+ * Both the visible "Last reviewed" text and the JSON-LD `dateModified` field call this one
+ * function, so the two always name the same day. UTC, and not the server's own time zone: a date
+ * a machine in one region renders must read the same on a machine in another region.
+ */
+internal fun isoDate(epochMillis: Long): String =
+    java.time.Instant.ofEpochMilli(epochMillis).atZone(java.time.ZoneOffset.UTC).toLocalDate().toString()
 
 /** `BreadcrumbList` (https://schema.org/BreadcrumbList), with the two required `ListItem` entries
  * per spec section 11: home, then this topic. */
