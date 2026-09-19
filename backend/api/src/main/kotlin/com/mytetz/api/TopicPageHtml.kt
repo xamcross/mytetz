@@ -1,5 +1,7 @@
 package com.mytetz.api
 
+import kotlinx.html.BODY
+import kotlinx.html.HEAD
 import kotlinx.html.HTML
 import kotlinx.html.a
 import kotlinx.html.body
@@ -45,13 +47,83 @@ data class TopicPageView(
     val summary: String,
     val seedBody: String?,
     val relatedTopics: List<RelatedTopicView>,
+    /**
+     * When a person last confirmed this topic's text, in epoch milliseconds, or null when nobody
+     * has yet. Null renders no "Last reviewed" line and no `dateModified` field — a missing date
+     * must never show a false one. See `docs/superpowers/specs/2026-09-19-public-surface-design.md`
+     * section 8.
+     */
+    val reviewedAt: Long? = null,
 )
 
-private const val SITE_URL = "https://mytetz.com"
+internal const val SITE_URL = "https://mytetz.com"
 
 /** The stylesheet every guide page already links. A topic page reuses it, and not a copy, so one
- * edit reaches every page outside the Angular application. See `guides.css`'s own header comment. */
-private const val GUIDES_STYLESHEET = "/guides/guides.css"
+ * edit reaches every page outside the Angular application. See `guides.css`'s own header comment.
+ *
+ * `internal`, and not `private`: `HowItWorksRoutes.kt`'s renderer shares this layout too, through
+ * [commonHeadTags]. */
+internal const val GUIDES_STYLESHEET = "/guides/guides.css"
+
+/**
+ * The head tags every page of this layout shares: the character set, the viewport, the page
+ * title, the description, the canonical tag, the stylesheet, and the Open Graph and Twitter Card
+ * tags.
+ *
+ * `TopicPageHtml.kt` and `HowItWorksRoutes.kt` both call this function, so one edit reaches both
+ * pages. [ogType] carries the one Open Graph field that differs between the two: `"article"` for a
+ * topic page, `"website"` for a page with no single author date, the same value
+ * `frontend/src/index.html` and `frontend/public/guides/index.html` already use for a
+ * non-article page.
+ */
+internal fun HEAD.commonHeadTags(pageTitle: String, description: String, canonical: String, ogType: String) {
+    meta(charset = "utf-8")
+    meta(name = "viewport", content = "width=device-width, initial-scale=1")
+    title { +pageTitle }
+    meta(name = "description", content = description)
+    link(rel = "canonical", href = canonical)
+    link(rel = "stylesheet", href = GUIDES_STYLESHEET)
+
+    // The DSL's `meta(name = …)` writes a `name` attribute. Open Graph tags need `property`
+    // exactly as a guide page already writes them — see frontend/public/guides/index.html — so
+    // the six og:* tags below set the attribute by hand.
+    meta { attributes["property"] = "og:type"; attributes["content"] = ogType }
+    meta { attributes["property"] = "og:site_name"; attributes["content"] = "mytetz" }
+    meta { attributes["property"] = "og:url"; attributes["content"] = canonical }
+    meta { attributes["property"] = "og:title"; attributes["content"] = pageTitle }
+    meta { attributes["property"] = "og:description"; attributes["content"] = description }
+    meta { attributes["property"] = "og:image"; attributes["content"] = "$SITE_URL/og-image.png" }
+    meta(name = "twitter:card", content = "summary_large_image")
+}
+
+/** The 64px header bar every guide page and every page of this layout shares. */
+internal fun BODY.siteHeaderBar() {
+    header(classes = "bar") {
+        a(href = "/", classes = "bar__mark") { +"mytetz" }
+        nav(classes = "bar__nav") {
+            attributes["aria-label"] = "Main"
+            a(href = "/") { +"Catalogue" }
+            a(href = "/guides") { +"Guides" }
+        }
+    }
+}
+
+/** The footer every guide page and every page of this layout shares. */
+internal fun BODY.siteFooter() {
+    footer(classes = "foot") {
+        div(classes = "foot__inner") {
+            nav(classes = "foot__links") {
+                attributes["aria-label"] = "Footer"
+                a(href = "/") { +"Catalogue" }
+                a(href = "/guides") { +"Guides" }
+                a(href = "/how-it-works") { +"How it works" }
+                a(href = "/privacy") { +"Privacy" }
+                a(href = "/terms") { +"Terms" }
+                a(href = "/imprint") { +"Imprint" }
+            }
+        }
+    }
+}
 
 /**
  * Renders one topic page.
@@ -81,24 +153,7 @@ fun HTML.topicPageHtml(view: TopicPageView) {
     val canonical = "$SITE_URL/topics/${view.slug}"
 
     head {
-        meta(charset = "utf-8")
-        meta(name = "viewport", content = "width=device-width, initial-scale=1")
-        title { +pageTitle }
-        meta(name = "description", content = view.summary)
-        link(rel = "canonical", href = canonical)
-        link(rel = "stylesheet", href = GUIDES_STYLESHEET)
-
-        // The DSL's `meta(name = …)` writes a `name` attribute. Open Graph and Twitter Card tags
-        // need `property` (og:*) or `name` (twitter:*) exactly as a guide page already writes them
-        // — see frontend/public/guides/index.html — so the four og:* tags below set the attribute
-        // by hand.
-        meta { attributes["property"] = "og:type"; attributes["content"] = "article" }
-        meta { attributes["property"] = "og:site_name"; attributes["content"] = "mytetz" }
-        meta { attributes["property"] = "og:url"; attributes["content"] = canonical }
-        meta { attributes["property"] = "og:title"; attributes["content"] = pageTitle }
-        meta { attributes["property"] = "og:description"; attributes["content"] = view.summary }
-        meta { attributes["property"] = "og:image"; attributes["content"] = "$SITE_URL/og-image.png" }
-        meta(name = "twitter:card", content = "summary_large_image")
+        commonHeadTags(pageTitle = pageTitle, description = view.summary, canonical = canonical, ogType = "article")
 
         script(type = "application/ld+json") {
             unsafe { +jsonLdGraph(listOf(learningResourceJsonLd(view, canonical), breadcrumbListJsonLd(view, canonical))) }
@@ -110,14 +165,7 @@ fun HTML.topicPageHtml(view: TopicPageView) {
         script(src = "/topic-start.js") { attributes["defer"] = "defer" }
     }
     body {
-        header(classes = "bar") {
-            a(href = "/", classes = "bar__mark") { +"mytetz" }
-            nav(classes = "bar__nav") {
-                attributes["aria-label"] = "Main"
-                a(href = "/") { +"Catalogue" }
-                a(href = "/guides") { +"Guides" }
-            }
-        }
+        siteHeaderBar()
 
         main(classes = "wrap") {
             p(classes = "crumb") {
@@ -129,6 +177,8 @@ fun HTML.topicPageHtml(view: TopicPageView) {
             span(classes = "topic__eyebrow") { +view.category }
             h1 { +view.title }
             p(classes = "answer") { +(view.seedBody ?: view.summary) }
+            // No date means no line, and never a false one — see TopicPageView.reviewedAt's own KDoc.
+            view.reviewedAt?.let { reviewedAt -> p(classes = "topic__reviewed") { +"Last reviewed ${isoDate(reviewedAt)}" } }
 
             section(classes = "start") {
                 h2 { +"Start with this topic" }
@@ -163,18 +213,7 @@ fun HTML.topicPageHtml(view: TopicPageView) {
             }
         }
 
-        footer(classes = "foot") {
-            div(classes = "foot__inner") {
-                nav(classes = "foot__links") {
-                    attributes["aria-label"] = "Footer"
-                    a(href = "/") { +"Catalogue" }
-                    a(href = "/guides") { +"Guides" }
-                    a(href = "/privacy") { +"Privacy" }
-                    a(href = "/terms") { +"Terms" }
-                    a(href = "/imprint") { +"Imprint" }
-                }
-            }
-        }
+        siteFooter()
     }
 }
 
@@ -197,7 +236,18 @@ private fun learningResourceJsonLd(view: TopicPageView, canonical: String): Json
     put("name", view.title)
     put("description", view.summary)
     put("url", canonical)
+    view.reviewedAt?.let { put("dateModified", isoDate(it)) }
 }
+
+/**
+ * Formats [epochMillis] as a plain UTC calendar date, `yyyy-MM-dd`.
+ *
+ * Both the visible "Last reviewed" text and the JSON-LD `dateModified` field call this one
+ * function, so the two always name the same day. UTC, and not the server's own time zone: a date
+ * a machine in one region renders must read the same on a machine in another region.
+ */
+internal fun isoDate(epochMillis: Long): String =
+    java.time.Instant.ofEpochMilli(epochMillis).atZone(java.time.ZoneOffset.UTC).toLocalDate().toString()
 
 /** `BreadcrumbList` (https://schema.org/BreadcrumbList), with the two required `ListItem` entries
  * per spec section 11: home, then this topic. */

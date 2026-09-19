@@ -182,6 +182,42 @@ class TopicPageHtmlTest {
         assertFalse("""<meta name="og:""" in html, "an og:* tag used name instead of property: $html")
     }
 
+    // ------------------------------------------------------------- the review date
+
+    @Test
+    fun `a reviewed topic shows the review date and dateModified`() {
+        val html = render(view().copy(reviewedAt = 1_700_000_000_000L))
+
+        assertTrue("Last reviewed" in html)
+        assertTrue("\"dateModified\"" in html)
+    }
+
+    @Test
+    fun `an unreviewed topic shows neither`() {
+        val html = render(view().copy(reviewedAt = null))
+
+        assertFalse("Last reviewed" in html)
+        assertFalse("\"dateModified\"" in html)
+    }
+
+    @Test
+    fun `the review date renders in UTC`() {
+        // 1_700_000_000_000 ms is 2023-11-14T22:13:20Z. A local, non-UTC formatter would print a
+        // different calendar day depending on the machine's own time zone.
+        val html = render(view().copy(reviewedAt = 1_700_000_000_000L))
+
+        assertTrue("2023-11-14" in html, html)
+    }
+
+    // ------------------------------------------------------------- the footer
+
+    @Test
+    fun `the footer links to the how-it-works page`() {
+        val html = render(view())
+
+        assertTrue("""<a href="/how-it-works">How it works</a>""" in html, html)
+    }
+
     @Test
     fun `the page loads exactly one external script, and exactly one other script, the JSON-LD one`() {
         val html = render(view())
