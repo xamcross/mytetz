@@ -455,4 +455,51 @@ class ExplanationRepositoryTest {
 
         assertEquals(2, repository.findTopByRequestCount(limit = 2).size)
     }
+
+    // ------------------------------------------------------------------ the topic page's own popular-questions list
+
+    @Test
+    fun `findPublishedByTopic lists only published EXPLAIN nodes of the given topic, by requestCount descending`() =
+        runTest {
+            repository.insertIfAbsent(
+                explanation("qp-low", "b").copy(verb = Verb.EXPLAIN, requestCount = 1, topicSlug = "quantum-physics"),
+            )
+            repository.insertIfAbsent(
+                explanation("qp-high", "b").copy(verb = Verb.EXPLAIN, requestCount = 9, topicSlug = "quantum-physics"),
+            )
+            // Unpublished: must not appear.
+            repository.insertIfAbsent(
+                explanation("qp-unpub", "b").copy(verb = Verb.EXPLAIN, requestCount = 100, topicSlug = "quantum-physics"),
+            )
+            // A different topic: must not appear.
+            repository.insertIfAbsent(
+                explanation("other-topic", "b").copy(verb = Verb.EXPLAIN, requestCount = 100, topicSlug = "special-relativity"),
+            )
+            repository.setPublished("qp-low", true)
+            repository.setPublished("qp-high", true)
+            repository.setPublished("other-topic", true)
+
+            val popular = repository.findPublishedByTopic("quantum-physics", limit = 10)
+
+            assertEquals(listOf("qp-high", "qp-low"), popular.map { it.key })
+        }
+
+    @Test
+    fun `findPublishedByTopic on a topic with no published explanation is empty`() = runTest {
+        repository.insertIfAbsent(explanation("qp-unpub-2", "b").copy(verb = Verb.EXPLAIN, topicSlug = "quantum-physics"))
+
+        assertEquals(emptyList(), repository.findPublishedByTopic("quantum-physics", limit = 10))
+    }
+
+    @Test
+    fun `findPublishedByTopic applies the limit`() = runTest {
+        repeat(5) { i ->
+            repository.insertIfAbsent(
+                explanation("qp-$i", "b").copy(verb = Verb.EXPLAIN, requestCount = i.toLong(), topicSlug = "quantum-physics"),
+            )
+            repository.setPublished("qp-$i", true)
+        }
+
+        assertEquals(2, repository.findPublishedByTopic("quantum-physics", limit = 2).size)
+    }
 }

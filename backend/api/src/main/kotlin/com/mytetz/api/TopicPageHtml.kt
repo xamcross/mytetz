@@ -33,10 +33,22 @@ import kotlinx.serialization.json.put
 data class RelatedTopicView(val slug: String, val title: String)
 
 /**
+ * One popular question under a topic: a published `EXPLAIN` node's span, and the twelve-character
+ * short key of its public explanation page. Issue #48, spec section 6.3.
+ */
+data class PopularQuestionView(val span: String, val shortKey: String)
+
+/**
  * Everything [topicPageHtml] needs to render one topic page.
  *
  * [seedBody] is null when the graph holds no seed for this topic yet. See `TopicPageRoutes.kt`'s
  * own KDoc for why the route falls back to the summary alone, rather than generating one.
+ *
+ * [popularQuestions] defaults to empty, so every existing caller of this data class keeps
+ * compiling with no change. `TopicPageRoutes.kt` fills it from
+ * `ExplanationRepository.findPublishedByTopic`; it stays empty until this topic has at least one
+ * published explanation (spec section 6.3), and [topicPageHtml] then renders no "Popular
+ * questions" section at all, rather than an empty one.
  */
 data class TopicPageView(
     val slug: String,
@@ -45,6 +57,7 @@ data class TopicPageView(
     val summary: String,
     val seedBody: String?,
     val relatedTopics: List<RelatedTopicView>,
+    val popularQuestions: List<PopularQuestionView> = emptyList(),
 )
 
 private const val SITE_URL = "https://mytetz.com"
@@ -146,6 +159,22 @@ fun HTML.topicPageHtml(view: TopicPageView) {
                 }
                 noScript {
                     p { +"The Start with this topic button needs JavaScript." }
+                }
+            }
+
+            // Spec section 6.3: this list, when it has any entry, comes before "Related topics".
+            // Issue #48's own change to this file stays this one section — see this data class's
+            // own KDoc and PublicPageChrome.kt's own note on why the rest of the file is untouched.
+            if (view.popularQuestions.isNotEmpty()) {
+                section {
+                    h2 { +"Popular questions" }
+                    ul(classes = "start__list") {
+                        view.popularQuestions.forEach { question ->
+                            li {
+                                a(href = "/topics/${view.slug}/explain/${question.shortKey}") { +question.span }
+                            }
+                        }
+                    }
                 }
             }
 

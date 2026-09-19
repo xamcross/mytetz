@@ -199,4 +199,25 @@ open class ExplanationRepository(database: MongoDatabase) {
             .sort(Indexes.descending("requestCount"))
             .limit(limit)
             .toList()
+
+    /**
+     * The top [limit] published `EXPLAIN` nodes of [topicSlug], by [Explanation.requestCount]
+     * descending — the "Popular questions" list `TopicPageHtml.kt` renders under a topic's seed,
+     * per spec section 6.3. Empty while no explanation of this topic is published yet, which is
+     * why `TopicPageHtml.kt` renders no such list in that case.
+     *
+     * The existing `topic_demand` index (ascending `topicSlug`, descending `requestCount`) serves
+     * this query's filter and its sort together; no new index is added.
+     */
+    suspend fun findPublishedByTopic(topicSlug: String, limit: Int): List<Explanation> =
+        collection.find(
+            Filters.and(
+                Filters.eq("topicSlug", topicSlug),
+                Filters.eq("verb", Verb.EXPLAIN.name),
+                Filters.eq("published", true),
+            ),
+        )
+            .sort(Indexes.descending("requestCount"))
+            .limit(limit)
+            .toList()
 }

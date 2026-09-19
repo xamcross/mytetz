@@ -28,6 +28,7 @@ class TopicPageHtmlTest {
         summary: String = "How space and time trade off for an observer in motion.",
         seedBody: String? = "Special relativity says two observers can disagree about time.",
         related: List<RelatedTopicView> = listOf(RelatedTopicView("quantum-physics", "Quantum Physics")),
+        popularQuestions: List<PopularQuestionView> = emptyList(),
     ) = TopicPageView(
         slug = "special-relativity",
         title = title,
@@ -35,6 +36,7 @@ class TopicPageHtmlTest {
         summary = summary,
         seedBody = seedBody,
         relatedTopics = related,
+        popularQuestions = popularQuestions,
     )
 
     @Test
@@ -67,6 +69,46 @@ class TopicPageHtmlTest {
         val html = render(view(seedBody = null))
 
         assertTrue(view().summary in html)
+    }
+
+    // ------------------------------------------------------------- popular questions (spec section 6.3, issue #48)
+
+    @Test
+    fun `no published explanation means no Popular questions section`() {
+        val html = render(view(popularQuestions = emptyList()))
+
+        assertFalse("Popular questions" in html)
+    }
+
+    @Test
+    fun `a popular question links to its explanation page, before the related topics`() {
+        val html = render(
+            view(
+                popularQuestions = listOf(PopularQuestionView(span = "wave function", shortKey = "abcdef012345")),
+            ),
+        )
+
+        assertTrue("Popular questions" in html)
+        assertTrue("""<a href="/topics/special-relativity/explain/abcdef012345">""" in html)
+        assertTrue("wave function" in html)
+        assertTrue(
+            html.indexOf("Popular questions") < html.indexOf("Related topics"),
+            "spec section 6.3 orders popular questions before related topics",
+        )
+    }
+
+    @Test
+    fun `a popular question span carrying a script tag is escaped in the HTML body`() {
+        val html = render(
+            view(
+                popularQuestions = listOf(
+                    PopularQuestionView(span = "</script><script>alert(1)</script>", shortKey = "abcdef012345"),
+                ),
+            ),
+        )
+
+        assertFalse("</script><script>alert(1)</script>" in html.substringAfter("<body"))
+        assertTrue("&lt;/script&gt;&lt;script&gt;alert(1)&lt;/script&gt;" in html)
     }
 
     // ------------------------------------------------------------- the JSON-LD block
