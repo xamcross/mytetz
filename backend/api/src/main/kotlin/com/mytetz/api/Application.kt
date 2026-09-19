@@ -145,6 +145,10 @@ fun Application.module(components: Components = Components()) {
             cookies = components.cookies,
             quotaRepository = components.quotaRepository,
             billing = components.billing,
+            // A factory, not the built service, for the same reason `quizRoutes` above passes one:
+            // `components.quizzes` is a lazy that ends at `AnthropicLlmClient()`, which demands
+            // ANTHROPIC_API_KEY in its constructor.
+            quizzes = { components.quizzes },
             clientAddresses = components.clientAddresses,
             turnstile = components.turnstile,
             turnstileSiteKey = components.turnstileSiteKey,

@@ -17,7 +17,7 @@ browser -> Cloudflare (proxied, Full (strict)) -> fly.io Anycast -> machine in f
 | --- | --- |
 | fly app | `mytetz`, org `personal` |
 | fly primary region | `fra` (Frankfurt) |
-| fly VM | 1 x `shared-cpu-1x`, 512 MB, scales to zero when idle |
+| fly VM | 1 x `shared-cpu-1x`, 512 MB, stays up — see section 4 |
 | fly hostname | `https://mytetz.fly.dev` |
 | fly IPv6 | `2a09:8280:1::15c:3d15:0` — **dedicated** |
 | fly IPv4 | `66.241.125.121` — **shared** |
@@ -128,22 +128,37 @@ fly secrets set MYTETZ_GLOBAL_DAILY_COST_CEILING_USD_MICROS=5000000 --app mytetz
 The machine restarts, and the new ceiling applies against the same day's ledger.
 A ceiling below the day's recorded spend stops new generation at once.
 
-**What the ceiling does not cover.** A request that ends before the model's own
-stream completes records no cost, because no token count exists for it. Two
-things do that: a learner who navigates away mid-answer, and a provider stream
-that ends without a stop reason, which includes the 120-second client timeout.
+**A stream that stops early now records an estimated cost.** Two things stop a
+stream before the model's own answer completes: a learner who navigates away
+mid-answer, and a provider stream that ends without a stop reason, which
+includes the 120-second client timeout. Both used to record nothing. Each one
+now records an estimate against this ceiling and against the learner's own
+daily allowance, and the server logs one `SPEND_ESTIMATED` line for each
+record. The estimate uses the real input token count when the stream reported
+one, and the real output token count when the stream reported one. It falls
+back to the length of the prompt and of the text the stream did deliver, each
+divided by four, when a real count did not arrive in time.
+
+One gap remains. A request that fails for any other reason — an upstream
+fault that is neither of the two above — still records nothing, because
+nothing says how much of an answer the model produced before it fell over.
 `EXPLAINS_PER_CALLER` in `SessionRoutes.kt` — 30 explanations per address per
-ten minutes — is what bounds that path. Its counters live in the process, so
-they reset whenever the machine cold-starts.
+ten minutes — is what bounds a retry loop built on that path. Its counters
+live in the process, so they reset whenever the machine cold-starts.
 
 ### 2.2 Every variable the backend reads
 
-20 variables, and each one is listed here and in `.env.example`. Everything
-except the three secrets above has a default in code, and the defaults are the
-values shown. **An unset, unparseable or non-positive value falls back to its
-default rather than stopping the server**, because these are read while the
-process is starting and a typo must not take the site down.
-`MYTETZ_COOKIE_SIGNING_KEY` is the one deliberate exception: it fails closed.
+42 variables, and each one is listed here and in `.env.example`. The Default
+column gives `none` for a name with no default in code, and the real default
+for every other name.
+
+**A name with a default falls back to it on an unset, unparseable or
+non-positive value, rather than stopping the server.** These values are read
+while the process starts, so a typo must not take the site down. A name with
+no default states its own consequence in its own row.
+`MONGODB_URI` and `MYTETZ_COOKIE_SIGNING_KEY` are the two names whose absence
+stops the whole server. Each other `none` row stops only the one feature that
+needs it, until an operator sets it.
 
 | Variable | Default | What it decides |
 | --- | --- | --- |
@@ -167,6 +182,28 @@ process is starting and a typo must not take the site down.
 | `MYTETZ_COOKIE_SECURE` | `true` | whether the cookie carries `Secure`. Only an explicit `false`, `0`, `no` or `off` turns it off. |
 | `MYTETZ_CLIENT_IP_HEADER` | `Fly-Client-IP` | which header the rate limiters key on. See section 2. |
 | `MYTETZ_MIGRATE_ON_BOOT` | off | whether the app deletes an explanation stranded by a model family change, at boot. Only the exact word `true` turns it on. It does **not** control the pre-warm of a missing seed: that step runs on every boot, with no flag. Section "The B0 model migration" explains both. |
+| `GOOGLE_CLIENT_ID` | none | the Google OAuth client ID. Sign-in with Google answers `503` until this and `GOOGLE_CLIENT_SECRET` are both set. |
+| `GOOGLE_CLIENT_SECRET` | none | the Google OAuth client secret. Sign-in with Google answers `503` until this and `GOOGLE_CLIENT_ID` are both set. |
+| `MYTETZ_MAIL_MODE` | none | selects the mail adapter: `resend` or `log`. Sign-in by email answers `503` until this holds one of the two words. |
+| `MYTETZ_MAIL_FROM` | none | the sender address for a magic-link email. `MYTETZ_MAIL_MODE=resend` needs it. |
+| `MYTETZ_TRIAL_GENERATIONS` | `40` | how many generations a new trial grants in total. |
+| `MYTETZ_TRIAL_DAYS` | `7` | how many days a new trial lasts. |
+| `MYTETZ_GRACE_DAYS` | `3` | extra days of access after an active subscription's period end, so a late renewal webhook still finds the learner allowed. A past-due row keeps access for this many days from the event that flagged it. A cancelled row gets no grace: it loses access exactly at its period end. |
+| `MYTETZ_SUBSCRIBER_DAILY_EXPLAINS` | `25` | explanations per day for a paying subscriber. |
+| `MYTETZ_QUIZ_EFFORT` | `LOW` | thinking effort for a quiz: `LOW`, `MEDIUM` or `HIGH`. An unknown name falls back to `LOW`. |
+| `MYTETZ_QUIZ_MAX_OUTPUT_TOKENS` | `2000` | caps thinking and response text together, for one quiz generation call. |
+| `MYTETZ_TEST_ME_MAX_QUESTIONS` | `3` | how many questions one "test me" quiz holds. |
+| `MYTETZ_EXAM_MAX_QUESTIONS` | `8` | how many questions one exam holds. |
+| `MYTETZ_EXAM_MAX_SOURCES` | `20` | how many of a session's most recent nodes an exam may draw from. |
+| `FREEMIUS_SECRET_KEY` | none | signs and verifies the Freemius webhook. Checkout and the webhook route answer `503` until this, `FREEMIUS_PRODUCT_ID` and `FREEMIUS_PLAN_ID` are all set. See the secrets table above. |
+| `FREEMIUS_PRODUCT_ID` | none | the Freemius product id. Checkout and the webhook route answer `503` until this, `FREEMIUS_SECRET_KEY` and `FREEMIUS_PLAN_ID` are all set. |
+| `FREEMIUS_PLAN_ID` | none | the Freemius plan id. Checkout and the webhook route answer `503` until this, `FREEMIUS_SECRET_KEY` and `FREEMIUS_PRODUCT_ID` are all set. |
+| `FREEMIUS_API_KEY` | none | a Bearer token for the Freemius Developer API. With `MYTETZ_RECONCILE_ON_BOOT` on and this unset, the boot logs `RECONCILE_SKIPPED` and reconciliation does nothing. See "Billing reconciliation" below. |
+| `MYTETZ_RECONCILE_ON_BOOT` | off | whether the reconciliation sweep runs at every boot. Only the exact word `true` turns it on. Section "Billing reconciliation" below explains it. |
+| `MYTETZ_TURNSTILE_SECRET` | none | the Turnstile secret key. With this unset, the Turnstile check is skipped, and every sign-in still works. Section "Turnstile" below explains it. |
+| `MYTETZ_TURNSTILE_SITE_KEY` | none | the Turnstile site key, reported to the browser at `GET /api/auth/config`. With this unset, the sign-in panel renders no widget. Section "Turnstile" below explains it. |
+| `MYTETZ_MAIL_API_KEY` | none | the Resend API key. Needed only when `MYTETZ_MAIL_MODE` is `resend`; without it, email sign-in in that mode answers `503`. |
+| `MYTETZ_PUBLIC_BASE_URL` | none | the absolute base url of this deployment, such as `https://mytetz.com`. Email sign-in and Google sign-in both answer `503` until this is set. |
 
 ### Atlas network access — known constraint
 
@@ -267,6 +304,114 @@ fly logs --app mytetz
 fly ssh console --app mytetz
 fly machine list --app mytetz
 ```
+
+---
+
+## Log drain, alert rules, and uptime check
+
+No drain, alert, or uptime check exists yet. This section names the alert rule for each operator
+token, the catch-all for an ERROR line with no token, and the uptime check. `<owner: provider>`,
+`<owner: retention>`, and `<owner: channel>` mark the three choices below that only the owner can
+make.
+
+**A logged magic-link token cannot be replayed from the drain.** `GET /api/auth/magic-link/{token}`
+consumes the token — `AccountRepository.consumeToken` deletes it from Mongo — before the route
+responds. A second `consume` call on the same token returns null;
+`MagicLinkServiceTest`'s own test `consume a second time gives null` pins this. So the token that
+the access log carries for this request is already spent by the time the drain, or anyone else,
+reads that line. This is true whether the drain provider logs the line before or after the
+response completes.
+
+**One caution stays with the owner.** `LoggingMailSender` writes a full sign-in link, not only a
+token, under `MAGIC_LINK_LOGGED`, whenever `MYTETZ_MAIL_MODE` is `log`. An operator confirms the
+value of `MYTETZ_MAIL_MODE` on fly, and sets it to `resend`, before the drain is attached.
+
+### The drain
+
+`<owner: provider>`. Set the retention to 30 days or more. Set the drain to keep a multi-line
+event, such as a stack trace, as one event — several rows below span more than one line.
+
+### The alert channel
+
+`<owner: channel>`. Connect it to the drain provider.
+
+### The alert rules
+
+Each row is one alert rule. The match string is the exact text the log line holds.
+
+`<owner: confirm or change this urgency policy>` — a `High` token pages the channel at once, and a
+`Medium` token can wait for a person to read it on the next work day. This is a proposal, not a
+decision the owner has made. An `Info` token needs no alert; the table lists it only so every
+token the codebase writes has one row somewhere in this document.
+
+| Token | Match string | Level | Urgency | Threshold |
+| --- | --- | --- | --- | --- |
+| `SPEND_UNRECORDED` | `SPEND_UNRECORDED` | ERROR | High | any occurrence |
+| `CORRUPT_SESSION` | `CORRUPT_SESSION` | ERROR | High | any occurrence |
+| unrecognised stop reason | `unrecognised stop reason` | WARN | High | any occurrence |
+| `MAIL_SEND_FAILED` | `MAIL_SEND_FAILED` | ERROR | High | any occurrence |
+| `ACCOUNT_LINK_CONFLICT` | `ACCOUNT_LINK_CONFLICT` | WARN | High | any occurrence |
+| `CONFIG_MISSING` | `CONFIG_MISSING` | ERROR | High | any occurrence |
+| `WEBHOOK_SIGNATURE_MISMATCH` | `WEBHOOK_SIGNATURE_MISMATCH` | WARN | High | more than 20 in one hour |
+| `BOOTSTRAP_FAILED` | `BOOTSTRAP_FAILED` | ERROR | Medium | any occurrence |
+| `BILLING_DRIFT` | `BILLING_DRIFT` | WARN | Medium | any occurrence |
+| `BILLING_UNKNOWN_EVENT` | `BILLING_UNKNOWN_EVENT` | WARN | Medium | any occurrence |
+| `BILLING_UNKNOWN_USER` | `BILLING_UNKNOWN_USER` | WARN | Medium | any occurrence |
+| `BILLING_STALE_EVENT` | `BILLING_STALE_EVENT` | WARN | Medium | any occurrence |
+| `BILLING_NO_PERIOD_END` | `BILLING_NO_PERIOD_END` | WARN | Medium | any occurrence |
+| `BILLING_UNPARSEABLE_EVENT` | `BILLING_UNPARSEABLE_EVENT` | WARN | High | any occurrence; a signed payment event was rejected, and no row changed |
+| `BILLING_UNREADABLE_PERIOD_END` | `BILLING_UNREADABLE_PERIOD_END` | WARN | Medium | any occurrence; the event was applied, with a fall-back period end |
+| `RECONCILE_SKIPPED` | `RECONCILE_SKIPPED` | WARN | Medium | any occurrence |
+| `TRIAL_CAP_REACHED` | `TRIAL_CAP_REACHED` | INFO | Info | no alert; a rate signal only |
+| `MIGRATION` and `PREWARM`, the INFO lines | `MIGRATION removed` or `PREWARM pre-warmed` | INFO | Info | no alert; read by hand, see "The B0 model migration" |
+| `PREWARM`, the WARN lines | `PREWARM_SKIPPED`, `PREWARM stopped early` or `PREWARM failed to pre-warm` | WARN | Medium | any occurrence; the pre-warm runs on each boot, so a line can appear on each boot |
+
+### The catch-all for an ERROR line with no token
+
+Three ERROR lines carry no token today. A rule that alerts on level ERROR, and excludes the
+tokens above, also catches these three:
+
+| Match string | Source |
+| --- | --- |
+| `unhandled error` | `ErrorMapping.kt:269`, the `Throwable` catch-all for a plain HTTP response |
+| `unhandled error mid-stream` | `ErrorMapping.kt:388`, the same catch-all for a response that is already streaming |
+| `the quota check could not be evaluated` | `SessionRoutes.kt:785`; the caller still gets an answer, from the cache only |
+
+`<owner: confirm the provider can filter on log level>`. A provider that cannot filter on level
+must match each of the three strings above by hand instead.
+
+### The uptime check
+
+Check `GET https://mytetz.com/api/health` every minute. Use `GET`, and not `HEAD` — a `HEAD`
+answer has no body to check. Alert after two consecutive failures, or on a body that does not
+contain `"ready":true`.
+
+`<owner: confirm mytetz.com is not challenged by Bot Fight Mode>`. If it is, point the check at
+`https://mytetz.fly.dev/api/health` instead. Issue #68 plans to refuse a request on
+`mytetz.fly.dev` to every `/api/*` path that does not come through Cloudflare, but its own
+implementation steps keep `/api/health` open on that host, so the fallback stays reachable after
+that change lands.
+
+**A note for the `fly machine stop` acceptance check.** `fly.toml:50` sets
+`auto_start_machines = true`. A probe through the fly proxy can therefore start the stopped
+machine again before the uptime alert fires. Record this in this document if it happens.
+
+### What the drain receives
+
+- **Every request path.** The call log writes the path of each request, so the drain receives it
+  too. This is how a magic-link token reaches the drain, in the way described above.
+- **A user id, in a `BILLING_*` line.** For example, `BILLING_DRIFT` logs `user={}` with
+  `subscription.userId` — `backend/billing/src/main/kotlin/com/mytetz/billing/Reconciliation.kt:126-127`.
+- **An email address, in an `ACCOUNT_LINK_CONFLICT` line.** `AccountService.linkGoogle` throws
+  `AccountLinkConflictException` with the message `the account for <email> is already linked to a
+  different Google account` at
+  `backend/account/src/main/kotlin/com/mytetz/account/AccountService.kt:73-75`. `AuthRoutes.kt:332`
+  logs `e.message` for that exception, so the `ACCOUNT_LINK_CONFLICT` line carries the caller's own
+  email address.
+
+**The consequence.** The drain provider receives personal data: an email address, and a user id.
+The provider is therefore a data processor for this product, and the privacy policy must name it
+once the owner selects it. Issue #24 holds the privacy policy text.
 
 ---
 
@@ -563,8 +708,9 @@ no code change.
 
 ### Operator alert tokens
 
-Each row below is a `log.warn` or a `log.error` line. Each line is greppable in `fly logs`. Each
-line is for an operator, and no line ever reaches a learner.
+Most rows below are a `log.warn` or a `log.error` line. Two rows, `TRIAL_CAP_REACHED` and
+`MIGRATION`, are INFO lines, and the pre-warm also writes one INFO line, `PREWARM pre-warmed`. Each line is greppable in `fly logs`. Each line is for an
+operator, and no line ever reaches a learner.
 
 | Token | Logged in | Meaning | Operator action |
 | --- | --- | --- | --- |
@@ -577,9 +723,17 @@ line is for an operator, and no line ever reaches a learner.
 | `PREWARM_SKIPPED` | `Components.prewarm` | the model client did not build at boot, usually because `ANTHROPIC_API_KEY` is not set. The catalogue still serves. No missing seed was generated on this boot | set the key. The next boot runs the pre-warm again |
 | `PREWARM stopped early` and `PREWARM failed to pre-warm` | `Components.prewarm` | the spend breaker refused a topic, or the generation of one seed failed. A published topic then has no seed, and the first visitor pays for a live generation | read the slug in the line. For the breaker, read section "The B0 model migration". For a failure, read the stack trace under the line. The next boot tries the topic again, and each try that reaches the model costs money |
 | `WEBHOOK_SIGNATURE_MISMATCH` | `BillingRoutes` | `POST /api/billing/webhook` received a body whose signature did not verify | expected from scanners and mis-configured retries; investigate only if it is frequent, or if `FREEMIUS_SECRET_KEY` was just rotated |
+| `BILLING_UNPARSEABLE_EVENT` | `BillingRoutes` | a signed webhook body had no readable `id`, `type` or `created`, or was not a JSON object. The route answers `400`, and no row changes | the line gives the event type and the event id when the body holds them. Find the event in the Freemius dashboard under Webhooks > Events, and compare it with `FreemiusWebhook.parse`. No other part of the body reaches the log line |
+| `BILLING_UNREADABLE_PERIOD_END` | `FreemiusWebhook.parse` | `objects.license.expiration` of an event was not in one of the two date forms that the parser reads. The event is still applied, with the period end from `objects.subscription.next_payment`, or with no period end | the line gives the event type and the event id. Read the real value in the Freemius dashboard, and add its date form to `parseFreemiusDate`. An `ACTIVE` row with no period end also logs `BILLING_NO_PERIOD_END` |
 | `ACCOUNT_LINK_CONFLICT` | `AuthRoutes` | a Google sign-in's email is already linked to a different Google account | a real conflict, not a bug; the learner needs the sign-in method their account already used |
 | `MAIL_SEND_FAILED` | `MailSender` | a magic-link email could not be sent | check the mail provider's status and `MYTETZ_MAIL_API_KEY`; a learner is currently unable to sign in by email |
 | `CONFIG_MISSING` | `ConfigGate`, from `AuthRoutes` and `BillingRoutes` | a route needs an environment variable that is not set, so it answers `503` rather than `500`. One line names only the first missing variable in that route's own chain; a second variable, if one is also missing, only appears after the first is set | set the named variable. The next request retries on its own. No restart is needed |
+| `SPEND_UNRECORDED` | `SessionRoutes.recordSpend` | a generation was paid for, but the quota ledger did not record the cost | read the principal and the cost in the line; the daily spend ceiling in section 2.1 is understating the true spend by that amount |
+| `CORRUPT_SESSION` | `ErrorMapping.logCorruptSession` | a stored session no longer describes a tree; no retry fixes it | read the session id in the line; a person must read the document by hand |
+| `unrecognised stop reason` | `ExplanationValidator.validate`, through `ErrorMapping.installErrorMapping` and `ErrorMapping.sseErrorFor` | the model answered with a stop reason the validator does not know; the validator rejects every such answer, and keeps rejecting until a person acts | read the exact reason in the line under `generation failed`; add the new reason to the validator's allowlist if it is a real success case |
+| `BOOTSTRAP_FAILED` | `Application.bootstrap` | the boot did not finish the database indexes or the catalogue seed. `ready.set(true)` at `Application.kt:224` never runs on this path, so `/api/health` reports `"ready":false` for the whole life of the machine, not only during the cold-start window | read the stack trace under the line; the uptime check on `"ready":true` also alerts, because the field never turns `true`; restart the machine, or wait for the next boot to retry on its own |
+| `TRIAL_CAP_REACHED` | `BillingService.startTrialIfAbsent` | one IP bucket already started the day's cap of trials; the caller still signs in, with checkout offered instead | no action; this is a rate signal, not a fault |
+| `MIGRATION` | `Components.migrate` | one INFO line, `MIGRATION removed`, reports how many stranded explanations the delete removed. It appears only while `MYTETZ_MIGRATE_ON_BOOT` is set. The pre-warm has its own lines, in the `PREWARM` rows above | read section "The B0 model migration" above; remove the flag after you read the line |
 
 ### Reading a `BILLING_DRIFT` line
 
