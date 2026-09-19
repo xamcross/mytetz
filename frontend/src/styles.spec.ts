@@ -252,9 +252,7 @@ describe('a busy .mt-pill (finding F7, animation J)', () => {
     const body = reducedMotionBlock(css);
     const rule = body.match(/\.mt-pill\[aria-busy='true'\]::after\s*\{([^}]*)\}/);
     if (!rule) {
-      throw new Error(
-        "the reduced-motion block must override .mt-pill[aria-busy='true']::after",
-      );
+      throw new Error("the reduced-motion block must override .mt-pill[aria-busy='true']::after");
     }
     expect(rule[1]).toMatch(/animation:\s*none/);
   });
@@ -315,6 +313,37 @@ describe('a hover state for the controls that are not .mt-pill', () => {
     const text = readFileSync('src/app/catalog/catalog-page.component.ts', 'utf8');
     expect(hasSelector(text, '.topic__tile:hover')).toBe(true);
     expect(hasSelector(hoverGuardedText(text), '.topic__tile:hover')).toBe(true);
+  });
+});
+
+describe('the shared .legal-page block (design review, section 1.4, item 6)', () => {
+  const files = [
+    'src/app/legal/privacy-page.component.ts',
+    'src/app/legal/terms-page.component.ts',
+    'src/app/legal/imprint-page.component.ts',
+    'src/app/not-found/not-found-page.component.ts',
+  ];
+
+  it('declares .legal-page once, in styles.css', () => {
+    expect(hasSelector(css, '.legal-page')).toBe(true);
+  });
+
+  it('is used by the three legal pages, and by the not-found page as its fourth variant', () => {
+    for (const file of files) {
+      const text = readFileSync(file, 'utf8');
+      expect(text, `${file} must carry the class legal-page`).toMatch(/class="[^"]*\blegal-page\b/);
+    }
+  });
+
+  it('is not redeclared as a whole block in any of the four page components', () => {
+    // A page may still add its own rule for something the shared block does not cover — a list,
+    // a code sample, a page-specific override — but the layout block itself lives in one place.
+    for (const file of files) {
+      const text = readFileSync(file, 'utf8');
+      expect(text, `${file} must not redeclare the .legal-page block itself`).not.toMatch(
+        /\.legal-page\s*\{\s*\n\s*max-width/,
+      );
+    }
   });
 });
 

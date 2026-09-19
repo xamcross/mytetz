@@ -419,6 +419,32 @@ a.mt-pill {
   color: var(--mt-err-ink);
 }
 
+/* Design review, section 1.4, item 6. Three legal pages each declared the same block, and the
+   not-found page declared a fourth variant of the same idea. One shared rule now serves all
+   four. A page still declares its own rule for anything this block does not cover — a list, a
+   code sample, or a value that page alone needs — in its own file. */
+.legal-page {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 48px 20px 64px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+.legal-page h1 {
+  font-size: 32px;
+}
+.legal-page h2 {
+  font-size: 20px;
+  margin-bottom: 8px;
+}
+.legal-page p {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--mt-prose);
+}
+
 .mt-eyebrow {
   font-size: 11px;
   font-weight: 800;
