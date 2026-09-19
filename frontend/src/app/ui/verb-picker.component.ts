@@ -140,6 +140,14 @@ const VERBS: ReadonlyArray<{ verb: Verb; name: string; caption: string }> = [
         border-radius: var(--mt-r-row);
         background: var(--mt-surface);
         color: var(--mt-ink);
+        transition:
+          background var(--mt-dur-press) var(--mt-ease-press),
+          box-shadow var(--mt-dur-press) var(--mt-ease-press);
+      }
+      /* The primary verb is coral-filled (see the rule below), so a plain background change on
+         hover would paint over its fill. This rule answers a pointer for every other verb only. */
+      .picker__verb:not(.picker__verb--primary):hover {
+        background: var(--mt-sunk);
       }
       /* The fill is --mt-coral-press and not --mt-coral. The name is 16px, so white on
          --mt-coral measures 3.01:1 and fails AA. Both lines are white; the face and the size
@@ -155,6 +163,10 @@ const VERBS: ReadonlyArray<{ verb: Verb; name: string; caption: string }> = [
         border-color: var(--mt-coral-press);
         color: var(--mt-surface);
         box-shadow: var(--mt-lift-coral);
+      }
+      /* This is also what .mt-pill--coral:hover draws, for the same reason as the block above. */
+      .picker__verb--primary:hover {
+        box-shadow: 0 5px 0 var(--mt-coral-deep);
       }
       .picker__name {
         font-family: var(--mt-display);
@@ -191,6 +203,13 @@ const VERBS: ReadonlyArray<{ verb: Verb; name: string; caption: string }> = [
         }
         to {
           transform: translateY(0);
+        }
+      }
+      /* The rise above keeps its own raw duration and does not move to the motion tokens (issue
+         #102 does not touch it). A learner who asks for less motion still needs it silenced. */
+      @media (prefers-reduced-motion: reduce) {
+        .picker {
+          animation: none;
         }
       }
     `,

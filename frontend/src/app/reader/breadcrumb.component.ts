@@ -63,6 +63,12 @@ import { NodeView } from '../core/models';
         text-overflow: ellipsis;
         white-space: nowrap;
         display: block;
+        transition: background var(--mt-dur-press) var(--mt-ease-press);
+      }
+      /* The last crumb is always the disabled, current one (see the template), so this never
+         paints over the teal fill of .mt-chip--teal. */
+      .crumb__button:hover:not(:disabled) {
+        background: var(--mt-sunk);
       }
       .crumb__button:disabled {
         cursor: default;

@@ -99,6 +99,14 @@ const VERB_LABELS: Readonly<Record<string, string>> = {
         padding: 11px 13px;
         border-radius: var(--mt-r-row);
         color: var(--mt-ink);
+        transition:
+          background var(--mt-dur-press) var(--mt-ease-press),
+          box-shadow var(--mt-dur-press) var(--mt-ease-press);
+      }
+      /* The current row is teal-filled (see the rule below), so a plain background change on
+         hover would paint over its fill. This rule answers a pointer for every other row only. */
+      .trail__item:not(.trail__item--current):hover {
+        background: var(--mt-sunk);
       }
       /* The four declarations below are also what .mt-pill--teal draws, and the duplication is
          deliberate. That class is a modifier of .mt-pill, and .mt-pill--teal:active changes only
@@ -111,6 +119,10 @@ const VERB_LABELS: Readonly<Record<string, string>> = {
         border-color: var(--mt-teal);
         color: var(--mt-surface);
         box-shadow: var(--mt-lift-teal);
+      }
+      /* This is also what .mt-pill--teal:hover draws, for the same reason as the block above. */
+      .trail__item--current:hover {
+        box-shadow: 0 5px 0 var(--mt-teal-deep);
       }
       .trail__dot {
         width: 22px;
