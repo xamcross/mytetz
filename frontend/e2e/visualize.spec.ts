@@ -80,8 +80,25 @@ test('choosing Show me a diagram shows a diagram on the focus card', async ({ pa
   await stream.send(sseFrame('done', { contentKey: 'k1', grounded: false }));
   await stream.close();
 
-  const diagram = page.locator('app-media-renderer img');
+  const diagram = page.locator('app-media-renderer img.media__diagram');
   await expect(diagram).toBeVisible();
   await expect(diagram).toHaveAttribute('src', /^data:image\/svg\+xml/);
   await expect(diagram).toHaveAttribute('alt', 'A simple atom');
+
+  // The requirements ask for a zoomable diagram. One button toggles the frame's own class; the
+  // real width change is a unit-test concern, so this only proves the control reaches the DOM
+  // and does its one job — see media-renderer.component.spec.ts for the width assertion itself.
+  // Located by its own class, not its accessible name: the button's name changes with the state
+  // this test is about to change ("View larger" becomes "Fit to card"), so a name-based locator
+  // would stop matching the instant the click this test makes actually works.
+  const zoomButton = page.locator('app-media-renderer button.media__zoom');
+  const frame = page.locator('app-media-renderer .media__diagram-frame');
+  await expect(frame).not.toHaveClass(/media__diagram-frame--zoomed/);
+  await expect(zoomButton).toHaveAttribute('aria-pressed', 'false');
+
+  await zoomButton.click();
+
+  await expect(frame).toHaveClass(/media__diagram-frame--zoomed/);
+  await expect(zoomButton).toHaveAttribute('aria-pressed', 'true');
+  await expect(zoomButton).toHaveText('Fit to card');
 });
