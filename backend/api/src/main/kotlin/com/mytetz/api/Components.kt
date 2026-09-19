@@ -242,8 +242,13 @@ open class Components(
      * configs need two different credentials — see [FreemiusApiConfig]'s own KDoc — and keeping
      * them on separate chains means turning reconciliation on, or off, never touches whether the
      * checkout and webhook routes can build.
+     *
+     * This property is public, not private. `Application.module` also passes it to
+     * `billingRoutes`'s own `POST /api/billing/portal` route (issue #90). [reconcile] and that
+     * route share one client and one credential on purpose. A portal link and a reconciled state
+     * both come from the same Freemius API, under the same `FREEMIUS_API_KEY`.
      */
-    private val freemiusApiClient: FreemiusApiClient by lazy(freemiusApiClientFactory)
+    val freemiusApiClient: FreemiusApiClient by lazy(freemiusApiClientFactory)
 
     private val llm: LlmClient by lazy(llmFactory)
 
