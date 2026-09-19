@@ -1,6 +1,9 @@
 import { ErrorHandler } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { provideHttpClient } from '@angular/common/http';
+import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { FocusCardComponent } from './focus-card.component';
+import { SessionStore } from './session.store';
 import { rootTextMatchesBody } from './selection';
 import { SpanPayload, Verb } from '../core/models';
 
@@ -19,6 +22,12 @@ describe('FocusCardComponent', () => {
       imports: [FocusCardComponent],
       providers: [
         { provide: ErrorHandler, useValue: { handleError: (e: unknown) => errors.push(e) } },
+        // Only one spec below injects `SessionStore`, but the module can be configured once per
+        // test, before the first `TestBed.inject`. Adding the providers here, rather than inside
+        // that one test, keeps every test on the same setup.
+        SessionStore,
+        provideHttpClient(),
+        provideHttpClientTesting(),
       ],
     });
     fixture = TestBed.createComponent(FocusCardComponent);
@@ -32,9 +41,15 @@ describe('FocusCardComponent', () => {
     fixture.detectChanges();
   });
 
-  afterEach(() => window.getSelection()?.removeAllRanges());
+  afterEach(() => {
+    window.getSelection()?.removeAllRanges();
+    // A test below may turn on fake timers. Real timers are the default for every other test in
+    // this file, so each test leaves the clock the way it found it.
+    vi.useRealTimers();
+  });
 
   const bodyEl = (): HTMLElement => fixture.nativeElement.querySelector('.focus__body');
+  const statusEl = (): HTMLElement => fixture.nativeElement.querySelector('.focus__stream-status');
   const verbButton = (verb: Verb): HTMLButtonElement | null =>
     fixture.nativeElement.querySelector(`button[data-verb="${verb}"]`);
   /** True when the picker is on screen, which is the only time a verb can be pressed. */
@@ -272,5 +287,144 @@ describe('FocusCardComponent', () => {
     fixture.detectChanges();
 
     expect(pickerLive()).toBe(false);
+  });
+
+  it('takes the live region off the streamed text itself, so a screen reader never reads one token', () => {
+    // The old markup put `role="status"` on this paragraph, so every appended token counted as a
+    // change. A screen reader then read fragments, or read nothing useful. The live region moves
+    // to its own element below, and this paragraph turns its own announcement off.
+    fixture.componentRef.setInput('isStreaming', true);
+    fixture.componentRef.setInput('streamingText', 'The four pillars');
+    fixture.detectChanges();
+
+    const streaming: HTMLElement = fixture.nativeElement.querySelector('.focus__streaming');
+    expect(streaming.getAttribute('role')).toBeNull();
+    expect(streaming.getAttribute('aria-live')).toBe('off');
+  });
+
+  it('holds a status element in the DOM before any stream starts, with no text in it', () => {
+    // A screen reader ignores a live region that gets its first text at the same moment it joins
+    // the DOM. The element must exist, empty, from the very first render, and not only once a
+    // stream begins.
+    const status = statusEl();
+    expect(status).not.toBeNull();
+    expect(status.getAttribute('role')).toBe('status');
+    expect(status.textContent?.trim()).toBe('');
+  });
+
+  it('says the explanation is on its way once a stream starts', () => {
+    fixture.componentRef.setInput('isStreaming', true);
+    fixture.componentRef.setInput('streamingText', 'The four');
+    fixture.detectChanges();
+
+    expect(statusEl().textContent?.trim()).toBe('The explanation is on its way.');
+  });
+
+  it('says the explanation is ready once the stream ends', () => {
+    fixture.componentRef.setInput('isStreaming', true);
+    fixture.detectChanges();
+    fixture.componentRef.setInput('isStreaming', false);
+    fixture.detectChanges();
+
+    expect(statusEl().textContent?.trim()).toBe('The explanation is ready.');
+  });
+
+  it('announces one full stream exactly two times, and not once for every token', () => {
+    // `SessionStore.isStreaming` and `SessionStore.streamingText` are the two signals the reader
+    // page binds into this component's inputs. This test drives those same signals the way
+    // `SessionStore.explain` drives them: `isStreaming` true, `streamingText` reset, one append
+    // per token, then `isStreaming` false. The proof is then about a real stream, and not about a
+    // story of one.
+    vi.useFakeTimers();
+    const store = TestBed.inject(SessionStore);
+
+    const changes: string[] = [];
+    let previousText = statusEl().textContent?.trim() ?? '';
+    const recordChange = (): void => {
+      const text = statusEl().textContent?.trim() ?? '';
+      if (text !== previousText) {
+        changes.push(text);
+        previousText = text;
+      }
+    };
+
+    // Mirrors the two opening lines of `SessionStore.explain`.
+    store.isStreaming.set(true);
+    store.streamingText.set('');
+    fixture.componentRef.setInput('isStreaming', store.isStreaming());
+    fixture.componentRef.setInput('streamingText', store.streamingText());
+    fixture.detectChanges();
+    recordChange();
+
+    const tokens = [
+      'The',
+      ' four',
+      ' pillars',
+      ' of',
+      ' modern',
+      ' physics',
+      ' are',
+      ' mass',
+      ',',
+      ' energy',
+      ',',
+      ' space',
+      ' and',
+      ' time',
+      '.',
+    ];
+    for (const token of tokens) {
+      // Mirrors `SessionStore.explain`'s `delta` branch: one append per token.
+      store.streamingText.update((text) => text + token);
+      fixture.componentRef.setInput('streamingText', store.streamingText());
+      fixture.detectChanges();
+      recordChange();
+    }
+
+    // Mirrors the `finally` block of `SessionStore.explain`.
+    store.isStreaming.set(false);
+    fixture.componentRef.setInput('isStreaming', store.isStreaming());
+    fixture.detectChanges();
+    recordChange();
+
+    expect(changes).toEqual(['The explanation is on its way.', 'The explanation is ready.']);
+  });
+
+  it('clears "The explanation is ready." once it has stayed long enough to be read', () => {
+    // Four seconds — see the comment on `READY_STATUS_MILLIS` in the component for the reason.
+    // The test advances a fake clock, and it does not wait on a real one, so the test stays fast
+    // and exact.
+    vi.useFakeTimers();
+    fixture.componentRef.setInput('isStreaming', true);
+    fixture.detectChanges();
+    fixture.componentRef.setInput('isStreaming', false);
+    fixture.detectChanges();
+    expect(statusEl().textContent?.trim()).toBe('The explanation is ready.');
+
+    vi.advanceTimersByTime(4000);
+    fixture.detectChanges();
+
+    expect(statusEl().textContent?.trim()).toBe('');
+  });
+
+  it('clears its pending timer on destroy, so a card the learner has left writes to nothing', () => {
+    vi.useFakeTimers();
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+
+    fixture.componentRef.setInput('isStreaming', true);
+    fixture.detectChanges();
+    fixture.componentRef.setInput('isStreaming', false);
+    fixture.detectChanges();
+
+    // Finds the exact timer this component started for the "ready" text, by its own delay, so
+    // the assertion below cannot pass on an unrelated `clearTimeout` call from somewhere else.
+    const readyTimerCallIndex = setTimeoutSpy.mock.calls.findIndex(([, delay]) => delay === 4000);
+    expect(readyTimerCallIndex).toBeGreaterThanOrEqual(0);
+    const readyTimerId = setTimeoutSpy.mock.results[readyTimerCallIndex].value;
+
+    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout');
+    fixture.destroy();
+
+    expect(clearTimeoutSpy).toHaveBeenCalledWith(readyTimerId);
   });
 });
