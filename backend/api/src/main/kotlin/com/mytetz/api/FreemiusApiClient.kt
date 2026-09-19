@@ -7,11 +7,16 @@ import com.mytetz.billing.SubscriptionStatus
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.request.header
+import io.ktor.client.request.post
+import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
+import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
+import io.ktor.http.contentType
 import io.ktor.http.isSuccess
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
 import java.time.LocalDateTime
@@ -145,6 +150,34 @@ internal fun deriveState(resource: FreemiusSubscriptionResource, nowEpochMillis:
 private val json = Json { ignoreUnknownKeys = true }
 
 /**
+ * The request body of `POST /v1/products/{productId}/portal/login.json`.
+ *
+ * The SDK source confirms this shape: `packages/sdk/src/api/User.ts`
+ * (`github.com/Freemius/freemius-js`), lines 221-234. There,
+ * `retrieveHostedCustomerPortalByEmail(email: string)` sends a body with one field, `email`, to
+ * the same path this class calls. The generated type `packages/sdk/src/api/schema.d.ts`, lines
+ * 10733-10748, also allows an `id` field, as the other way to name a learner. This class never
+ * sends an id. [FreemiusApiClient.fetchPortalLink] resolves a learner only by the email from the
+ * signed-in session.
+ */
+@Serializable
+private data class FreemiusPortalLoginRequest(val email: String)
+
+/**
+ * The `201` response body of `POST /v1/products/{productId}/portal/login.json`. This class
+ * decodes only the field [FreemiusApiClient.fetchPortalLink] reads.
+ *
+ * The generated type `packages/sdk/src/api/schema.d.ts`, lines 10749-10766, confirms this shape.
+ * The `products/generate-portal-login-link` operation states one success status, `201`. Its body
+ * carries two optional fields, `token` and `link`. [link] defaults to null for that reason. This
+ * default is not the defect issue #89 fixed in `AccountView`: that fix covers a field this
+ * application's own route encodes back to the browser. This class only decodes a vendor body. It
+ * never re-encodes this type.
+ */
+@Serializable
+internal data class FreemiusPortalLoginResponse(val link: String? = null)
+
+/**
  * Calls Freemius's own subscription-retrieve endpoint, for [Reconciliation.reconcile]'s
  * `fetchState` seam.
  *
@@ -221,7 +254,89 @@ class FreemiusApiClient(
         }
     }
 
+    /**
+     * The hosted Freemius customer portal link for the learner at [email], or null.
+     *
+     * `BillingRoutes.kt`'s `POST /api/billing/portal` calls this function. The portal lets a
+     * signed-in learner cancel a subscription, change a payment method, or read an invoice. The
+     * portal page belongs to Freemius. This project builds no such page itself.
+     *
+     * The vendor's own published SDK source confirms every part of this call
+     * (`github.com/Freemius/freemius-js`). This function guesses nothing:
+     *
+     * - The method, `POST`, the path, `/v1/products/{productId}/portal/login.json`, and the body,
+     *   `{ email }`. The source: `packages/sdk/src/api/User.ts`, the function
+     *   `retrieveHostedCustomerPortalByEmail`, lines 221-234.
+     * - The base url, `https://fast-api.freemius.com`. The source: the same file [fetchState]
+     *   already cites for [BASE_URL], `packages/sdk/src/services/ApiService.ts`, line 13.
+     * - The `Authorization: Bearer {apiKey}` scheme. The source: `packages/sdk/src/api/client.ts`,
+     *   the same source [fetchState] cites.
+     * - The success status, `201`, and the response field, `link`. The source: the generated type
+     *   `packages/sdk/src/api/schema.d.ts`, the `products/generate-portal-login-link` operation,
+     *   lines 10749-10766. This function still checks with [io.ktor.http.isSuccess], the same 2xx
+     *   range [fetchState] checks. It does not pin the exact code `201`. The vendor's own SDK does
+     *   the same: `ApiBase.isGoodResponse` also checks a 2xx range, not one exact code.
+     *
+     * ## The vendor's documentation page names a different host
+     *
+     * The page `freemius.com/help/documentation/saas/saas-integration/` shows this same call
+     * against `api.freemius.com`, not `fast-api.freemius.com`. This function follows the SDK
+     * source instead. [fetchState] makes the same choice, for the same reason: the SDK is the one
+     * artefact this project can read line by line. This deployment's [FreemiusApiClient] already
+     * calls `fast-api.freemius.com` for every other request.
+     *
+     * ## The link never reaches the log
+     *
+     * The returned link signs [email]'s learner straight in to the vendor portal. No further
+     * check follows. This function, and each of its failure paths, never pass the link, the
+     * request body, or a caught exception's own message to [log]. Only a status code or an
+     * exception's class name reaches the log, the same rule [fetchState] states at length.
+     * [isAcceptableLink] is the one gate a fetched link passes before this function returns it.
+     *
+     * This function answers null for a request that does not complete, for a non-2xx status, for
+     * a body it cannot decode, for a body with no `link`, and for a `link` that does not start
+     * with `https://`. A learner who has no subscription to manage is the expected case behind
+     * more than one of these. `BillingRoutes.kt` answers each of them the same way: `404
+     * NO_SUBSCRIPTION`.
+     */
+    suspend fun fetchPortalLink(email: String): String? {
+        return try {
+            val response = httpClient.post(
+                "$BASE_URL/v1/products/${apiConfig.productId}/portal/login.json",
+            ) {
+                header(HttpHeaders.Authorization, "Bearer ${apiConfig.apiKey}")
+                contentType(ContentType.Application.Json)
+                setBody(json.encodeToString(FreemiusPortalLoginRequest(email)))
+            }
+
+            if (!response.status.isSuccess()) {
+                log.warn("the Freemius portal login request answered with status {}", response.status.value)
+                return null
+            }
+
+            val link = json.decodeFromString<FreemiusPortalLoginResponse>(response.bodyAsText()).link
+            isAcceptableLink(link)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // fetchState's own comment states the same rule for this line shape. Only the
+            // exception's class name reaches the log. The message and the stack trace never do.
+            log.warn("the Freemius portal login request did not complete: {}", e.javaClass.name)
+            null
+        }
+    }
+
     companion object {
         internal const val BASE_URL: String = "https://fast-api.freemius.com"
+
+        /**
+         * [link], when it starts with `https://`. Null for each other value.
+         *
+         * The vendor's schema documents [link] as `Format: uri`. It gives no promise of a scheme.
+         * This application redirects a learner's browser to the link. The link must not come back
+         * `http://`, or as any value that is not a real, secure vendor url. Issue #90, step 4,
+         * states this rule.
+         */
+        internal fun isAcceptableLink(link: String?): String? = link?.takeIf { it.startsWith("https://") }
     }
 }

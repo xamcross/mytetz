@@ -8,8 +8,10 @@ import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.client.engine.mock.respondError
+import io.ktor.client.engine.mock.toByteArray
 import io.ktor.client.request.HttpRequestData
 import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import kotlinx.coroutines.test.runTest
@@ -232,6 +234,116 @@ class FreemiusApiClientTest {
             appender.list.all { it.throwableProxy == null },
             "no line may carry a throwable either — logback prints its message as the stack trace, " +
                 "which is where a decode failure actually quotes the body",
+        )
+    }
+
+    // ------------------------------------------------------------------ fetchPortalLink
+
+    @Test
+    fun `the portal request Ktor sends matches the confirmed contract`() = runTest {
+        var captured: HttpRequestData? = null
+        val engine = MockEngine { request ->
+            captured = request
+            respond(
+                content = """{"link": "https://example.freemius.com/portal?token=abc"}""",
+                status = HttpStatusCode.Created,
+                headers = headersOf(HttpHeaders.ContentType, "application/json"),
+            )
+        }
+        val client = FreemiusApiClient(HttpClient(engine), apiConfig, clock = { FIXED_NOW })
+
+        client.fetchPortalLink("learner@example.com")
+
+        val request = requireNotNull(captured) { "no request reached the mock engine" }
+        assertEquals(HttpMethod.Post, request.method)
+        assertEquals(
+            "https://fast-api.freemius.com/v1/products/prod-1/portal/login.json",
+            request.url.toString(),
+        )
+        assertEquals("Bearer test-api-key", request.headers[HttpHeaders.Authorization])
+        assertEquals("""{"email":"learner@example.com"}""", String(request.body.toByteArray()))
+    }
+
+    @Test
+    fun `a 201 answer with a link gives that link`() = runTest {
+        val client = clientReturning(
+            """{"link": "https://example.freemius.com/portal?token=abc"}""",
+            status = HttpStatusCode.Created,
+        )
+
+        val link = client.fetchPortalLink("learner@example.com")
+
+        assertEquals("https://example.freemius.com/portal?token=abc", link)
+    }
+
+    @Test
+    fun `a non-2xx status answers null for the portal link too`() = runTest {
+        val engine = MockEngine { respondError(HttpStatusCode.NotFound) }
+        val client = FreemiusApiClient(HttpClient(engine), apiConfig, clock = { FIXED_NOW })
+
+        assertNull(client.fetchPortalLink("learner@example.com"))
+    }
+
+    @Test
+    fun `a request that does not complete answers null for the portal link too`() = runTest {
+        val engine = MockEngine { throw IOException("simulated network failure") }
+        val client = FreemiusApiClient(HttpClient(engine), apiConfig, clock = { FIXED_NOW })
+
+        assertNull(client.fetchPortalLink("learner@example.com"))
+    }
+
+    @Test
+    fun `an answer with no link answers null`() = runTest {
+        val client = clientReturning("""{"token": "abc"}""", status = HttpStatusCode.Created)
+
+        assertNull(client.fetchPortalLink("learner@example.com"))
+    }
+
+    /**
+     * Issue #90, step 4: this class accepts a link only when it starts with `https://`. The
+     * vendor's own schema gives no promise about the scheme. This class checks it before any
+     * caller sees the value.
+     */
+    @Test
+    fun `a link that does not start with https answers null`() = runTest {
+        val client = clientReturning(
+            """{"link": "http://example.freemius.com/portal?token=abc"}""",
+            status = HttpStatusCode.Created,
+        )
+
+        assertNull(client.fetchPortalLink("learner@example.com"))
+    }
+
+    /**
+     * The link signs a learner straight in to the vendor portal. It must never reach the log. See
+     * [FreemiusApiClient.fetchPortalLink]'s own KDoc for the rule. This fixture puts a link-shaped
+     * string inside a body malformed enough to fail decoding. `an undecodable body's contents
+     * never reach the log` uses the same technique for [fetchState]'s own log line.
+     */
+    @Test
+    fun `a portal link never reaches the log, even on a decode failure`() = runTest {
+        val appender = ListAppender<ILoggingEvent>().apply { start() }
+        val logger = LoggerFactory.getLogger("com.mytetz.api.FreemiusApiClient") as ch.qos.logback.classic.Logger
+        logger.addAppender(appender)
+
+        val client = clientReturning(
+            """{"link": "https://example.freemius.com/portal?token=leak", this is not valid json""",
+            status = HttpStatusCode.Created,
+        )
+        try {
+            client.fetchPortalLink("learner@example.com")
+        } finally {
+            logger.detachAppender(appender)
+        }
+
+        assertTrue(appender.list.isNotEmpty(), "the failure must still be logged")
+        assertTrue(
+            appender.list.none { it.formattedMessage.contains("leak") },
+            "the portal link must never reach the log",
+        )
+        assertTrue(
+            appender.list.all { it.throwableProxy == null },
+            "no line may carry a throwable either, the same rule fetchState's own test states",
         )
     }
 
