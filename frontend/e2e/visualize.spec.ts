@@ -51,8 +51,13 @@ const AFTER_VISUALIZE: SessionView = {
     k1: {
       diagram: {
         kind: 'SVG',
+        // xmlns is not decoration: a data:image/svg+xml URL is parsed as a standalone XML
+        // document, and a browser renders it in an <img> only when the root carries the SVG
+        // namespace. The backend's own sanitiser adds this on every document it lets through, so
+        // a stub without it is not the shape the real backend ever sends — see
+        // MediaRendererComponent's own KDoc for the full explanation.
         source:
-          '<svg viewBox="0 0 100 100"><title>A simple atom</title><circle cx="50" cy="50" r="30"/></svg>',
+          '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><title>A simple atom</title><circle cx="50" cy="50" r="30"/></svg>',
       },
       image: null,
     },
@@ -85,6 +90,16 @@ test('choosing Show me a diagram shows a diagram on the focus card', async ({ pa
   await expect(diagram).toHaveAttribute('src', /^data:image\/svg\+xml/);
   await expect(diagram).toHaveAttribute('alt', 'A simple atom');
 
+  // `toBeVisible()` above is true for an `<img>` element that exists in the layout, whether or
+  // not the browser actually decoded the image behind its `src`. A `data:image/svg+xml` URL is
+  // parsed as a standalone XML document, and a browser renders it in an `<img>` only when its
+  // root carries the SVG namespace. `naturalWidth` is the one property that answers "did this
+  // actually decode a picture", so this is the assertion that proves a learner really sees a
+  // diagram, not only that an element sits in the DOM.
+  await expect
+    .poll(async () => diagram.evaluate((img: HTMLImageElement) => img.naturalWidth))
+    .toBeGreaterThan(0);
+
   // The requirements ask for a zoomable diagram. One button toggles the frame's own class; the
   // real width change is a unit-test concern, so this only proves the control reaches the DOM
   // and does its one job — see media-renderer.component.spec.ts for the width assertion itself.
@@ -101,4 +116,46 @@ test('choosing Show me a diagram shows a diagram on the focus card', async ({ pa
   await expect(frame).toHaveClass(/media__diagram-frame--zoomed/);
   await expect(zoomButton).toHaveAttribute('aria-pressed', 'true');
   await expect(zoomButton).toHaveText('Fit to card');
+});
+
+/** What `GET /api/sessions/s1` returns for the case this suite must never actually meet: the
+ * server's own sanitiser has already refused a malformed document (`SvgSanitizerTest`'s own
+ * `malformed XML is refused` case), so a stub carrying one here stands in for a defect that
+ * reached the browser regardless — a bad deploy, a future bug in the sanitiser. This proves the
+ * browser's own behaviour on that source, real and unmocked: it raises `error`, not `load`. */
+const AFTER_VISUALIZE_BROKEN: SessionView = {
+  ...AFTER_VISUALIZE,
+  media: {
+    k1: {
+      diagram: {
+        kind: 'SVG',
+        source: '<svg xmlns="http://www.w3.org/2000/svg"><circle cx="1" cy="1" r="1"></svg>',
+      },
+      image: null,
+    },
+  },
+};
+
+test('shows a fallback message, not a broken image, when the diagram does not decode', async ({
+  page,
+}) => {
+  await stubCatalogueAndSession(page, AFTER_VISUALIZE_BROKEN);
+  const stream = await mockExplainStream(page, 's1');
+
+  await openQuantumPhysicsSession(page);
+  await selectPhrase(page, 'focus-body', 'Quantum mechanics');
+  await verb(page, 'Show me a diagram').click();
+
+  await stream.send(sseFrame('meta', { contentKey: 'k1', cached: false }));
+  await stream.send(sseFrame('delta', { t: 'A simple diagram of quantum mechanics.' }));
+  await stream.send(sseFrame('done', { contentKey: 'k1', grounded: false }));
+  await stream.close();
+
+  // Scoped to the component: `.focus__streaming` also carries `role="status"` while a stream
+  // runs, and this assertion must name the renderer's own fallback and not that unrelated one.
+  await expect(page.locator('app-media-renderer [role="status"]')).toHaveText(
+    'The diagram could not be shown.',
+  );
+  await expect(page.locator('app-media-renderer img.media__diagram')).toHaveCount(0);
+  await expect(page.locator('app-media-renderer button.media__zoom')).toHaveCount(0);
 });
