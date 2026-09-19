@@ -18,6 +18,12 @@ private val log = LoggerFactory.getLogger(BillingService::class.java)
 private val EVENT_TYPE_TO_STATUS: Map<String, SubscriptionStatus> = mapOf(
     "subscription.created" to SubscriptionStatus.ACTIVE,
     "subscription.renewal.retry" to SubscriptionStatus.ACTIVE,
+    // The renewal event. See license.events.ts: it carries data.to, the license's new expiration
+    // date, and it moves a PAST_DUE row back to ACTIVE the same way a renewal retry does.
+    // license.expired and license.cancelled stay unmapped: Entitlement.resolveActive already
+    // stops access by the clock, and mapping license.expired here would remove the PAST_DUE grace
+    // period a dunning retry still needs. See issue #72 for the reasoning in full.
+    "license.extended" to SubscriptionStatus.ACTIVE,
     "subscription.renewal.failed" to SubscriptionStatus.PAST_DUE,
     "subscription.cancelled" to SubscriptionStatus.CANCELLED,
     "payment.refund" to SubscriptionStatus.EXPIRED,
@@ -148,9 +154,15 @@ class BillingService(
      *
      * - The type, against [EVENT_TYPE_TO_STATUS]. An operator who adds a missing type to the map
      *   can then replay the very same event by hand.
-     * - The event's [FreemiusEvent.userReference].
-     * - The row that reference names. A missing row can be a transient state, because a webhook
-     *   can reach this server before the learner's own first sign-in does.
+     * - The event's [FreemiusEvent.userReference], or, when that is absent,
+     *   [FreemiusEvent.freemiusUserId]. `license.extended` — the renewal event — can carry no
+     *   `objects.user` at all, so the email lookup `BillingRoutes.kt` runs has nothing to resolve
+     *   and [FreemiusEvent.userReference] stays null. [FreemiusEvent.freemiusUserId] is then the
+     *   only way left to find the row: [BillingRepository.findByFreemiusUserId] reads it from the
+     *   value an earlier event already stored on that same row.
+     * - The row that reference, or that freemiusUserId, names. A missing row can be a transient
+     *   state, because a webhook can reach this server before the learner's own first sign-in
+     *   does.
      *
      * Each of the three logs its own alert token and returns without consuming the id.
      *
@@ -182,15 +194,26 @@ class BillingService(
             return false
         }
 
-        val userId = event.userReference
-        if (userId == null) {
-            log.warn("BILLING_UNKNOWN_USER event {} carries no userReference", event.id)
+        val userReference = event.userReference
+        val freemiusUserId = event.freemiusUserId
+        if (userReference == null && freemiusUserId == null) {
+            log.warn("BILLING_UNKNOWN_USER event {} carries no userReference and no freemiusUserId", event.id)
             return false
         }
 
-        val stored = repository.find(userId)
+        // A freemiusUserId lookup runs only when userReference is absent. A present userReference
+        // that names no row stays that way: it never falls through to a second, different lookup.
+        val stored = if (userReference != null) {
+            repository.find(userReference)
+        } else {
+            freemiusUserId?.let { repository.findByFreemiusUserId(it) }
+        }
         if (stored == null) {
-            log.warn("BILLING_UNKNOWN_USER event {} names user {}, which has no row", event.id, userId)
+            log.warn(
+                "BILLING_UNKNOWN_USER event {} names user {}, which has no row",
+                event.id,
+                userReference ?: freemiusUserId,
+            )
             return false
         }
 
