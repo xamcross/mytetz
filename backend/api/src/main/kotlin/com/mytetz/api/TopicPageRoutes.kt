@@ -7,7 +7,6 @@ import com.mytetz.graph.ExplanationRepository
 import com.mytetz.graph.GraphConfig
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.html.respondHtml
-import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 
@@ -23,6 +22,10 @@ import io.ktor.server.routing.get
  * never carry a cookie meant for one visitor. [modelFamily] is a plain `String`, not a lazy
  * `LlmClient`: see `Components.modelFamily`'s own KDoc for why a public page must never read
  * `llm.modelFamily`.
+ *
+ * An unknown or an unpublished slug answers with [respondSpaShell], the same shell issue #36's
+ * `spaRoutes()` answers an unmatched path with — one 404 page for the whole site, and not a
+ * second, blank one that only a bad `/topics/` link ever shows.
  */
 fun Route.topicPageRoutes(
     catalog: CatalogService,
@@ -37,7 +40,7 @@ fun Route.topicPageRoutes(
         // unpublished topic must not be distinguishable from an absent one.
         val topic = catalog.findBySlug(slug)?.takeIf { it.status == TopicStatus.PUBLISHED }
         if (topic == null) {
-            call.respond(HttpStatusCode.NotFound)
+            respondSpaShell(call, HttpStatusCode.NotFound)
             return@get
         }
 

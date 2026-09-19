@@ -193,4 +193,51 @@ class TopicPageRoutesTest {
         assertEquals(unknown.status, unpublished.status)
         assertEquals(HttpStatusCode.NotFound, unpublished.status)
     }
+
+    /**
+     * Issue #36's own answer for a path that no route matches is the Angular shell, at status
+     * 404, so a learner sees the real page chrome and not a blank body. A topic page's 404 must
+     * answer the same way, and not a second, different-looking 404 page. Wires spaRoutes() into
+     * the same routing block, so this compares the two real responses and not a re-typed copy of
+     * either one.
+     */
+    @Test
+    fun `an unknown slug's 404 body is the same shell spaRoutes answers with for an unmatched path`() = testApplication {
+        val c = components()
+        application {
+            routing {
+                topicPageRoutes(c.catalog, c.explanations, c.modelFamily)
+                spaRoutes()
+            }
+        }
+
+        val topicPage404 = client.get("/topics/no-such-topic")
+        val spaFallback404 = client.get("/some-path-no-route-matches")
+
+        assertEquals(HttpStatusCode.NotFound, topicPage404.status)
+        assertEquals(HttpStatusCode.NotFound, spaFallback404.status)
+        assertEquals(spaFallback404.bodyAsText(), topicPage404.bodyAsText())
+    }
+
+    @Test
+    fun `an unpublished slug's 404 body is also the same shell`() = testApplication {
+        val c = components()
+        runBlocking {
+            TopicRepository(c.mongo.database).upsert(
+                Topic(slug = "withdrawn-topic-2", title = "Withdrawn", category = "Physics", summary = "s", status = TopicStatus.DRAFT)
+            )
+        }
+        application {
+            routing {
+                topicPageRoutes(c.catalog, c.explanations, c.modelFamily)
+                spaRoutes()
+            }
+        }
+
+        val unpublished404 = client.get("/topics/withdrawn-topic-2")
+        val spaFallback404 = client.get("/some-path-no-route-matches")
+
+        assertEquals(HttpStatusCode.NotFound, unpublished404.status)
+        assertEquals(spaFallback404.bodyAsText(), unpublished404.bodyAsText())
+    }
 }

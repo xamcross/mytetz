@@ -2,6 +2,7 @@ package com.mytetz.api
 
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
+import io.ktor.server.application.ApplicationCall
 import io.ktor.server.http.content.resolveResource
 import io.ktor.server.request.path
 import io.ktor.server.response.header
@@ -72,6 +73,26 @@ internal fun cacheControlFor(resourcePath: String): String = when {
 }
 
 /**
+ * Answers [call] with the Angular shell, at [status].
+ *
+ * [spaRoutes]'s own unmatched-path branch uses this for its 404. `TopicPageRoutes.kt` uses the
+ * same function for an unknown or an unpublished slug, so a learner who opens a bad `/topics/`
+ * link sees the same page a bad link anywhere else on the site already shows, and not a second,
+ * blank-bodied 404 that this project renders nowhere else.
+ */
+internal suspend fun respondSpaShell(call: ApplicationCall, status: HttpStatusCode) {
+    val shell = call.resolveResource("index.html", STATIC_PACKAGE)
+    if (shell == null) {
+        call.respond(HttpStatusCode.NotFound)
+        return
+    }
+
+    call.response.status(status)
+    call.response.header(HttpHeaders.CacheControl, cacheControlFor("index.html"))
+    call.respond(shell)
+}
+
+/**
  * Serves the built Angular files, and gives a real 404 for a path that no route matches.
  *
  * Ktor 3.1.2 has no `fallback` hook for `staticResources`. Ktor adds one in 3.3. This function is
@@ -111,15 +132,7 @@ fun Route.spaRoutes() {
             return@get
         }
 
-        val shell = call.resolveResource("index.html", STATIC_PACKAGE)
-        if (shell == null) {
-            call.respond(HttpStatusCode.NotFound)
-            return@get
-        }
-
         val status = if (SpaRoutes.matches(call.request.path())) HttpStatusCode.OK else HttpStatusCode.NotFound
-        call.response.status(status)
-        call.response.header(HttpHeaders.CacheControl, cacheControlFor("index.html"))
-        call.respond(shell)
+        respondSpaShell(call, status)
     }
 }
