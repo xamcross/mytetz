@@ -275,9 +275,7 @@ describe('QuizPanelComponent', () => {
       fixture.detectChanges();
 
       const options = () =>
-        Array.from(
-          fixture.nativeElement.querySelectorAll('.quiz-panel__option'),
-        ) as HTMLElement[];
+        Array.from(fixture.nativeElement.querySelectorAll('.quiz-panel__option')) as HTMLElement[];
 
       expect(options()[0].querySelector('.quiz-panel__check')).toBeNull();
 
