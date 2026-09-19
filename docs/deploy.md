@@ -167,6 +167,33 @@ process is starting and a typo must not take the site down.
 | `MYTETZ_COOKIE_SECURE` | `true` | whether the cookie carries `Secure`. Only an explicit `false`, `0`, `no` or `off` turns it off. |
 | `MYTETZ_CLIENT_IP_HEADER` | `Fly-Client-IP` | which header the rate limiters key on. See section 2. |
 | `MYTETZ_MIGRATE_ON_BOOT` | off | whether the B0 migration runs at boot. Only the exact word `true` turns it on. Section "The B0 model migration" explains it. |
+| `MYTETZ_EVICTION_MAX_REQUEST_COUNT` | `0` | the most times a candidate document may have been read and still be evicted. `0` is a legal value, and it is also the default. |
+| `MYTETZ_EVICTION_MAX_AGE_DAYS` | `90` | how old a document must be before it is a candidate. `0` falls back to the default, because it would mark every document as old enough at once. |
+
+### Explanation-store eviction
+
+The `explanations` collection grows and never shrinks on its own. The Atlas M0 cluster has a
+512 MB limit. A full cluster refuses every write, and every new explanation then fails.
+`Components.evictExplanations` removes a document that nothing needs any more, so the collection
+stays bounded.
+
+A document is a candidate for eviction when all three of these are true:
+
+- It is not a seed. A seed keeps the pre-warm contract, so eviction never touches it.
+- Its `requestCount` is at or below `MYTETZ_EVICTION_MAX_REQUEST_COUNT`.
+- Its `createdAtEpochMillis` is older than `MYTETZ_EVICTION_MAX_AGE_DAYS`.
+
+`createdAtEpochMillis` is a plain number, not a BSON date, so a TTL index cannot serve this rule.
+The `created_at` index on `explanations` serves the age filter and the sort instead.
+
+A candidate document still survives when a session node points at it, through
+`nodes.explanationKey` in the `sessions` collection. Deleting the target of a live node would
+break that session's trail, so the job checks every candidate against that collection before it
+deletes anything.
+
+The job runs once at boot, at the end of `Components.bootstrap`, and once a day after that, from a
+loop in `Application.kt`. One run reads one bounded batch and never scans the whole collection.
+Grep the boot log for `EVICTION` to see what one run removed and what it scanned.
 
 ### Atlas network access — known constraint
 
