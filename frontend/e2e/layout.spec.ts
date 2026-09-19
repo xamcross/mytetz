@@ -504,16 +504,21 @@ test('Tab and Shift+Tab cycle inside the picker and never leave it', async ({ pa
       () => document.querySelector('[role="dialog"]')?.contains(document.activeElement) ?? false,
     );
 
+  // Five verbs since slice 4 added VISUALIZE. One Tab press per verb, plus one more to see the
+  // wrap back to the first.
+  const verbCount = 5;
   const forward: (string | null)[] = [];
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < verbCount + 1; i++) {
     expect(await insideNow(), `focus stays inside the picker on Tab press ${i}`).toBe(true);
     forward.push(await verbNow());
     await page.keyboard.press('Tab');
   }
-  expect(new Set(forward.slice(0, 4)).size, 'four distinct verbs are reachable').toBe(4);
-  expect(forward[4], 'the fifth Tab wraps back to the first verb').toBe(forward[0]);
+  expect(new Set(forward.slice(0, verbCount)).size, 'five distinct verbs are reachable').toBe(
+    verbCount,
+  );
+  expect(forward[verbCount], 'the wrapping Tab press returns to the first verb').toBe(forward[0]);
 
-  // The fifth press left focus on the second verb, so one Shift+Tab walks back to the first.
+  // The wrapping press left focus on the second verb, so one Shift+Tab walks back to the first.
   await page.keyboard.press('Shift+Tab');
   expect(await verbNow(), 'Shift+Tab walks back one verb').toBe(forward[0]);
 
@@ -521,7 +526,9 @@ test('Tab and Shift+Tab cycle inside the picker and never leave it', async ({ pa
   // `keydown.tab` alone never fires while Shift is down and this half needs its own binding.
   await page.keyboard.press('Shift+Tab');
   expect(await insideNow(), 'Shift+Tab keeps focus inside the picker').toBe(true);
-  expect(await verbNow(), 'Shift+Tab from the first verb wraps to the last').toBe(forward[3]);
+  expect(await verbNow(), 'Shift+Tab from the first verb wraps to the last').toBe(
+    forward[verbCount - 1],
+  );
 });
 
 test('every font comes from this origin, and none from a Google Fonts host', async ({ page }) => {
