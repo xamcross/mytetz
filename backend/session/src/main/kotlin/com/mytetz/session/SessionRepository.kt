@@ -98,14 +98,35 @@ class SessionRepository(database: MongoDatabase) {
      *
      * An empty [candidates] returns an empty set and asks Mongo nothing, because a caller with no
      * candidates has nothing to check.
+     *
+     * ## Why this reads a distinct field and not a decoded document
+     *
+     * The fly machine this runs on has 512 MB, and the JVM gets a fraction of that. A session
+     * holds a `nodes` array that grows for as long as the learner keeps drilling, and decoding a
+     * whole page of full [LearningSession] documents just to read one string field off each one
+     * spends memory this rule exists to protect. `distinct` is a server-side operation
+     * (https://www.mongodb.com/docs/manual/reference/method/db.collection.distinct/): the server
+     * scans the field and returns only the distinct values it finds, so no full document, and no
+     * `nodes` array, ever crosses the wire.
+     *
+     * The MongoDB Kotlin coroutine driver call is
+     * `MongoCollection<T>.distinct<R>(fieldName, filter): DistinctFlow<R>`, generic in the result
+     * type `R` and independent of the collection's own document type `T` — so this reads `String`
+     * values off a `MongoCollection<LearningSession>` with no intermediate type. `DistinctFlow` is
+     * a `Flow<R>`, so `.toList()` collects it the same way `collection.find(...)` is collected
+     * elsewhere in this class.
+     *
+     * The extra `.filter` after `.toList()` is still needed, and is not redundant with the query
+     * filter: per MongoDB's own documented rule, "if the value of the specified field is an
+     * array, `distinct()` considers each element of the array as a separate value" — so a session
+     * that matches the filter because *one* of its nodes carries a wanted key contributes *every*
+     * one of its nodes' keys to the distinct result, not only the one that matched.
      */
     suspend fun referencedExplanationKeys(candidates: Collection<String>): Set<String> {
         if (candidates.isEmpty()) return emptySet()
         val wanted = candidates.toSet()
-        return collection.find(Filters.`in`("nodes.explanationKey", wanted))
+        return collection.distinct<String>("nodes.explanationKey", Filters.`in`("nodes.explanationKey", wanted))
             .toList()
-            .flatMap { it.nodes }
-            .map { it.explanationKey }
             .filter { it in wanted }
             .toSet()
     }
