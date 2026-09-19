@@ -279,13 +279,25 @@ it so that it does not break an existing rule.
 The existing rule: `Components.kt` builds the model client lazily, and states why: "a
 catalogue-only deployment never builds one" (`Components.kt:66-67`), because
 `AnthropicLlmClient()` "demands `ANTHROPIC_API_KEY`... during construction" (`Components.kt:60-61`).
-Three tests pin this: `ComponentsTest.kt:275` ("module boots and serves without a model client"),
-`ComponentsTest.kt:377` ("the model client is not built unless something needs a model"), and
-`ComponentsTest.kt:399` ("bootstrap builds no model client when the migration is off").
+
+**Correction, made after the implementation plan review found it.** An earlier draft of this
+document cited three tests here, `ComponentsTest.kt:275`, `:377` and `:399`, by name and by line.
+Pull request #79 changed both the names and the lines. The citation below gives today's real
+names and real lines. Two tests still pin the rule this section needs:
+`ComponentsTest.kt:300` ("module boots and serves the catalogue even when the model client cannot
+build") and `ComponentsTest.kt:407` ("the model client is not built unless something needs a
+model"). A third test, `ComponentsTest.kt:434` ("bootstrap builds the model client once for
+pre-warm, even when the migration is off"), now states the opposite of what the earlier draft
+claimed for it: `Components.bootstrap()` builds the model client once, at boot, for every
+pre-warm run, on every deployment, whether or not the migration flag is on.
+
+The rule this document still relies on is narrower than "a boot builds no model client," and nothing
+above changes it: **a request-time route must never itself force a build of the model client.**
 `ExplanationGraph.keyFor` (`ExplanationGraph.kt:198-200`) reads `llm.modelFamily`, and that read is
-exactly what builds the client on first use. A public page must read `modelFamily` and must not
-read it through `llm.modelFamily`, or every visit to a topic page would demand
-`ANTHROPIC_API_KEY`, which the three tests above forbid.
+exactly what would force such a build on a plain request. A public page must read `modelFamily` and
+must not read it through `llm.modelFamily`, or every visit to a topic page would demand
+`ANTHROPIC_API_KEY` on a request that has nothing to do with pre-warm, which the two tests above
+forbid.
 
 **Decision.** Widen `AnthropicLlmClient.Companion.resolveModel` (`AnthropicLlmClient.kt:259-260`)
 from `internal` to public. The topic-page route then calls
@@ -490,14 +502,21 @@ This document changes that step. Neither addition happens, for two separate reas
 
 ### 9.2 Why the dedicated Ktor route wins over the fallback route
 
-`spaRoutes()` registers its catch-all with `get("{spaFallbackPath...}")`, a tailcard. Ktor's own
-routing documentation states that route resolution scores each match by specificity: a constant
-path segment outranks a parameter, and a parameter outranks a wildcard or a tailcard
-(https://ktor.io/docs/server-routing.html). A dedicated route such as `get("/topics/{slug}")` has
-one constant segment, `topics`, and one parameter, both of higher quality than the fallback's bare
-tailcard. Ktor therefore matches the dedicated route first for any request under `/topics/`,
-regardless of which route the code registers first. The same reasoning applies to
-`get("/glossary")`, once #48 ships it.
+`spaRoutes()` registers its catch-all with `get("{spaFallbackPath...}")`, a tailcard. Ktor's routing
+engine scores each match with a numeric "quality."
+
+**Correction, made after the implementation plan review found it.** An earlier draft of this
+document cited `https://ktor.io/docs/server-routing.html` for the quality order below. That page
+does not state it. The real source is the pinned Ktor version's own routing code:
+`RouteSelector.kt`, version 3.1.2 (the version `gradle/libs.versions.toml` names), read at
+https://raw.githubusercontent.com/ktorio/ktor/3.1.2/ktor-server/ktor-server-core/common/src/io/ktor/server/routing/RouteSelector.kt.
+That file defines four quality constants: a constant path segment scores `1.0`, a path parameter
+scores `0.8`, a wildcard scores `0.5`, and a tailcard scores `0.1`.
+
+A dedicated route such as `get("/topics/{slug}")` scores one constant segment (`1.0`) plus one path
+parameter (`0.8`). The fallback's bare tailcard scores `0.1`. Ktor therefore matches the dedicated
+route first for any request under `/topics/`, regardless of which route the code registers first.
+The same reasoning applies to `get("/glossary")`, once #48 ships it.
 
 ### 9.3 The catalogue tile is a plain link, not a router link
 

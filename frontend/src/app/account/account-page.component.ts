@@ -111,14 +111,6 @@ const POLL_TIMEOUT_MILLIS = 30000;
             >
               Sign out
             </button>
-            <button
-              type="button"
-              class="mt-pill mt-pill--ghost"
-              data-action="sign-out-everywhere"
-              (click)="signOutEverywhere()"
-            >
-              Sign out everywhere
-            </button>
             @if (!confirmingDelete()) {
               <button
                 type="button"
@@ -343,9 +335,14 @@ export class AccountPageComponent implements OnInit {
   /** The period end, as a date, or `null` when the account has none. The method formats the date
    * in UTC. `AllowanceMeterComponent.formatDate` does the same, for the same reason: a spec pins
    * the date against one fixed instant, and a format that read the machine's own zone would print
-   * different text on a different machine. */
-  periodEndText(epochMillis: number | null): string | null {
-    return epochMillis === null ? null : formatDate(epochMillis);
+   * different text on a different machine.
+   *
+   * Treats an absent key (`undefined`) the same way as an explicit `null`. `AccountView`'s own
+   * KDoc names the trap: the route serializer once omitted this key from the wire for a trial
+   * learner. The backend fix removes that cause. This check stays as a second guard, against a
+   * stale cached answer, and against a later regression that puts a default back. */
+  periodEndText(epochMillis: number | null | undefined): string | null {
+    return epochMillis == null ? null : formatDate(epochMillis);
   }
 
   async signOut(): Promise<void> {
@@ -359,16 +356,6 @@ export class AccountPageComponent implements OnInit {
       await this.account.load();
     } catch {
       this.actionError.set('Could not sign out. Check your connection and try again.');
-    }
-  }
-
-  async signOutEverywhere(): Promise<void> {
-    this.actionError.set(null);
-    try {
-      await this.api.signOutAll();
-      await this.account.load();
-    } catch {
-      this.actionError.set('Could not sign out everywhere. Check your connection and try again.');
     }
   }
 

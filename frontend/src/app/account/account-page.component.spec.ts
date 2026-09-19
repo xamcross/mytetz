@@ -126,6 +126,25 @@ describe('AccountPageComponent', () => {
     expect(text()).not.toContain('1970');
   });
 
+  it('the account page shows the status of a trial learner', async () => {
+    await mount((req) => req.flush(trialing));
+
+    expect(text()).toContain('TRIALING');
+  });
+
+  it('the account page shows no "Invalid Date" when the wire body has no period-end key', async () => {
+    // The route serializer once omitted `currentPeriodEndsAtEpochMillis` from the wire body of a
+    // trial learner, because the field's value equalled its declared default — see issue #89.
+    // This test flushes that exact shape: the key is absent, and not `null`. It proves the page
+    // treats an absent key the same safe way.
+    const { currentPeriodEndsAtEpochMillis: _omittedPeriodEnd, ...bodyWithNoPeriodEndKey } =
+      trialing;
+    await mount((req) => req.flush(bodyWithNoPeriodEndKey));
+
+    expect(text()).not.toContain('Invalid Date');
+    expect(text()).not.toContain('Current period ends');
+  });
+
   it('the account page reports a failed account read', async () => {
     // `AccountStore.error` is set on any non-401 failure. Before this page existed, no template
     // rendered it — see the class doc comment. A learner who reads a stale meter needs to know
@@ -135,26 +154,14 @@ describe('AccountPageComponent', () => {
     expect(text()).toContain('Could not load your account');
   });
 
-  it('the account page offers sign out everywhere', async () => {
+  it('the account page offers no sign out everywhere control', async () => {
+    // Issue #88 removes the control. The monetization spec listed it in slice B4, "Hardening". The
+    // owner decided that the page is clearer without it, and accepted the cost: a learner can no
+    // longer end a session on another device from this page. `AuthRoutes.kt` keeps the route for a
+    // later security page or an operator, and no page in this app calls it.
     await mount((req) => req.flush(active));
 
-    const button = fixture.nativeElement.querySelector(
-      '[data-action="sign-out-everywhere"]',
-    ) as HTMLButtonElement;
-    button.click();
-
-    const signOutReq = http.expectOne('/api/auth/sign-out-all');
-    expect(signOutReq.request.method).toBe('POST');
-    signOutReq.flush(null, { status: 204, statusText: 'No Content' });
-    await fixture.whenStable();
-
-    // A successful sign-out-everywhere also clears this browser's own cookie. `AuthRoutes.kt`
-    // calls `clearSessionCookie` on this route. The next account read then answers 401, and the
-    // store's own rule clears the view: a 401 means signed out.
-    http.expectOne('/api/account').flush(signedOut, { status: 401, statusText: '' });
-    await fixture.whenStable();
-
-    expect(store.view()).toBeNull();
+    expect(fixture.nativeElement.querySelector('[data-action="sign-out-everywhere"]')).toBeNull();
   });
 
   it('sign out posts to the single-session route', async () => {

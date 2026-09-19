@@ -1,5 +1,6 @@
-import { Component, inject } from '@angular/core';
+import { Component, inject, signal } from '@angular/core';
 import { AccountStore } from '../core/account.store';
+import { ApiService } from '../core/api.service';
 
 /** The statuses that carry a live count. Every other status — `NONE`, `EXPIRED`, or a status this
  * client does not yet know — shows a subscribe link and no count, because there is nothing true
@@ -41,9 +42,15 @@ const METERED_STATUSES: ReadonlySet<string> = new Set([
             }
           }
         } @else {
-          <!-- Present and inert, the same as the wall panel's own button: there is no checkout
-               route yet for either one to call. Task 13 wires both. -->
-          <button type="button" class="mt-pill mt-pill--coral allowance-meter__subscribe">
+          @if (subscribeError(); as message) {
+            <span class="allowance-meter__error" role="alert">{{ message }}</span>
+          }
+          <button
+            type="button"
+            class="mt-pill mt-pill--coral allowance-meter__subscribe"
+            [disabled]="subscribing()"
+            (click)="subscribe()"
+          >
             Subscribe
           </button>
         }
@@ -70,12 +77,48 @@ const METERED_STATUSES: ReadonlySet<string> = new Set([
         color: var(--mt-muted);
         white-space: nowrap;
       }
+      .allowance-meter__error {
+        color: var(--mt-err-ink);
+        font-weight: 700;
+      }
     `,
   ],
 })
 export class AllowanceMeterComponent {
   private readonly account = inject(AccountStore);
+  private readonly api = inject(ApiService);
   readonly view = this.account.view;
+
+  /** True while a checkout request is in flight. The button stays disabled during this time.
+   * This stops a second click from sending a second request before the redirect happens. See
+   * `WallPanelComponent.subscribing`, which the same pattern comes from. */
+  readonly subscribing = signal(false);
+  /** The message for a failed checkout request, or `null` when there is no failure. */
+  readonly subscribeError = signal<string | null>(null);
+
+  /** Asks the backend for a checkout URL, then follows it. See `WallPanelComponent.subscribe`,
+   * which this method copies: the meter and the wall panel show the same button for the same
+   * reason, so both start checkout the same way. */
+  async subscribe(): Promise<void> {
+    if (this.subscribing()) return;
+    this.subscribing.set(true);
+    this.subscribeError.set(null);
+    try {
+      const { url } = await this.api.checkout();
+      this.redirect(url);
+      // This method leaves `subscribing` set to true after success. The browser is about to
+      // leave this page, so there is nothing left to re-enable.
+    } catch {
+      this.subscribeError.set('Could not start checkout. Check your connection and try again.');
+      this.subscribing.set(false);
+    }
+  }
+
+  /** Sends the browser to [url]. This method stays separate so a test can replace it. jsdom does
+   * not implement real navigation, so a test cannot check `window.location` directly. */
+  redirect(url: string): void {
+    window.location.href = url;
+  }
 
   /** True for a status that carries a live count. See [METERED_STATUSES]. */
   metered(status: string): boolean {
@@ -88,9 +131,11 @@ export class AllowanceMeterComponent {
     return status === 'TRIALING' ? 'in your trial' : 'today';
   }
 
-  /** The trial end, as a date, or `null` before a trial has one. */
-  trialEndText(epochMillis: number | null): string | null {
-    return epochMillis === null ? null : formatDate(epochMillis);
+  /** The trial end, as a date, or `null` before a trial has one. Treats an absent key
+   * (`undefined`) the same way as an explicit `null` — see `periodEndText` on
+   * `AccountPageComponent` for the full reason. */
+  trialEndText(epochMillis: number | null | undefined): string | null {
+    return epochMillis == null ? null : formatDate(epochMillis);
   }
 
   /**
@@ -101,9 +146,12 @@ export class AllowanceMeterComponent {
    *
    * Carries the date and not only the time. A reset can land on the day after the one the learner
    * is reading on, and a time with no date would then read as today's when it is tomorrow's.
+   *
+   * Treats an absent key (`undefined`) the same way as an explicit `null` — see `periodEndText`
+   * on `AccountPageComponent` for the full reason.
    */
-  resetText(epochMillis: number | null): string | null {
-    return epochMillis === null ? null : formatDateTime(epochMillis);
+  resetText(epochMillis: number | null | undefined): string | null {
+    return epochMillis == null ? null : formatDateTime(epochMillis);
   }
 }
 
