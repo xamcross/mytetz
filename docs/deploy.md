@@ -148,7 +148,7 @@ live in the process, so they reset whenever the machine cold-starts.
 
 ### 2.2 Every variable the backend reads
 
-44 variables, and each one is listed here and in `.env.example`. The Default
+45 variables, and each one is listed here and in `.env.example`. The Default
 column gives `none` for a name with no default in code, and the real default
 for every other name.
 
@@ -206,6 +206,7 @@ needs it, until an operator sets it.
 | `MYTETZ_PUBLIC_BASE_URL` | none | the absolute base url of this deployment, such as `https://mytetz.com`. Email sign-in and Google sign-in both answer `503` until this is set. |
 | `MYTETZ_EVICTION_MAX_REQUEST_COUNT` | `0` | the most times a candidate document may have been read and still be evicted. `0` is a legal value, and it is also the default. |
 | `MYTETZ_EVICTION_MAX_AGE_DAYS` | `90` | how old a document must be before it is a candidate. `0` falls back to the default, because it would mark every document as old enough at once. |
+| `MYTETZ_COMMONS_IMAGES` | off | whether a `VISUALIZE` answer may ask Wikimedia Commons for an image. Only the exact word `true` turns it on. See "Wikimedia Commons (the Visualize image lookup)" below. |
 
 ### Explanation-store eviction
 
@@ -802,8 +803,30 @@ genuinely renewed carries a period end a full billing period out. Read both fiel
 
 ## Wikimedia Commons (the Visualize image lookup)
 
-The `VISUALIZE` verb draws a diagram, and it also asks Wikimedia Commons for one licensed image of
-the same span. This section names the one new outbound dependency that feature adds.
+The `VISUALIZE` verb draws a diagram. It also asks Wikimedia Commons for one licensed image of the
+same span, but only when an operator turns this feature on. This section names the one new outbound
+dependency that feature adds, and how to turn it on.
+
+**Off by default. `MYTETZ_COMMONS_IMAGES` turns it on.** Wikimedia Commons has no safe-search
+filter this project could confirm exists. A search over its whole file collection can return a
+photo that does not belong on a page for a learner — a phrase from biology, medicine or history is
+the real risk here, not a diagram topic. So the lookup starts off, on every deployment, until an
+operator reads real search results for real phrases and decides the risk is acceptable. With the
+switch off, `VISUALIZE` still draws its diagram; it never asks Commons for anything, and
+`Components` never even builds an `HttpClient` for it.
+
+Only the exact word `true` turns it on, the same rule `MYTETZ_MIGRATE_ON_BOOT` and
+`MYTETZ_RECONCILE_ON_BOOT` already use. `MYTETZ_COMMONS_IMAGES` holds no secret and no credential,
+but this project turns a feature like this on with `fly secrets set`, the same as those two flags,
+because that command needs no code change and no redeploy — the `[env]` block in `fly.toml` is for
+a value checked into the repository, and this is an operator's own runtime decision instead:
+
+```
+fly secrets set MYTETZ_COMMONS_IMAGES=true --app mytetz
+```
+
+The boot log states which way the switch is set, on every boot: `Commons images are on` or
+`Commons images are off`.
 
 **Two different hosts, from two different places.** The server itself calls
 `commons.wikimedia.org`, once per `VISUALIZE` generation, to search for an image and read its
