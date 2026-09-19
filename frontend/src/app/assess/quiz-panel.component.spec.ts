@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
@@ -260,5 +261,60 @@ describe('QuizPanelComponent', () => {
 
     expect(component.error()).not.toBeNull();
     expect(component.phase()).not.toBe('result');
+  });
+
+  /**
+   * Issue #103. `aria-pressed` already states the chosen option for a screen reader. A sighted
+   * learner with low vision needs a second signal that does not depend on colour: a check glyph,
+   * plus a heavier edge. The glyph carries `aria-hidden`, because `aria-pressed` already says the
+   * same thing and a screen reader must not read it twice.
+   */
+  describe('the chosen option carries a second signal that is not a colour', () => {
+    it('shows no check glyph until an option is chosen, then shows one, hidden from a screen reader', async () => {
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      const options = () =>
+        Array.from(
+          fixture.nativeElement.querySelectorAll('.quiz-panel__option'),
+        ) as HTMLElement[];
+
+      expect(options()[0].querySelector('.quiz-panel__check')).toBeNull();
+
+      component.choose(0);
+      fixture.detectChanges();
+
+      const check = options()[0].querySelector('.quiz-panel__check');
+      expect(check).not.toBeNull();
+      expect(check?.getAttribute('aria-hidden')).toBe('true');
+      // Every other option stays plain.
+      expect(options()[1].querySelector('.quiz-panel__check')).toBeNull();
+    });
+
+    it('keeps aria-pressed on the chosen option, alongside the glyph', async () => {
+      await fixture.whenStable();
+      component.choose(1);
+      fixture.detectChanges();
+
+      const options = Array.from(
+        fixture.nativeElement.querySelectorAll('.quiz-panel__option'),
+      ) as HTMLElement[];
+      expect(options[1].getAttribute('aria-pressed')).toBe('true');
+      expect(options[0].getAttribute('aria-pressed')).toBe('false');
+    });
+
+    it('gives the chosen option a thicker edge than an unchosen one, in the CSS and not only the fill', () => {
+      // A colour change alone is not a second signal. The rule itself must declare a heavier
+      // border, read from the real file and not copied here.
+      const source = readFileSync('src/app/assess/quiz-panel.component.ts', 'utf8');
+      const base = source.match(/\.quiz-panel__option\s*\{([^}]*)\}/)?.[1];
+      const chosen = source.match(/\.quiz-panel__option--chosen\s*\{([^}]*)\}/)?.[1];
+      if (!base) throw new Error('quiz-panel.component.ts must declare .quiz-panel__option');
+      if (!chosen) {
+        throw new Error('quiz-panel.component.ts must declare .quiz-panel__option--chosen');
+      }
+      expect(base).toMatch(/border(?:-width)?:\s*var\(--mt-border-w\)/);
+      expect(chosen).toMatch(/border-width:\s*3px/);
+    });
   });
 });

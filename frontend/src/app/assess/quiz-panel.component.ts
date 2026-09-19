@@ -58,11 +58,16 @@ type QuizPhase = 'loading' | 'question' | 'result';
           @for (option of currentQuestion()?.options ?? []; track $index) {
             <button
               type="button"
-              class="mt-pill quiz-panel__option"
+              class="quiz-panel__option"
               [class.quiz-panel__option--chosen]="chosenIndex() === $index"
               [attr.aria-pressed]="chosenIndex() === $index"
               (click)="choose($index)"
             >
+              @if (chosenIndex() === $index) {
+                <!-- aria-pressed already states this fact for a screen reader, so the glyph
+                     itself stays hidden from one. -->
+                <span class="quiz-panel__check" aria-hidden="true">✓</span>
+              }
               {{ option }}
             </button>
           }
@@ -122,13 +127,51 @@ type QuizPhase = 'loading' | 'question' | 'result';
         flex-direction: column;
         gap: 8px;
       }
+      /* Issue #103, finding F10. A pill is a one-line primitive: line-height: 1 and a 999px
+         radius. A quiz option is prose, and a long one must wrap onto a second line with no
+         overlap, so it draws its own block instead of reusing .mt-pill. */
       .quiz-panel__option {
+        display: block;
+        width: 100%;
         text-align: left;
-        justify-content: flex-start;
+        padding: 13px 15px;
+        border: var(--mt-border-w) solid var(--mt-edge);
+        border-radius: var(--mt-r-row);
+        background: var(--mt-surface);
+        color: var(--mt-ink);
+        font: inherit;
+        font-size: 15px;
+        font-weight: 600;
+        line-height: 1.45;
+        transition: background var(--mt-dur-press) var(--mt-ease-press);
       }
+      /* (hover: hover) and not a plain :hover: see styles.css's own comment on .mt-pill:hover
+         for why a touch screen needs this guard. */
+      @media (hover: hover) {
+        .quiz-panel__option:hover:not(:disabled) {
+          background: var(--mt-sunk);
+        }
+      }
+      .quiz-panel__option:active:not(:disabled) {
+        background: var(--mt-chip);
+      }
+      .quiz-panel__option:disabled {
+        opacity: 0.55;
+        cursor: not-allowed;
+      }
+      /* aria-pressed already states this for a screen reader. A sighted learner with low vision
+         needs a signal that is not a colour too: a heavier edge, plus the check glyph below. The
+         amber fill stays, but it is no longer the only signal. */
       .quiz-panel__option--chosen {
         background: var(--mt-amber-bg);
         border-color: var(--mt-amber);
+        border-width: 3px;
+        color: var(--mt-amber-ink);
+      }
+      .quiz-panel__check {
+        display: inline-block;
+        margin-right: 6px;
+        font-weight: 800;
         color: var(--mt-amber-ink);
       }
       .quiz-panel__actions {
