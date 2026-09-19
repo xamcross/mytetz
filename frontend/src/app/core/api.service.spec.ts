@@ -164,6 +164,17 @@ describe('ApiService', () => {
     });
   });
 
+  it('fetches a customer portal url', async () => {
+    const promise = service.portal();
+    const req = http.expectOne('/api/billing/portal');
+    expect(req.request.method).toBe('POST');
+    req.flush({ url: 'https://example.freemius.com/portal?token=abc' });
+
+    await expect(promise).resolves.toEqual({
+      url: 'https://example.freemius.com/portal?token=abc',
+    });
+  });
+
   it('starts a quiz for one node and posts its kind and nodeId', async () => {
     const promise = service.startQuiz('s1', 'TEST_ME', 'n1');
     const req = http.expectOne('/api/sessions/s1/quizzes');

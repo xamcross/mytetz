@@ -34,11 +34,28 @@ private const val SIGNATURE_HEADER: String = "X-Signature"
  */
 const val MAX_WEBHOOK_BODY_BYTES: Long = 16_384
 
+/**
+ * How many times one signed-in learner may call `POST /api/billing/portal` in
+ * [PORTAL_WINDOW_MILLIS].
+ *
+ * Each call spends one outbound request against the Freemius API. The request uses this
+ * deployment's own shared `FREEMIUS_API_KEY` — the same key [Components.reconcile] uses. A
+ * learner who loops this route spends that shared key's own quota at the vendor. Five in ten
+ * minutes is generous for an honest learner. A learner opens the portal at most a few times per
+ * visit. The limit still bounds a loop.
+ */
+const val PORTAL_REQUESTS_PER_LEARNER: Int = 5
+
+const val PORTAL_WINDOW_MILLIS: Long = 10L * 60 * 1000
+
 @Serializable
 data class CheckoutResponse(val url: String)
 
+@Serializable
+data class PortalResponse(val url: String)
+
 /**
- * `POST /api/billing/checkout` and `POST /api/billing/webhook`.
+ * `POST /api/billing/checkout`, `POST /api/billing/portal`, and `POST /api/billing/webhook`.
  *
  * ## The checkout link carries an email, and nothing else
  *
@@ -47,6 +64,21 @@ data class CheckoutResponse(val url: String)
  * gives verbatim, with the signed-in learner's own email as `user_email` and `readonly_user=true`
  * so the learner cannot change that address at the till. No API call opens a session; the string
  * is the whole answer.
+ *
+ * ## The portal route reads only the session
+ *
+ * `POST /api/billing/portal` takes the signed-in learner's email from
+ * [AccountService.resolveSession]. It reads no email, and no id, from the caller. See
+ * [FreemiusApiClient.fetchPortalLink]'s own KDoc for the vendor call this route makes with that
+ * email. [FreemiusApiClient.fetchPortalLink] answers null for two different cases: a learner with
+ * no active subscription, and a failed vendor call. This route cannot tell the two apart, and it
+ * need not: it answers `404 NO_SUBSCRIPTION` for both. [portalLimiter] also gates this route,
+ * keyed on the signed-in learner's own id — see the route's own comment for why.
+ *
+ * [freemiusApiClient] is a factory, for the same reason [freemiusConfig] is one, two paragraphs
+ * down. `Components.freemiusApiClient` is `by lazy`, on a chain that throws when
+ * `FREEMIUS_API_KEY` or `FREEMIUS_PRODUCT_ID` is missing. A direct read here would force that
+ * chain before `Application.module()` finishes its own setup.
  *
  * ## The webhook route reads the raw body before anything parses it
  *
@@ -84,7 +116,12 @@ fun Route.billingRoutes(
     account: AccountService,
     billing: BillingService,
     freemiusConfig: () -> FreemiusConfig,
+    freemiusApiClient: () -> FreemiusApiClient,
     cookies: PrincipalCookieConfig,
+    portalLimiter: FixedWindowRateLimiter = FixedWindowRateLimiter(
+        limit = PORTAL_REQUESTS_PER_LEARNER,
+        windowMillis = PORTAL_WINDOW_MILLIS,
+    ),
     // See `newConfigMissingLog`'s own KDoc.
     configMissingLogged: MutableSet<String> = newConfigMissingLog(),
 ) {
@@ -113,6 +150,59 @@ fun Route.billingRoutes(
             "?user_email=$encodedEmail&readonly_user=true"
 
         call.respond(CheckoutResponse(url))
+    }
+
+    post("/api/billing/portal") {
+        val user = Principals.readSessionId(call, cookies)?.let { account.resolveSession(it) }
+        if (user == null) {
+            call.respond(HttpStatusCode.Unauthorized, ApiError("SIGN_IN_REQUIRED", "sign in to manage a subscription"))
+            return@post
+        }
+
+        // This limiter keys on the learner's own id. Every other limiter in this file keys on
+        // `ClientAddress` instead. Those limiters run before sign-in. They must still bound a
+        // caller with no session, and a per-address key is the only key such a caller has. This
+        // route already needs a session, so that case does not apply here. This limiter also
+        // protects a different resource: one outbound Freemius call, spent under this
+        // deployment's own shared `FREEMIUS_API_KEY`, for one learner. A per-address key would
+        // share one bucket between every learner behind the same address — an office, a campus, a
+        // phone carrier. It would also let a learner escape the limit by a changed address. The
+        // check runs after the sign-in check, because there is no learner id before that point.
+        // It runs before the vendor call, so a refused request never reaches Freemius.
+        if (!portalLimiter.tryAcquire(user.id)) {
+            log.info("rate limited portal request for user {}", user.id)
+            call.respondRefusal(
+                Refusal(
+                    HttpStatusCode.TooManyRequests,
+                    ApiError(
+                        code = "RATE_LIMITED",
+                        message = "too many portal requests; try again shortly",
+                        retryAfter = PORTAL_WINDOW_MILLIS / 1000,
+                    ),
+                ),
+            )
+            return@post
+        }
+
+        val client = buildConfiguredOrNull(configMissingLogged, freemiusApiClient)
+        if (client == null) {
+            call.respond(
+                HttpStatusCode.ServiceUnavailable,
+                ApiError("BILLING_UNAVAILABLE", "billing is not available right now"),
+            )
+            return@post
+        }
+
+        // The same normalisation, and the same stored-address fallback, the checkout route above
+        // uses. See that route's own comment.
+        val email = MagicLinkService.normaliseEmail(user.email) ?: user.email
+        val link = client.fetchPortalLink(email)
+        if (link == null) {
+            call.respond(HttpStatusCode.NotFound, ApiError("NO_SUBSCRIPTION", "no subscription to manage"))
+            return@post
+        }
+
+        call.respond(PortalResponse(link))
     }
 
     post("/api/billing/webhook") {
