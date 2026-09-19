@@ -148,7 +148,7 @@ live in the process, so they reset whenever the machine cold-starts.
 
 ### 2.2 Every variable the backend reads
 
-44 variables, and each one is listed here and in `.env.example`. The Default
+45 variables, and each one is listed here and in `.env.example`. The Default
 column gives `none` for a name with no default in code, and the real default
 for every other name.
 
@@ -206,6 +206,7 @@ needs it, until an operator sets it.
 | `MYTETZ_PUBLIC_BASE_URL` | none | the absolute base url of this deployment, such as `https://mytetz.com`. Email sign-in and Google sign-in both answer `503` until this is set. |
 | `MYTETZ_EVICTION_MAX_REQUEST_COUNT` | `0` | the most times a candidate document may have been read and still be evicted. `0` is a legal value, and it is also the default. |
 | `MYTETZ_EVICTION_MAX_AGE_DAYS` | `90` | how old a document must be before it is a candidate. `0` falls back to the default, because it would mark every document as old enough at once. |
+| `MYTETZ_COMMONS_IMAGES` | off | whether a `VISUALIZE` answer may ask Wikimedia Commons for an image. Only the exact word `true` turns it on. See "Wikimedia Commons (the Visualize image lookup)" below. |
 
 ### Explanation-store eviction
 
@@ -797,3 +798,53 @@ the downgrade. `failedPayments` is the field that decides how confident that dec
 still inside a dunning retry window carries a retry date only days out. A subscription that has
 genuinely renewed carries a period end a full billing period out. Read both fields together, not
 `failedPayments` alone.
+
+---
+
+## Wikimedia Commons (the Visualize image lookup)
+
+The `VISUALIZE` verb draws a diagram. It also asks Wikimedia Commons for one licensed image of the
+same span, but only when an operator turns this feature on. This section names the one new outbound
+dependency that feature adds, and how to turn it on.
+
+**Off by default. `MYTETZ_COMMONS_IMAGES` turns it on.** Wikimedia Commons has no safe-search
+filter this project could confirm exists. A search over its whole file collection can return a
+photo that does not belong on a page for a learner — a phrase from biology, medicine or history is
+the real risk here, not a diagram topic. So the lookup starts off, on every deployment, until an
+operator reads real search results for real phrases and decides the risk is acceptable. With the
+switch off, `VISUALIZE` still draws its diagram; it never asks Commons for anything, and
+`Components` never even builds an `HttpClient` for it.
+
+Only the exact word `true` turns it on, the same rule `MYTETZ_MIGRATE_ON_BOOT` and
+`MYTETZ_RECONCILE_ON_BOOT` already use. `MYTETZ_COMMONS_IMAGES` holds no secret and no credential,
+but this project turns a feature like this on with `fly secrets set`, the same as those two flags,
+because that command needs no code change and no redeploy — the `[env]` block in `fly.toml` is for
+a value checked into the repository, and this is an operator's own runtime decision instead:
+
+```
+fly secrets set MYTETZ_COMMONS_IMAGES=true --app mytetz
+```
+
+The boot log states which way the switch is set, on every boot: `Commons images are on` or
+`Commons images are off`.
+
+**Two different hosts, from two different places.** The server itself calls
+`commons.wikimedia.org`, once per `VISUALIZE` generation, to search for an image and read its
+licence. The server never calls `upload.wikimedia.org`. That second host serves the image file
+itself, and only the learner's own browser loads it, directly, from the `imageUrl` the API sends.
+An operator who reads a firewall log or a network policy needs both hosts, one for each direction.
+
+**No secret, and no account.** The Commons API this project calls needs no key and no login. The
+request carries only a `User-Agent` header that names the project, `mytetz/1.0
+(https://mytetz.com)`, with no email address and no other personal data.
+
+**The timeout, and the degraded behaviour.** The lookup runs on a three-second connect timeout and
+a three-second request timeout. A slow or a failed answer, and a search with no licensed image, are
+the same outcome from the learner's point of view: the document stores the diagram alone, with no
+error and no retry. `CommonsClient`'s own KDoc, in `backend/api/.../CommonsClient.kt`, names every
+case that degrades this way.
+
+**No new operator alert token.** A Commons failure is silent by design — see the paragraph above —
+so it logs a status code or an exception's class name only, at `WARN`, and adds no row to the
+"Operator alert tokens" table above. Grep `com.mytetz.api.CommonsClient` in `fly logs` to see how
+often the lookup fails, if that number is ever worth watching.
