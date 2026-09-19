@@ -8,12 +8,20 @@ import type {
 import {
   SEED,
   accountView,
+  mockExplainStream,
   mockQuiz,
   openQuantumPhysicsSession,
   selectPhrase,
+  sseFrame,
   stubAccount,
   stubCatalogueAndSession,
 } from './support';
+
+/** A verb inside the picker, and only inside it. See `learn.spec.ts`'s own copy of this helper.
+ * That file states why the scope is load-bearing. */
+function verb(page: Page, name: string) {
+  return page.locator('[role="dialog"]').getByRole('button', { name, exact: true });
+}
 
 /**
  * What only a real browser can check about the Candy design.
@@ -582,6 +590,91 @@ test.describe('with a reduced-motion preference', () => {
     });
     expect(tokens.moveNear).toBe('0px');
     expect(tokens.durState).toBe('1ms');
+  });
+
+  test('the caret stops blinking and stays visible, and the band stops moving, while a stream runs', async ({
+    page,
+  }) => {
+    // The caret and the band carry a meaning: a stream is running. Reduced motion stops the
+    // animation, and the design keeps the caret visible and the band in place, rather than
+    // removing either one.
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await stubCatalogueAndSession(page);
+    const stream = await mockExplainStream(page, 's1');
+    await openQuantumPhysicsSession(page);
+
+    await selectPhrase(page, 'focus-body', 'fundamental physical theory');
+    await verb(page, 'Explain it').click();
+    await stream.send(sseFrame('meta', { contentKey: 'k1', cached: false }));
+    await page.locator('.focus__caret').waitFor();
+
+    const caret = await page.locator('.focus__caret').evaluate((el) => {
+      const s = getComputedStyle(el);
+      return { animationName: s.animationName, opacity: s.opacity };
+    });
+    const bandAnimation = await page
+      .locator('.focus__band')
+      .evaluate((el) => getComputedStyle(el).animationName);
+
+    expect(caret.animationName, 'the caret animation stops').toBe('none');
+    expect(caret.opacity, 'the caret stays visible').toBe('1');
+    expect(bandAnimation, 'the band animation stops').toBe('none');
+
+    await stream.close();
+  });
+
+  test('the skeleton stops pulsing while the catalogue loads', async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    const held = gate();
+    await page.route('**/api/catalog/topics*', async (route) => {
+      await held.wait;
+      route.fulfill({ json: [] });
+    });
+    await page.goto('/');
+    await page.locator('.mt-skeleton').first().waitFor();
+
+    const animationName = await page
+      .locator('.mt-skeleton')
+      .first()
+      .evaluate((el) => getComputedStyle(el).animationName);
+    expect(animationName).toBe('none');
+
+    held.open();
+  });
+});
+
+test.describe('on a touch screen', () => {
+  test.use({ hasTouch: true, isMobile: true, viewport: WIDTHS.narrow });
+
+  test('a ghost pill keeps its rest background after a tap, and does not stay hovered', async ({
+    page,
+  }) => {
+    // "Exam" and not a category filter pill: tapping a category filter pill selects it, which
+    // changes its own colour on purpose (it becomes the current pill) — a fact about the
+    // catalogue, and not about hover. "Exam" answers no such state.
+    // Background, and not box-shadow: a ghost pill draws no shadow either at rest or on hover, so
+    // box-shadow could not tell the two states apart. The hover rule changes the background from
+    // --mt-surface (white) to --mt-sunk, so that property is the one a stuck hover would show on.
+    await stubCatalogueAndSession(page);
+    await gotoReader(page);
+
+    // The standard method this issue uses is `@media (hover: hover)`. This confirms the emulated
+    // touch context actually reports it as false, so a pass here is evidence about that method
+    // and not an accident of a rule that never runs.
+    const supportsHover = await page.evaluate(() => window.matchMedia('(hover: hover)').matches);
+    test.skip(supportsHover, 'this browser reports (hover: hover) as true in a touch context');
+
+    const exam = page.getByTestId('exam');
+    await exam.waitFor();
+    await exam.tap();
+
+    // A tap ends the touch at once, so any :active state is already gone. This polls rather than
+    // reading right away, because the transition itself still takes --mt-dur-press to settle.
+    await expect
+      .poll(() => exam.evaluate((el) => getComputedStyle(el).backgroundColor), {
+        message: 'a tapped ghost pill settles back to its white rest background',
+      })
+      .toBe('rgb(255, 255, 255)');
   });
 });
 
