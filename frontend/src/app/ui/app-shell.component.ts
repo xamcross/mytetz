@@ -147,9 +147,17 @@ import { BackendState, StatusDotComponent } from './status-dot.component';
         .bar__nav {
           display: none;
         }
+        /* Issue #132: six links do not fit in one row below about 480px. flex-wrap moves the
+           overflow link to a new row instead of shrinking every link, and the smaller side
+           padding matches .bar's own mobile padding above. */
+        .foot {
+          padding: 24px 20px;
+          gap: 12px 20px;
+        }
       }
       .foot {
         display: flex;
+        flex-wrap: wrap;
         justify-content: center;
         gap: 20px;
         padding: 24px 32px;
@@ -158,8 +166,14 @@ import { BackendState, StatusDotComponent } from './status-dot.component';
       .foot__link {
         font-size: 13px;
         font-weight: 700;
+        /* A fixed line-height, and not the browser default, so a wrapped link is always
+           taller than a one-line link by a clear margin. */
+        line-height: 20px;
         color: var(--mt-muted);
         text-decoration: none;
+        /* Issue #132: a link keeps its own text on one line. flex-wrap on .foot then moves a
+           whole link to the next row, rather than shrinking the link and wrapping its words. */
+        white-space: nowrap;
       }
       .foot__link:hover {
         color: var(--mt-teal);
