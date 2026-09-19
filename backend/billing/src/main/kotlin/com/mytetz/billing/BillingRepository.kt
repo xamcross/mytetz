@@ -38,7 +38,10 @@ open class BillingRepository(database: MongoDatabase) {
      * does not grow the collection for ever. The field must hold a BSON Date for the TTL monitor
      * to act on it — see [EpochMillisAsBsonDateTime].
      *
-     * `subscriptions` gets an index on `status`, because [listNonTerminal] reads by that field.
+     * `subscriptions` gets an index on `status`, because [listNonTerminal] reads by that field. It
+     * also gets an index on `freemiusUserId`, because [findByFreemiusUserId] reads by that field.
+     * `objects.user` is optional on `license.extended`, the renewal event issue #72 maps — see
+     * [FreemiusEvent]'s own KDoc — so that lookup needs its own index and cannot ride on `_id`.
      *
      * `trialStarts` gets a TTL index on `windowExpiresAt`, so an IP bucket's trial-start count
      * does not grow the collection for ever once its 24-hour window has passed.
@@ -49,6 +52,7 @@ open class BillingRepository(database: MongoDatabase) {
             IndexOptions().name("event_ttl").expireAfter(EVENT_TTL_DAYS, TimeUnit.DAYS),
         )
         subscriptions.createIndex(Indexes.ascending("status"), IndexOptions().name("by_status"))
+        subscriptions.createIndex(Indexes.ascending("freemiusUserId"), IndexOptions().name("by_freemius_user_id"))
         trialStarts.createIndex(
             Indexes.ascending("windowExpiresAt"),
             IndexOptions().name("trial_start_ttl").expireAfter(0, TimeUnit.SECONDS),
@@ -61,6 +65,18 @@ open class BillingRepository(database: MongoDatabase) {
      */
     open suspend fun find(userId: String): Subscription? =
         subscriptions.find(Filters.eq("_id", userId)).firstOrNull()
+
+    /**
+     * The stored row whose [Subscription.freemiusUserId] equals [freemiusUserId], or null when no
+     * row carries it.
+     *
+     * [BillingService.apply] calls this only when an event carries no [FreemiusEvent.userReference]
+     * — a `license.extended` renewal with no `objects.user`, for one example, where the email
+     * lookup `BillingRoutes.kt` runs has no email to resolve. [ensureIndexes] keeps an index on
+     * this field, so the lookup never scans the whole collection.
+     */
+    suspend fun findByFreemiusUserId(freemiusUserId: String): Subscription? =
+        subscriptions.find(Filters.eq("freemiusUserId", freemiusUserId)).firstOrNull()
 
     /** Writes [subscription] whole. Inserts a fresh row, or replaces the stored one for its user. */
     suspend fun upsert(subscription: Subscription) {

@@ -2,6 +2,7 @@ package com.mytetz.billing
 
 import com.mongodb.client.model.Filters
 import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import org.bson.Document
 import java.util.Date
@@ -75,6 +76,25 @@ class BillingRepositoryTest {
         assertNull(repository.find("no-such-user"))
     }
 
+    // ------------------------------------------------------------------ findByFreemiusUserId
+
+    @Test
+    fun `findByFreemiusUserId finds the row that carries it`() = runTest {
+        repository.upsert(subscription("u1").copy(freemiusUserId = "fs-1"))
+        repository.upsert(subscription("u2").copy(freemiusUserId = "fs-2"))
+
+        val found = repository.findByFreemiusUserId("fs-1")
+
+        assertEquals("u1", found?.userId)
+    }
+
+    @Test
+    fun `findByFreemiusUserId gives null when no row carries it`() = runTest {
+        repository.upsert(subscription("u1").copy(freemiusUserId = "fs-1"))
+
+        assertNull(repository.findByFreemiusUserId("no-such-freemius-user"))
+    }
+
     // ------------------------------------------------------------------ billing events
 
     @Test
@@ -116,5 +136,20 @@ class BillingRepositoryTest {
         val nonTerminal = repository.listNonTerminal(10)
 
         assertEquals(setOf("u1", "u3"), nonTerminal.map { it.userId }.toSet())
+    }
+
+    // ------------------------------------------------------------------ ensureIndexes
+
+    @Test
+    fun `ensureIndexes creates an index on freemiusUserId`() = runTest {
+        val indexNames = database.getCollection<Document>("subscriptions")
+            .listIndexes()
+            .toList()
+            .map { it.getString("name") }
+
+        assertTrue(
+            indexNames.contains("by_freemius_user_id"),
+            "findByFreemiusUserId needs this index, or it scans the whole collection: $indexNames",
+        )
     }
 }
