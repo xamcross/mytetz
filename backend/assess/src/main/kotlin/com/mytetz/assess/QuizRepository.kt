@@ -87,4 +87,16 @@ open class QuizRepository(database: MongoDatabase) {
 
     suspend fun findAttempt(id: String): QuizAttempt? =
         attempts.find(Filters.eq("_id", id)).firstOrNull()
+
+    /**
+     * Removes every attempt document that carries [principalId]. Reports how many it removed.
+     *
+     * Account deletion is the caller. This copies `com.mytetz.session.SessionRepository`'s own
+     * [com.mytetz.session.SessionRepository.deleteForPrincipal]. It touches only `quizAttempts`: a
+     * template in `quizTemplates` holds no learner data, so this method leaves that collection
+     * alone — see `com.mytetz.api.AuthRoutes`'s own KDoc on `POST /api/account/delete` for the full
+     * scope of what an account deletion removes.
+     */
+    suspend fun deleteForPrincipal(principalId: String): Long =
+        attempts.deleteMany(Filters.eq("principalId", principalId)).deletedCount
 }
