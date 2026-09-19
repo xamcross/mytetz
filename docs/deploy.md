@@ -146,9 +146,9 @@ for every other name.
 non-positive value, rather than stopping the server.** These values are read
 while the process starts, so a typo must not take the site down. A name with
 no default states its own consequence in its own row.
-`MYTETZ_COOKIE_SIGNING_KEY` is the only one whose absence stops the whole
-server. Every other `none` row only stops the one feature that needs it,
-until an operator sets it.
+`MONGODB_URI` and `MYTETZ_COOKIE_SIGNING_KEY` are the two names whose absence
+stops the whole server. Each other `none` row stops only the one feature that
+needs it, until an operator sets it.
 
 | Variable | Default | What it decides |
 | --- | --- | --- |
