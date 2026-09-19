@@ -19,6 +19,7 @@ import com.mytetz.billing.Reconciliation
 import com.mytetz.catalog.CatalogService
 import com.mytetz.catalog.TopicRepository
 import com.mytetz.catalog.TopicRequestRepository
+import com.mytetz.graph.Explanation
 import com.mytetz.graph.ExplanationGraph
 import com.mytetz.graph.ExplanationRepository
 import com.mytetz.graph.ExplanationValidator
@@ -44,6 +45,14 @@ import kotlin.coroutines.cancellation.CancellationException
 private val log = LoggerFactory.getLogger("com.mytetz.api.Components")
 
 private const val DAY_MILLIS = 86_400_000L
+
+/**
+ * The ERROR token a failed eviction run is logged under. [Components.bootstrap]'s own guard
+ * around [Components.evictExplanations] logs it, and so does the daily loop in `Application.kt`
+ * that calls the same method — one token for an operator to grep either source under, stated in
+ * `docs/deploy.md`'s "Operator alert tokens" table.
+ */
+internal const val EVICTION_LOOP_FAILED_TOKEN: String = "EVICTION_LOOP_FAILED"
 
 /**
  * The whole object graph, wired by hand.
@@ -252,7 +261,25 @@ open class Components(
         catalog.seedFromResource()
         migrate()
         reconcile()
-        evictExplanations()
+
+        // Guarded, unlike the six calls above: eviction is housekeeping, not correctness. Every
+        // ensureIndexes() and seedFromResource() above must stop the boot on failure — a missing
+        // index or an unseeded catalogue is a real incident. A missed eviction run is not: the
+        // daily loop in `Application.kt` retries tomorrow, and nothing else in this class depends
+        // on the collection shrinking. Letting it fail loudly here would instead take
+        // `ready` down for the life of the machine — see `Application.bootstrap`'s own KDoc for
+        // what that flag guards.
+        try {
+            evictExplanations()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.error(
+                "$EVICTION_LOOP_FAILED_TOKEN — the boot-time eviction run did not complete; the " +
+                    "daily loop retries on its own schedule",
+                e,
+            )
+        }
     }
 
     /**
@@ -364,8 +391,9 @@ open class Components(
     }
 
     /**
-     * Removes one batch of explanations that nothing needs any more. Logs
-     * `EVICTION removed={} scanned={}` at INFO.
+     * Removes what it can of the explanations that nothing needs any more, across one or more
+     * pages within one run. Logs `EVICTION removed={} scanned={}` at INFO, where `scanned` is the
+     * total read across every page this call made.
      *
      * The rule: a document is removable when it is not a seed, when its `requestCount` is at or
      * below [EvictionConfig.maxRequestCount], and when it is older than
@@ -377,8 +405,33 @@ open class Components(
      *
      * `:backend:graph` does not depend on `:backend:session`, so `ExplanationRepository` cannot
      * ask whether a session still references a key. `Components` sees both repositories, so the
-     * two-step rule lives here: read one batch of candidates, remove the keys a session still
+     * two-step rule lives here: read one page of candidates, remove the keys a session still
      * points at, and delete the rest.
+     *
+     * ## Why one page is not enough, and the bound this run keeps instead
+     *
+     * A session belonging to a signed-in learner is not deleted until account deletion, so the
+     * oldest candidates are, in practice, disproportionately the ones a session still references.
+     * A single page ordered oldest-first can therefore be entirely referenced, while an
+     * unreferenced document waits just behind it — and a job that reads one page and stops would
+     * then remove nothing, on this run or any later one, because every run reads the same oldest
+     * page again. This method instead walks forward with [pageSize]-sized pages, using
+     * [ExplanationRepository.findEvictionCandidates]'s `after` cursor, until one of three things
+     * stops it: a page comes back short (there is nothing left to read), or it has read
+     * [EVICTION_MAX_PAGES_PER_RUN] pages, or — implicitly — the process runs out of daily calls,
+     * because nothing here waits between pages. **[EVICTION_MAX_PAGES_PER_RUN] pages of
+     * [pageSize] each is the fixed bound for one run**; it is not a full sweep of the collection.
+     *
+     * A run's own cursor lives only in this method's local variables. It is not persisted, and it
+     * is not carried into the next call: **a run that hits its page bound with referenced
+     * candidates still ahead of it makes no note of where it stopped, and the next run — the next
+     * day, or the next boot — starts again from the single oldest candidate.** A collection that
+     * holds more than [EVICTION_MAX_PAGES_PER_RUN] × [pageSize] contiguous, still-referenced old
+     * candidates therefore delays reaching what lies behind them until enough of those candidates
+     * stop being referenced, or until an operator raises the bound. That is a slower recovery than
+     * a persisted cursor would give, and it is deliberate: this method already reasons about failing
+     * mid-run (see the try/catch in [bootstrap]), and a stored cursor would have to be reasoned
+     * about failing too, for a rule this codebase has not needed anywhere else in this class.
      *
      * ## The check-then-delete race, and how far the delete closes it
      *
@@ -390,20 +443,39 @@ open class Components(
      * window no longer matches, and it survives. This closes most of the window. It does not
      * close every case; `SessionService.hydrate`'s own KDoc names the residual one.
      *
-     * Called at the end of [bootstrap], and once a day after that from `Application.kt`'s own
-     * boot-time loop. One call here is one batch, bounded by [EVICTION_BATCH_LIMIT]; it is not a
-     * full sweep of the collection.
+     * `open` only so a test can shrink [pageSize], or replace this method outright to prove a
+     * caller survives its failure — see [bootstrap] and the daily loop in `Application.kt`. There
+     * is no production subclass.
      */
-    suspend fun evictExplanations() {
-        val candidates = explanations.findEvictionCandidates(
-            maxRequestCount = evictionConfig.maxRequestCount,
-            olderThanEpochMillis = System.currentTimeMillis() - evictionConfig.maxAgeDays * DAY_MILLIS,
-            limit = EVICTION_BATCH_LIMIT,
-        )
-        val referenced = sessionRepository.referencedExplanationKeys(candidates)
-        val evictable = candidates.filterNot { it in referenced }
-        val removed = explanations.deleteEvictable(evictable, evictionConfig.maxRequestCount)
-        log.info("EVICTION removed={} scanned={}", removed, candidates.size)
+    open suspend fun evictExplanations(pageSize: Int = EVICTION_PAGE_SIZE) {
+        var removed = 0L
+        var scanned = 0
+        var cursor: Explanation? = null
+        var pagesRead = 0
+
+        while (pagesRead < EVICTION_MAX_PAGES_PER_RUN) {
+            val page = explanations.findEvictionCandidates(
+                maxRequestCount = evictionConfig.maxRequestCount,
+                olderThanEpochMillis = System.currentTimeMillis() - evictionConfig.maxAgeDays * DAY_MILLIS,
+                pageSize = pageSize,
+                after = cursor,
+            )
+            pagesRead++
+            if (page.isEmpty()) break
+
+            scanned += page.size
+            val keys = page.map { it.key }
+            val referenced = sessionRepository.referencedExplanationKeys(keys)
+            val evictable = keys.filterNot { it in referenced }
+            if (evictable.isNotEmpty()) {
+                removed += explanations.deleteEvictable(evictable, evictionConfig.maxRequestCount)
+            }
+
+            cursor = page.last()
+            if (page.size < pageSize) break // a short page: nothing is left behind it
+        }
+
+        log.info("EVICTION removed={} scanned={}", removed, scanned)
     }
 
     companion object {
@@ -416,13 +488,19 @@ open class Components(
          */
         const val RECONCILE_LIMIT: Int = 500
 
+        /** The default page size [evictExplanations] reads with, absent an override. */
+        const val EVICTION_PAGE_SIZE: Int = 100
+
         /**
-         * How many eviction candidates [evictExplanations] reads in one run.
+         * How many pages [evictExplanations] reads in one run, at most.
          *
-         * Same reasoning as [RECONCILE_LIMIT]: a bound keeps one run — at boot, and once a day
-         * after that — predictable, rather than scanning the whole collection in one sweep.
+         * [EVICTION_PAGE_SIZE] × [EVICTION_MAX_PAGES_PER_RUN] is therefore the most documents one
+         * run scans — 500 by default, the same reasoning [RECONCILE_LIMIT] states: a bound keeps
+         * one run predictable, rather than scanning the whole collection in one sweep. Reading
+         * that bound in pages, rather than in one query, is what lets a run walk past a page that
+         * held nothing removable — see [evictExplanations]'s own KDoc for why that matters.
          */
-        const val EVICTION_BATCH_LIMIT: Int = 500
+        const val EVICTION_MAX_PAGES_PER_RUN: Int = 5
 
         const val MIGRATE_ON_BOOT_ENV: String = "MYTETZ_MIGRATE_ON_BOOT"
         const val PUBLIC_BASE_URL_ENV: String = "MYTETZ_PUBLIC_BASE_URL"

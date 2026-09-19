@@ -681,6 +681,48 @@ class ComponentsTest {
     }
 
     @Test
+    fun `evictExplanations goes past a full page of referenced candidates to reach an unreferenced one behind it`() =
+        runTest {
+            val components = components("evict_past_referenced_page")
+            val explanations = ExplanationRepository(components.mongo.database)
+            val sessions = SessionRepository(components.mongo.database)
+
+            // Three old, unread, REFERENCED documents — more than a page holds, at pageSize = 2
+            // below. The oldest one first, so they sort ahead of the unreferenced document.
+            val referencedKeys = listOf("ref-0", "ref-1", "ref-2")
+            referencedKeys.forEachIndexed { i, key ->
+                explanations.insertIfAbsent(oldExplanation(key, createdAtEpochMillis = daysAgo(100) + i))
+            }
+            sessions.insert(
+                LearningSession(
+                    id = "s1",
+                    principalId = "anon:alice",
+                    topicSlug = "quantum-physics",
+                    rootNodeId = "n0",
+                    currentNodeId = "n0",
+                    nodes = referencedKeys.mapIndexed { i, key ->
+                        SessionNode("n$i", if (i == 0) null else "n${i - 1}", key, "", Verb.SEED, 0, i, daysAgo(100))
+                    },
+                    startedAtEpochMillis = daysAgo(100),
+                    lastActiveAtEpochMillis = daysAgo(100),
+                ),
+            )
+            // One old, unread, UNREFERENCED document, newer than all three above — it sorts
+            // behind them, on the far side of the first page.
+            explanations.insertIfAbsent(oldExplanation("unreferenced", createdAtEpochMillis = daysAgo(99)))
+
+            components.evictExplanations(pageSize = 2)
+
+            assertNull(
+                explanations.findByKey("unreferenced"),
+                "the job must read a second page rather than stop after a page with nothing to remove",
+            )
+            referencedKeys.forEach {
+                assertNotNull(explanations.findByKey(it), "a referenced document must still survive")
+            }
+        }
+
+    @Test
     fun `evictExplanations never removes a recent document`() = runTest {
         val components = components("evict_recent")
         val explanations = ExplanationRepository(components.mongo.database)
@@ -713,5 +755,51 @@ class ComponentsTest {
             "no EVICTION line was logged: ${appender.list.map { it.formattedMessage }}",
         )
         assertEquals("EVICTION removed=1 scanned=1", event.formattedMessage)
+    }
+
+    @Test
+    fun `a failure inside evictExplanations does not fail the whole boot`() = runTest {
+        // Eviction is housekeeping. A learner-facing incident there must not take /api/health and
+        // topic browsing down with it, the same reasoning `reconcile()` guards its own risky step
+        // for.
+        val components = object : Components(
+            mongo = Mongo(MongoConfig(uri = TestFixtures.connectionString, databaseName = "test_api_evict_boot_failure")),
+            cookies = TestFixtures.cookieConfig,
+            llmFactory = { FakeLlmClient() },
+        ) {
+            override suspend fun evictExplanations(pageSize: Int) {
+                error("eviction blew up")
+            }
+        }
+
+        components.bootstrap() // must not throw
+    }
+
+    @Test
+    fun `a failure inside evictExplanations at boot is logged under the same token the daily loop uses`() = runTest {
+        val components = object : Components(
+            mongo = Mongo(MongoConfig(uri = TestFixtures.connectionString, databaseName = "test_api_evict_boot_log")),
+            cookies = TestFixtures.cookieConfig,
+            llmFactory = { FakeLlmClient() },
+        ) {
+            override suspend fun evictExplanations(pageSize: Int) {
+                error("eviction blew up")
+            }
+        }
+
+        val appender = ListAppender<ILoggingEvent>().apply { start() }
+        val logger = LoggerFactory.getLogger("com.mytetz.api.Components") as ch.qos.logback.classic.Logger
+        logger.addAppender(appender)
+        try {
+            components.bootstrap()
+        } finally {
+            logger.detachAppender(appender)
+        }
+
+        val event = assertNotNull(
+            appender.list.firstOrNull { it.level == Level.ERROR && it.formattedMessage.contains(EVICTION_LOOP_FAILED_TOKEN) },
+            "no $EVICTION_LOOP_FAILED_TOKEN line was logged: ${appender.list.map { it.formattedMessage }}",
+        )
+        assertNotNull(event.throwableProxy, "the failure log line did not carry the exception")
     }
 }

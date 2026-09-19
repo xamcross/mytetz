@@ -245,10 +245,11 @@ private fun Application.bootstrap(components: Components): AtomicBoolean {
     // On the application's own scope, the same reason the `launch` above is: nothing here may
     // block the routes from coming up.
     //
-    // One failed run does not stop the loop. The failure is caught, logged, and the loop waits its
-    // usual interval and tries again — the same shape `Components.migrate` uses for one topic's
-    // failure. A `CancellationException` is thrown again, because a swallowed cancellation breaks
-    // structured concurrency; see `SessionRoutes.kt` for the same rule.
+    // One failed run does not stop the loop. The failure is caught, logged under
+    // EVICTION_LOOP_FAILED_TOKEN — the same token `Components.bootstrap`'s own guard around this
+    // same method logs under — and the loop waits its usual interval and tries again. A
+    // `CancellationException` is thrown again, because a swallowed cancellation breaks structured
+    // concurrency; see `SessionRoutes.kt` for the same rule.
     launch {
         while (true) {
             delay(EVICTION_INTERVAL_MILLIS)
@@ -257,7 +258,10 @@ private fun Application.bootstrap(components: Components): AtomicBoolean {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                log.error("EVICTION_LOOP_FAILED — this run did not complete; the next one runs on schedule", e)
+                log.error(
+                    "$EVICTION_LOOP_FAILED_TOKEN — this run did not complete; the next one runs on schedule",
+                    e,
+                )
             }
         }
     }
