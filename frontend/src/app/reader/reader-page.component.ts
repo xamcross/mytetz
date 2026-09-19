@@ -63,12 +63,13 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
     <main class="reader">
       @if (store.loading()) {
         <p class="mt-sr-only" role="status">Loading your session…</p>
+        <!--
+          Finding F17 of the design review. The reading column sits before the rail here, in the
+          DOM and not only on screen — see the comment on .reader__grid below for why. This
+          placeholder must match that order, or the loaded content lands somewhere else and the
+          page jumps the moment it replaces the skeleton.
+        -->
         <div class="reader__grid">
-          <div class="reader__rail rail-skeleton" aria-hidden="true">
-            <span class="mt-pill mt-pill--ghost rail-skeleton__exam">Exam</span>
-            <span class="mt-eyebrow rail-skeleton__head">Your trail</span>
-            <span class="mt-pill mt-pill--ghost rail-skeleton__toggle">Show trail</span>
-          </div>
           <div class="reader__main">
             <article class="focus-skeleton mt-card mt-card--raised">
               <span class="mt-eyebrow mt-eyebrow--coral">Writing your first explanation</span>
@@ -82,6 +83,11 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
                 The highlight unlocks when the text lands.
               </p>
             </article>
+          </div>
+          <div class="reader__rail rail-skeleton" aria-hidden="true">
+            <span class="mt-pill mt-pill--ghost rail-skeleton__exam">Exam</span>
+            <span class="mt-eyebrow rail-skeleton__head">Your trail</span>
+            <span class="mt-pill mt-pill--ghost rail-skeleton__toggle">Show trail</span>
           </div>
         </div>
       } @else if (loadError(); as failure) {
@@ -103,26 +109,17 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
           </div>
         </div>
       } @else if (store.session(); as session) {
+        <!--
+          Finding F17 of the design review. Below 768px the grid collapses to one column, and the
+          rail used to sit first — a learner met the Exam pill, the trail toggle and the
+          breadcrumb before the reading material. CSS order alone would not fix this: a browser
+          tabs in DOM order regardless of order, so a keyboard learner would still land on the
+          rail first while the eye met the card. The reading column is therefore first in the DOM
+          here, at every width, and .reader__grid's own desktop rule places the rail back on the
+          left with an explicit grid-column and grid-row — not order — which is what keeps the
+          desktop layout without reopening the same mismatch there.
+        -->
         <div class="reader__grid">
-          <div class="reader__rail">
-            <!-- TrailRailComponent draws its own "Your trail" heading; this control does not
-                 belong to that component's file, so it sits here, directly above the rail. -->
-            <button
-              type="button"
-              class="mt-pill mt-pill--ghost reader__exam"
-              data-testid="exam"
-              (click)="exam()"
-            >
-              Exam
-            </button>
-            <app-trail-rail
-              [nodes]="store.tree()"
-              [currentNodeId]="store.currentNodeId()"
-              [topicLabel]="topicLabel()"
-              (navigate)="store.goTo($event)"
-            />
-          </div>
-
           <div class="reader__main">
             @if (bannerError(); as failure) {
               <div class="mt-card mt-card--error banner banner--error" role="alert">
@@ -164,6 +161,19 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
               </div>
             }
 
+            <!--
+              Finding F11 of the design review. app-focus-card's own <h1> shows at step 1 only —
+              see its class comment. Past step 1 nothing else on this page is an <h1>, and a page
+              with none is a defect for a screen reader and for a search engine. This one stands
+              in exactly then, so the reader page keeps exactly one <h1> at every step. It is
+              mt-sr-only rather than a second visible heading: the breadcrumb's root crumb already
+              names the topic on screen, and a second visible copy would recreate the repetition
+              F11 reports.
+            -->
+            @if (step() !== 1) {
+              <h1 class="mt-sr-only">{{ topicLabel() }}</h1>
+            }
+
             <app-breadcrumb
               [nodes]="store.breadcrumb()"
               [topicLabel]="topicLabel()"
@@ -186,30 +196,45 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
                 [topicLabel]="topicLabel()"
                 [readOnly]="store.isCompleted()"
                 (explainRequested)="explain($event)"
-                (testMeRequested)="testMe()"
               />
-              <!-- One control at a time: a completed session offers to start a new one, and an
-                   active session offers to end itself. Never both — a learner who has just
-                   completed a session has nothing left here to complete again. -->
-              @if (store.isCompleted()) {
-                <button
-                  type="button"
-                  class="mt-pill mt-pill--coral"
-                  data-testid="new-session"
-                  (click)="startNewSession()"
-                >
-                  Start a new session on this topic
-                </button>
-              } @else {
+              <!--
+                Finding F11's third change. Test me used to sit inside the card, and the session's
+                own end control sat apart from it. The two now share one row below the card, and
+                Exam stays in the rail — a different kind of control, a full exam rather than a
+                check on the node in focus.
+              -->
+              <div class="focus__actions">
                 <button
                   type="button"
                   class="mt-pill mt-pill--ghost"
-                  data-testid="complete-session"
-                  (click)="completeSession()"
+                  data-testid="test-me"
+                  (click)="testMe()"
                 >
-                  Mark this session complete
+                  Test me
                 </button>
-              }
+                <!-- One control at a time: a completed session offers to start a new one, and an
+                     active session offers to end itself. Never both — a learner who has just
+                     completed a session has nothing left here to complete again. -->
+                @if (store.isCompleted()) {
+                  <button
+                    type="button"
+                    class="mt-pill mt-pill--coral"
+                    data-testid="new-session"
+                    (click)="startNewSession()"
+                  >
+                    Start a new session on this topic
+                  </button>
+                } @else {
+                  <button
+                    type="button"
+                    class="mt-pill mt-pill--ghost"
+                    data-testid="complete-session"
+                    (click)="completeSession()"
+                  >
+                    Mark this session complete
+                  </button>
+                }
+              </div>
             }
 
             @if (quizKind(); as kind) {
@@ -220,6 +245,25 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
                 (close)="closeQuiz()"
               />
             }
+          </div>
+
+          <div class="reader__rail">
+            <!-- TrailRailComponent draws its own "Your trail" heading; this control does not
+                 belong to that component's file, so it sits here, directly above the rail. -->
+            <button
+              type="button"
+              class="mt-pill mt-pill--ghost reader__exam"
+              data-testid="exam"
+              (click)="exam()"
+            >
+              Exam
+            </button>
+            <app-trail-rail
+              [nodes]="store.tree()"
+              [currentNodeId]="store.currentNodeId()"
+              [topicLabel]="topicLabel()"
+              (navigate)="store.goTo($event)"
+            />
           </div>
         </div>
       }
@@ -249,9 +293,11 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
           transform: none;
         }
       }
-      /* One column below 768px. Two above it: the trail rail, then the card. The design's third
-         column at 4a is dropped — every card in it needs a route that does not exist yet. It
-         returns as a third track here and nowhere else. */
+      /* One column below 768px, in DOM order: the reading column, then the rail — see the
+         template comment on this element for finding F17. Two columns above it: the trail rail on
+         the left, the card on the right, as the design draws it. The design's third column at 4a
+         is dropped — every card in it needs a route that does not exist yet. It returns as a
+         third track here and nowhere else. */
       .reader__grid {
         display: grid;
         grid-template-columns: 1fr;
@@ -269,6 +315,13 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
       }
       .reader__exam {
         align-self: flex-end;
+      }
+      /* Finding F11 of the design review. Test me and the session's own end control share this
+         row, below the card. */
+      .focus__actions {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
       }
       .reader__centre {
         max-width: 620px;
@@ -344,6 +397,19 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
         .reader__grid {
           grid-template-columns: 260px minmax(0, 720px);
           align-items: start;
+        }
+        /* Finding F17. The reading column is first in the DOM at every width, for a logical Tab
+           order below 768px — see the template comment. Grid placement, and not the CSS order
+           property, puts the rail back on the left here: a browser tabs in DOM order regardless
+           of either one, so this choice makes no difference to the keyboard, and grid placement
+           is the more direct tool for "this cell holds that item" than reordering a flow. */
+        .reader__main {
+          grid-column: 2;
+          grid-row: 1;
+        }
+        .reader__rail {
+          grid-column: 1;
+          grid-row: 1;
         }
         .rail-skeleton__toggle {
           display: none;

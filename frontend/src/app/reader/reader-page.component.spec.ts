@@ -163,6 +163,78 @@ describe('ReaderPageComponent', () => {
     expect(harness.routeNativeElement?.querySelectorAll('.trail__item').length).toBe(2);
   });
 
+  // Finding F11 of the design review. The topic name used to render three times at once: the
+  // card's own <h1>, the breadcrumb's root crumb, and the trail rail's root row. The card now
+  // carries the <h1> at step 1 only, and this file supplies a hidden one of its own past step 1 —
+  // so the reader page keeps exactly one <h1> at every step, which a screen reader and a search
+  // engine both need.
+  it('shows exactly one <h1>, the card heading, at step 1', async () => {
+    const seedOnly: SessionView = {
+      ...view,
+      currentNodeId: 'n0',
+      nodes: [view.nodes[0]],
+      explanations: { k0: view.explanations['k0'] },
+    };
+    await open(seedOnly);
+
+    const headings = harness.routeNativeElement?.querySelectorAll('h1') ?? [];
+    expect(headings.length, 'exactly one <h1> at step 1').toBe(1);
+    expect(
+      (headings[0] as HTMLElement).classList.contains('focus__topic'),
+      'the card supplies it at step 1',
+    ).toBe(true);
+  });
+
+  it('shows exactly one <h1>, a hidden one that states the topic, past step 1', async () => {
+    // The default `view` has the current node at depth 1, which is step 2.
+    await open();
+
+    const headings = harness.routeNativeElement?.querySelectorAll('h1') ?? [];
+    expect(headings.length, 'exactly one <h1> past step 1').toBe(1);
+    const heading = headings[0] as HTMLElement;
+    expect(heading.classList.contains('focus__topic'), 'the card no longer supplies it').toBe(
+      false,
+    );
+    expect(heading.classList.contains('mt-sr-only'), 'the reader page supplies it instead').toBe(
+      true,
+    );
+    expect(heading.textContent?.trim()).toBe('Quantum Physics');
+  });
+
+  // Finding F11's third change. Test me and the session's own end control used to sit apart —
+  // Test me inside the card, the other control below it — and now share one row below the card.
+  it('groups Test me with the session’s own end control in one row below the card', async () => {
+    await open();
+
+    const testMe = harness.routeNativeElement?.querySelector('[data-testid="test-me"]');
+    const complete = harness.routeNativeElement?.querySelector('[data-testid="complete-session"]');
+    expect(testMe, 'Test me is on the page').toBeTruthy();
+    expect(complete, 'the end control is on the page').toBeTruthy();
+    expect(testMe?.parentElement, 'the two controls share one parent row').toBe(
+      complete?.parentElement,
+    );
+    expect(testMe?.closest('app-focus-card'), 'Test me is no longer inside the card').toBeNull();
+  });
+
+  // Finding F17 of the design review. Below 768px the grid collapses to one column, and a
+  // learner used to meet the rail's controls before the reading material. CSS `order` alone would
+  // leave the keyboard Tab order wrong — a browser tabs in DOM order regardless of `order` — so
+  // the reading column now comes first in the DOM, and only the desktop grid placement (not
+  // `order`) puts the rail back on the left visually. e2e/layout.spec.ts proves the visual and the
+  // keyboard claims in a real browser; this proves the DOM order the whole fix rests on.
+  it('puts the reading column before the trail rail in the DOM', async () => {
+    await open();
+
+    const main = harness.routeNativeElement?.querySelector('.reader__main');
+    const rail = harness.routeNativeElement?.querySelector('.reader__rail');
+    expect(main, 'the reading column renders').toBeTruthy();
+    expect(rail, 'the rail renders').toBeTruthy();
+    expect(
+      main!.compareDocumentPosition(rail!) & Node.DOCUMENT_POSITION_FOLLOWING,
+      'the rail follows the reading column in source order',
+    ).toBeTruthy();
+  });
+
   it('moves the focus from the trail rail without another request', async () => {
     await open();
 
