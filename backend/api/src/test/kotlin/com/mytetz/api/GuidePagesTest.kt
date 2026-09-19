@@ -22,14 +22,34 @@ import kotlin.test.assertTrue
  */
 class GuidePagesTest {
 
-    /** The `/guides` paths that the built `sitemap.xml` lists, in file order. */
+    /**
+     * The `/guides` paths the live `GET /sitemap.xml` route lists, in file order.
+     *
+     * #46 deletes the static `frontend/public/sitemap.xml` this test used to read from the
+     * classpath and replaces it with [sitemapRoutes], a Ktor route that reads [GuidePages.paths]
+     * itself. This helper now asks that same route for its answer, over [TestFixtures.seededCatalog],
+     * the real catalogue `topics.json` seeds in production.
+     *
+     * `testApplication`'s own block returns `Unit`, not the value the block computes — the plan's
+     * own literal code for this helper assumed otherwise and does not compile. [paths] carries the
+     * answer back out instead.
+     */
     private fun sitemapGuidePaths(): List<String> {
-        val sitemap = javaClass.getResource("/static/sitemap.xml")?.readText()
-        assertTrue(sitemap != null, "the built sitemap.xml must be on the static classpath")
-        return Regex("""<loc>https://mytetz\.com(/guides[^<]*)</loc>""")
-            .findAll(sitemap)
-            .map { it.groupValues[1] }
-            .toList()
+        var paths: List<String> = emptyList()
+        testApplication {
+            val explanations = ExplanationRepository(
+                Mongo(MongoConfig(TestFixtures.connectionString, "test_api_guide_sitemap")).database
+            )
+            application {
+                routing { sitemapRoutes(TestFixtures.seededCatalog(), explanations, modelFamily = "fake-model") }
+            }
+            val body = client.get("/sitemap.xml").bodyAsText()
+            paths = Regex("""<loc>https://mytetz\.com(/guides[^<]*)</loc>""")
+                .findAll(body)
+                .map { it.groupValues[1] }
+                .toList()
+        }
+        return paths
     }
 
     @Test

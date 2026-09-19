@@ -51,7 +51,7 @@ const POLL_TIMEOUT_MILLIS = 30000;
   template: `
     <main class="account-page">
       @if (loading() && view() === null) {
-        <p class="visually-hidden" role="status">Loading your account…</p>
+        <p class="mt-sr-only" role="status">Loading your account…</p>
       }
 
       @if (error(); as message) {
@@ -222,14 +222,6 @@ const POLL_TIMEOUT_MILLIS = 30000;
         line-height: 1.55;
         font-weight: 500;
         color: var(--mt-muted);
-      }
-      .visually-hidden {
-        position: absolute;
-        width: 1px;
-        height: 1px;
-        overflow: hidden;
-        clip-path: inset(50%);
-        white-space: nowrap;
       }
       .banner {
         padding: 20px 24px;

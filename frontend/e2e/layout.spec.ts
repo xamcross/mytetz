@@ -8,12 +8,20 @@ import type {
 import {
   SEED,
   accountView,
+  mockExplainStream,
   mockQuiz,
   openQuantumPhysicsSession,
   selectPhrase,
+  sseFrame,
   stubAccount,
   stubCatalogueAndSession,
 } from './support';
+
+/** A verb inside the picker, and only inside it. See `learn.spec.ts`'s own copy of this helper.
+ * That file states why the scope is load-bearing. */
+function verb(page: Page, name: string) {
+  return page.locator('[role="dialog"]').getByRole('button', { name, exact: true });
+}
 
 /**
  * What only a real browser can check about the Candy design.
@@ -502,6 +510,172 @@ test('every control still draws its focus ring', async ({ page }) => {
   expect(ring.color, 'the ring is teal').toBe('rgb(15, 118, 110)');
   expect(ring.width).toBe('3px');
   expect(ring.offset).toBe('2px');
+});
+
+test('a coral pill keeps its lift and gains a second ring while it has the keyboard focus', async ({
+  page,
+}) => {
+  // Section 3.3 of the design review: the teal ring measures 1.01:1 against a coral fill, so
+  // styles.css joins the ring and the lift in one box-shadow list. A plain rule that set its own
+  // box-shadow on :focus-visible would replace the lift instead of adding a ring next to it.
+  await page.route('**/api/auth/config', (route) =>
+    route.fulfill({
+      json: { turnstileSiteKey: null, googleEnabled: true, magicLinkEnabled: true },
+    }),
+  );
+  await page.goto('/auth');
+
+  await page.getByLabel('Email address').focus();
+  await page.keyboard.press('Tab');
+  // `.mt-pill`'s transition covers box-shadow, and the ring adds a second shadow layer to the
+  // one the pill already draws. This polls the settled value, and not a mid-transition frame.
+  await expect
+    .poll(
+      () => page.evaluate(() => getComputedStyle(document.activeElement as HTMLElement).boxShadow),
+      { message: 'the coral lift and the white ring both draw' },
+    )
+    .toBe('rgb(214, 63, 63) 0px 4px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 2px');
+});
+
+test('a link with the class .mt-pill shows no underline', async ({ page }) => {
+  await page.route('**/api/auth/config', (route) =>
+    route.fulfill({
+      json: { turnstileSiteKey: null, googleEnabled: true, magicLinkEnabled: true },
+    }),
+  );
+  await page.goto('/auth');
+
+  const google = page.getByRole('link', { name: 'Continue with Google' });
+  await google.waitFor();
+  expect(await google.evaluate((el) => getComputedStyle(el).textDecorationLine)).toBe('none');
+});
+
+test('a pill lifts and gains a hover shadow while a pointer rests on it', async ({ page }) => {
+  await stubCatalogueAndSession(page);
+  await page.goto('/');
+  // The "Physics" pill, and not "All": "All" is the selected teal pill by default, and this test
+  // reads the plain grey hover lift every .mt-pill answers with.
+  const pill = page.locator('.catalog__cat').last();
+  await pill.waitFor();
+
+  const box = await pill.boundingBox();
+  if (box === null) throw new Error('the category pill has no box to hover');
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  // The transition takes --mt-dur-press (90ms), so this polls the computed value instead of
+  // reading it right after the mouse moves, and it does not wait with a fixed sleep.
+  await expect
+    .poll(() => pill.evaluate((el) => getComputedStyle(el).boxShadow), {
+      message: 'a pill gains the grey hover lift while a pointer rests on it',
+    })
+    .toBe('rgb(207, 233, 224) 0px 5px 0px 0px');
+});
+
+test.describe('with a reduced-motion preference', () => {
+  test('the motion tokens compute to a 1ms duration and a 0px distance', async ({ page }) => {
+    // `page.emulateMedia` and not `test.use({ reducedMotion: 'reduce' })`: the context option did
+    // not reach `window.matchMedia` in this project's Chromium, confirmed with a standalone check
+    // against `window.matchMedia('(prefers-reduced-motion: reduce)').matches`. The imperative call
+    // does reach it, on the very same browser.
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await stubCatalogueAndSession(page);
+    await page.goto('/');
+    await page.locator('.topic__tile').first().waitFor();
+
+    const tokens = await page.evaluate(() => {
+      const root = getComputedStyle(document.documentElement);
+      return {
+        moveNear: root.getPropertyValue('--mt-move-near').trim(),
+        durState: root.getPropertyValue('--mt-dur-state').trim(),
+      };
+    });
+    expect(tokens.moveNear).toBe('0px');
+    expect(tokens.durState).toBe('1ms');
+  });
+
+  test('the caret stops blinking and stays visible, and the band stops moving, while a stream runs', async ({
+    page,
+  }) => {
+    // The caret and the band carry a meaning: a stream is running. Reduced motion stops the
+    // animation, and the design keeps the caret visible and the band in place, rather than
+    // removing either one.
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await stubCatalogueAndSession(page);
+    const stream = await mockExplainStream(page, 's1');
+    await openQuantumPhysicsSession(page);
+
+    await selectPhrase(page, 'focus-body', 'fundamental physical theory');
+    await verb(page, 'Explain it').click();
+    await stream.send(sseFrame('meta', { contentKey: 'k1', cached: false }));
+    await page.locator('.focus__caret').waitFor();
+
+    const caret = await page.locator('.focus__caret').evaluate((el) => {
+      const s = getComputedStyle(el);
+      return { animationName: s.animationName, opacity: s.opacity };
+    });
+    const bandAnimation = await page
+      .locator('.focus__band')
+      .evaluate((el) => getComputedStyle(el).animationName);
+
+    expect(caret.animationName, 'the caret animation stops').toBe('none');
+    expect(caret.opacity, 'the caret stays visible').toBe('1');
+    expect(bandAnimation, 'the band animation stops').toBe('none');
+
+    await stream.close();
+  });
+
+  test('the skeleton stops pulsing while the catalogue loads', async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    const held = gate();
+    await page.route('**/api/catalog/topics*', async (route) => {
+      await held.wait;
+      route.fulfill({ json: [] });
+    });
+    await page.goto('/');
+    await page.locator('.mt-skeleton').first().waitFor();
+
+    const animationName = await page
+      .locator('.mt-skeleton')
+      .first()
+      .evaluate((el) => getComputedStyle(el).animationName);
+    expect(animationName).toBe('none');
+
+    held.open();
+  });
+});
+
+test.describe('on a touch screen', () => {
+  test.use({ hasTouch: true, isMobile: true, viewport: WIDTHS.narrow });
+
+  test('a ghost pill keeps its rest background after a tap, and does not stay hovered', async ({
+    page,
+  }) => {
+    // "Exam" and not a category filter pill: tapping a category filter pill selects it, which
+    // changes its own colour on purpose (it becomes the current pill) — a fact about the
+    // catalogue, and not about hover. "Exam" answers no such state.
+    // Background, and not box-shadow: a ghost pill draws no shadow either at rest or on hover, so
+    // box-shadow could not tell the two states apart. The hover rule changes the background from
+    // --mt-surface (white) to --mt-sunk, so that property is the one a stuck hover would show on.
+    await stubCatalogueAndSession(page);
+    await gotoReader(page);
+
+    // The standard method this issue uses is `@media (hover: hover)`. This confirms the emulated
+    // touch context actually reports it as false, so a pass here is evidence about that method
+    // and not an accident of a rule that never runs.
+    const supportsHover = await page.evaluate(() => window.matchMedia('(hover: hover)').matches);
+    test.skip(supportsHover, 'this browser reports (hover: hover) as true in a touch context');
+
+    const exam = page.getByTestId('exam');
+    await exam.waitFor();
+    await exam.tap();
+
+    // A tap ends the touch at once, so any :active state is already gone. This polls rather than
+    // reading right away, because the transition itself still takes --mt-dur-press to settle.
+    await expect
+      .poll(() => exam.evaluate((el) => getComputedStyle(el).backgroundColor), {
+        message: 'a tapped ghost pill settles back to its white rest background',
+      })
+      .toBe('rgb(255, 255, 255)');
+  });
 });
 
 /** One question, so the quiz reaches its coral pill in one click. The score is not read here. */
