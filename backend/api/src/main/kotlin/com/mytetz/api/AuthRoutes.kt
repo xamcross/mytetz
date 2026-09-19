@@ -5,6 +5,7 @@ import com.mytetz.account.AccountService
 import com.mytetz.account.GoogleOAuth
 import com.mytetz.account.MagicLinkService
 import com.mytetz.account.User
+import com.mytetz.assess.QuizService
 import com.mytetz.billing.BillingService
 import com.mytetz.billing.EntitlementDecision
 import com.mytetz.quota.PrincipalId
@@ -138,11 +139,13 @@ data class AccountView(
  * signs in — see [BillingService.startTrialIfAbsent] for why "not refused outright" is a structural
  * property of that method's return type, and not a check this file has to remember to make.
  *
- * [sessions], [magicLink] and [google] are factories and not the built services, for the reason
- * `SessionRoutes.kt` gives at length for its own `sessions` parameter: `Components.magicLink` and
- * `Components.googleOAuth` are each `by lazy` on a chain that can throw when a credential is
- * missing, and passing the built value would force that chain while `Application.module()` is still
- * being configured — taking down the catalogue for a deployment that never uses sign-in at all.
+ * [sessions], [magicLink], [google] and [quizzes] are factories and not the built services, for the
+ * reason `SessionRoutes.kt` gives at length for its own `sessions` parameter: `Components.magicLink`
+ * and `Components.googleOAuth` are each `by lazy` on a chain that can throw when a credential is
+ * missing, and `Components.quizzes` is `by lazy` on a chain that ends at `AnthropicLlmClient()` and
+ * throws with no `ANTHROPIC_API_KEY`. Passing any of the built values would force its chain while
+ * `Application.module()` is still being configured — taking down the catalogue for a deployment that
+ * never uses sign-in, or never has a model key, at all.
  * [turnstile] carries no such chain — see `Components.turnstile`'s own KDoc — so it is passed built.
  */
 fun Route.authRoutes(
@@ -153,6 +156,12 @@ fun Route.authRoutes(
     cookies: PrincipalCookieConfig,
     quotaRepository: QuotaRepository,
     billing: BillingService,
+    // A factory, not the built service, for the reason `sessions` above is one: `Components.quizzes`
+    // is a lazy that ends at `AnthropicLlmClient()`, which demands ANTHROPIC_API_KEY in its
+    // constructor. Reading it here would build the model client while this module is still being
+    // configured. The route below calls only [QuizService.deleteForPrincipal], which never reaches
+    // the model, so the factory pays no real cost even on a deployment with no Anthropic key set.
+    quizzes: () -> QuizService,
     // Defaults to a Turnstile with no secret, which never opens a connection — see [Turnstile]'s
     // own KDoc. This lets a test that has nothing to do with Turnstile, such as this file's own
     // sibling suites `SessionRoutesTest` and `BillingRoutesTest`, build `authRoutes` without
@@ -371,10 +380,9 @@ fun Route.authRoutes(
      * - Every learning session the deleted principal owns — [SessionService.deleteForPrincipal].
      * - The principal's quota counter — [QuotaRepository.resetCounter], the same method
      *   `QuotaService.alignWindow` already uses to drop a stale counter.
-     * - **No quiz attempt exists to remove.** The specification names one; this codebase has no
-     *   `POST /api/sessions/{id}/quizzes` route and no quiz-attempt collection yet — see the design
-     *   spec's own "when that route exists" hedge on the same feature. A future task that adds
-     *   quizzes must add its own deletion here.
+     * - Every quiz attempt the deleted principal owns — [QuizService.deleteForPrincipal]. A quiz
+     *   template stays: it is content-addressed and shared between learners, and it holds no
+     *   `principalId` and no answer of any one learner — see `QuizRepository`'s own KDoc.
      * - **No explanation is ever removed.** An explanation is user-independent and holds nothing
      *   personal; two learners who reach the same span by the same path share one document, so
      *   deleting it here would destroy content every other learner reads. This is the one line the
@@ -420,6 +428,7 @@ fun Route.authRoutes(
 
         val principalId = PrincipalId.user(user.id).value
         sessions().deleteForPrincipal(principalId)
+        quizzes().deleteForPrincipal(principalId)
         quotaRepository.resetCounter(principalId)
         account.deleteAccount(user.id)
 
