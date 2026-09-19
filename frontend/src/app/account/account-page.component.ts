@@ -1,4 +1,4 @@
-import { Component, DestroyRef, OnInit, inject, signal } from '@angular/core';
+import { Component, DestroyRef, OnInit, computed, inject, signal } from '@angular/core';
 import { HttpErrorResponse } from '@angular/common/http';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { AllowanceMeterComponent } from './allowance-meter.component';
@@ -33,10 +33,12 @@ const POLL_TIMEOUT_MILLIS = 30000;
  * The page removes the query string from the address bar once the first load settles. This
  * clears the learner's own email out of the address bar and the browser history.
  *
- * "Manage subscription" is present, and the button is inert. `POST /api/billing/checkout` is the
- * only billing link this backend exposes today. This task does not confirm that the same
- * checkout page also manages an existing subscription, so the manage button stays inert until a
- * task confirms this against Freemius's own documentation. See the task 13 report.
+ * "Manage subscription" shows only for a learner with a live or a recent subscription — status
+ * `ACTIVE`, `PAST_DUE` or `CANCELLED`. See [manageVisible]. A click asks
+ * `POST /api/billing/portal` for a link, then sends the browser to the Freemius customer portal.
+ * There the learner can cancel, change a payment method, or read an invoice. [manageSubscription]
+ * carries the request, and [redirect] carries the leave-this-page step, the same split
+ * `WallPanelComponent.subscribe` and `WallPanelComponent.redirect` use for the checkout link.
  *
  * "Delete account" opens a confirmation panel first — see [confirmingDelete]. The backend needs a
  * fresh sign-in to complete a deletion. A stale session answers `403 CONFIRMATION_REQUIRED`, and
@@ -93,15 +95,17 @@ const POLL_TIMEOUT_MILLIS = 30000;
           }
 
           <div class="account-page__actions">
-            <!-- Present and inert — see the class doc comment. -->
-            <button
-              type="button"
-              class="mt-pill mt-pill--ghost"
-              data-action="manage-subscription"
-              disabled
-            >
-              Manage subscription
-            </button>
+            @if (manageVisible()) {
+              <button
+                type="button"
+                class="mt-pill mt-pill--ghost"
+                data-action="manage-subscription"
+                [disabled]="openingPortal()"
+                (click)="manageSubscription()"
+              >
+                Manage subscription
+              </button>
+            }
             <a class="mt-pill mt-pill--ghost" routerLink="/terms">Terms</a>
             <button
               type="button"
@@ -254,6 +258,19 @@ export class AccountPageComponent implements OnInit {
    * `GET /api/account`. */
   readonly actionError = signal<string | null>(null);
 
+  /** True when [view] carries a status a learner can manage at the vendor portal: an active
+   * subscription, one behind on a payment, or one already cancelled. A trial has no vendor
+   * subscription yet. An expired subscription has none left to manage. Both statuses hide the
+   * control. */
+  readonly manageVisible = computed(() => {
+    const status = this.view()?.status;
+    return status === 'ACTIVE' || status === 'PAST_DUE' || status === 'CANCELLED';
+  });
+
+  /** True while a portal-link request is in flight. The button disables on this. A second click
+   * before the redirect happens must not send a second request. */
+  readonly openingPortal = signal(false);
+
   /** True while the post-purchase poll runs. See the class doc comment. */
   readonly polling = signal(false);
 
@@ -343,6 +360,39 @@ export class AccountPageComponent implements OnInit {
    * stale cached answer, and against a later regression that puts a default back. */
   periodEndText(epochMillis: number | null | undefined): string | null {
     return epochMillis == null ? null : formatDate(epochMillis);
+  }
+
+  /**
+   * Sends `POST /api/billing/portal`, then sends the browser to the returned link.
+   *
+   * The server reads the signed-in learner's own email from the session. This method sends no
+   * email and no id. A `404 NO_SUBSCRIPTION` and every other failure share one message: this
+   * method cannot tell a missing subscription apart from a vendor outage, and a learner does not
+   * need that difference to know what to try next.
+   */
+  async manageSubscription(): Promise<void> {
+    if (this.openingPortal()) return;
+    this.openingPortal.set(true);
+    this.actionError.set(null);
+    try {
+      const { url } = await this.api.portal();
+      this.redirect(url);
+      // This method leaves `openingPortal` set to true after success. See `WallPanelComponent.subscribe`
+      // for the reason: the browser is about to leave this page, and nothing here must enable the
+      // button again.
+    } catch {
+      this.actionError.set(
+        'Could not open the customer portal. Check your connection and try again.',
+      );
+      this.openingPortal.set(false);
+    }
+  }
+
+  /** Sends the browser to [url]. This method stays separate so a test can replace it. jsdom does
+   * not implement real navigation, so a test cannot check `window.location` directly. Mirrors
+   * `WallPanelComponent.redirect`. */
+  redirect(url: string): void {
+    window.location.href = url;
   }
 
   async signOut(): Promise<void> {

@@ -199,20 +199,48 @@ describe('AccountPageComponent', () => {
     expect(store.view()).toEqual(active);
   });
 
-  it('manage subscription is present and inert', async () => {
-    // No backend route confirms a manage link yet — see the class doc comment. This test clicks
-    // the button and checks that no request goes out. A check of the markup alone is not proof.
+  it.each(['ACTIVE', 'PAST_DUE', 'CANCELLED'])(
+    'manage subscription is enabled for %s and opens the vendor portal',
+    async (status) => {
+      await mount((req) => req.flush({ ...active, status }));
+      const redirect = vi.spyOn(fixture.componentInstance, 'redirect').mockImplementation(() => {});
+
+      const manage = fixture.nativeElement.querySelector(
+        '[data-action="manage-subscription"]',
+      ) as HTMLButtonElement;
+      expect(manage.disabled).toBe(false);
+
+      manage.click();
+
+      const req = http.expectOne('/api/billing/portal');
+      expect(req.request.method).toBe('POST');
+      req.flush({ url: 'https://example.freemius.com/portal?token=abc' });
+      await fixture.whenStable();
+
+      expect(redirect).toHaveBeenCalledWith('https://example.freemius.com/portal?token=abc');
+    },
+  );
+
+  it.each(['TRIALING', 'EXPIRED'])('manage subscription is absent for %s', async (status) => {
+    await mount((req) => req.flush({ ...active, status }));
+
+    expect(fixture.nativeElement.querySelector('[data-action="manage-subscription"]')).toBeNull();
+  });
+
+  it('a failed portal request shows a message and keeps the learner on the page', async () => {
     await mount((req) => req.flush(active));
 
     const manage = fixture.nativeElement.querySelector(
       '[data-action="manage-subscription"]',
     ) as HTMLButtonElement;
-
-    expect(manage.disabled).toBe(true);
-
     manage.click();
 
-    http.expectNone('/api/billing/checkout');
+    http.expectOne('/api/billing/portal').flush(null, { status: 500, statusText: 'Server Error' });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(text()).toContain('Could not open the customer portal');
+    expect(store.view()).toEqual(active);
   });
 
   it('links to the terms next to the subscribe control', async () => {
