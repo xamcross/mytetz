@@ -1,5 +1,8 @@
 package com.mytetz.api
 
+import ch.qos.logback.classic.Level
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
 import com.mytetz.account.AccountRepository
 import com.mytetz.account.AccountService
 import com.mytetz.account.MagicLinkService
@@ -28,6 +31,7 @@ import io.ktor.server.testing.testApplication
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import org.bson.Document
+import org.slf4j.LoggerFactory
 import java.net.URLEncoder
 import java.util.UUID
 import javax.crypto.Mac
@@ -41,6 +45,32 @@ import kotlin.test.assertTrue
 
 private val wireJson = Json { ignoreUnknownKeys = true }
 
+/** The name `BillingRoutes.kt` gives its own logger. Read back here to attach a test appender. */
+private const val BILLING_ROUTES_LOGGER = "com.mytetz.api.BillingRoutes"
+
+/** `2025-12-31 23:59:59` UTC, computed independently with `date -u -d ... +%s`. */
+private const val DEC_31_2025_UTC_EPOCH_MILLIS = 1_767_225_599_000L
+
+/**
+ * Builds one full `subscription.created` event, in the exact shape
+ * `packages/sdk/src/webhook/subscription.events.ts` declares. It carries a learner's own [email]
+ * under `objects.user.email`, so `BillingRoutes.kt`'s resolver can find the row this test signed
+ * in for.
+ */
+private fun subscriptionCreatedBody(
+    id: String,
+    email: String,
+    created: String = "2025-01-01 00:00:00",
+    freemiusUserId: String = "1001",
+    freemiusSubscriptionId: String = "2001",
+    licenseExpiration: String = "2025-12-31 23:59:59",
+): String =
+    """{"id":"$id","type":"subscription.created","created":"$created",""" +
+        """"objects":{"user":{"id":"$freemiusUserId","email":"$email"},""" +
+        """"subscription":{"id":"$freemiusSubscriptionId"},""" +
+        """"license":{"expiration":"$licenseExpiration"}},""" +
+        """"data":{"subscription_id":"$freemiusSubscriptionId"}}"""
+
 /**
  * The exact HMAC-SHA256-over-raw-bytes computation Freemius documents, kept as its own copy so
  * this suite proves the route agrees with the vendor's scheme and not merely with itself — the
@@ -50,6 +80,24 @@ private fun hmacLowerHex(body: String, secretKey: String): String {
     val mac = Mac.getInstance("HmacSHA256")
     mac.init(SecretKeySpec(secretKey.toByteArray(Charsets.UTF_8), "HmacSHA256"))
     return mac.doFinal(body.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+}
+
+/**
+ * Builds one webhook body in the vendor shape `packages/sdk/src/webhook/subscription.events.ts`
+ * declares: a top-level `id`, `type` and `created`. When [email] is given, the body also carries
+ * one `objects` object, with the address at `objects.user.email` — the field
+ * `BillingRoutes.kt`'s resolver actually reads. Every test in this suite that needs a webhook
+ * body from an email builds it through this one function. A fixture then never drifts back to a
+ * top-level `email` field.
+ */
+private fun webhookBody(
+    id: String,
+    type: String = "subscription.created",
+    created: String = "2025-01-01 00:00:00",
+    email: String? = null,
+): String {
+    val objects = email?.let { ""","objects":{"user":{"email":"$it"}}""" }.orEmpty()
+    return """{"id":"$id","type":"$type","created":"$created"$objects}"""
 }
 
 /**
@@ -231,9 +279,7 @@ class BillingRoutesTest {
         val userId = requireNotNull(account.findByEmail(email)).id
         assertEquals(SubscriptionStatus.TRIALING, billingRepository.find(userId)?.status)
 
-        val response = webhook(
-            """{"id":"evt-by-email","type":"subscription.created","created":1000,"email":"$email"}""",
-        )
+        val response = webhook(webhookBody(id = "evt-by-email", email = email))
 
         assertEquals(HttpStatusCode.NoContent, response.status)
         assertEquals(SubscriptionStatus.ACTIVE, billingRepository.find(userId)?.status)
@@ -244,9 +290,7 @@ class BillingRoutesTest {
         val unknownEmail = "unmatched-${UUID.randomUUID()}@example.com"
         val before = stack.database.getCollection<Document>("subscriptions").countDocuments()
 
-        val response = webhook(
-            """{"id":"evt-unmatched","type":"subscription.created","created":1000,"email":"$unknownEmail"}""",
-        )
+        val response = webhook(webhookBody(id = "evt-unmatched", email = unknownEmail))
 
         assertEquals(HttpStatusCode.NoContent, response.status)
         assertEquals(before, stack.database.getCollection<Document>("subscriptions").countDocuments())
@@ -254,10 +298,46 @@ class BillingRoutesTest {
     }
 
     @Test
+    fun `a vendor-shaped subscription created event activates the row with the vendor's own fields`() = app {
+        val email = signIn()
+        val userId = requireNotNull(account.findByEmail(email)).id
+
+        val response = webhook(subscriptionCreatedBody(id = "evt-vendor-shape", email = email))
+
+        assertEquals(HttpStatusCode.NoContent, response.status)
+        val stored = requireNotNull(billingRepository.find(userId))
+        assertEquals(SubscriptionStatus.ACTIVE, stored.status)
+        assertEquals(
+            DEC_31_2025_UTC_EPOCH_MILLIS,
+            stored.currentPeriodEndsAtEpochMillis,
+            "the period end must come from objects.license.expiration",
+        )
+        assertEquals("1001", stored.freemiusUserId)
+        assertEquals("2001", stored.freemiusSubscriptionId)
+    }
+
+    @Test
+    fun `the ISO 8601 form of created gives the same row as the space form`() = app {
+        val email = signIn()
+        val userId = requireNotNull(account.findByEmail(email)).id
+
+        val response = webhook(
+            subscriptionCreatedBody(id = "evt-vendor-shape-iso", email = email, created = "2025-01-01T00:00:00Z"),
+        )
+
+        assertEquals(HttpStatusCode.NoContent, response.status)
+        val stored = requireNotNull(billingRepository.find(userId))
+        assertEquals(SubscriptionStatus.ACTIVE, stored.status)
+        assertEquals(DEC_31_2025_UTC_EPOCH_MILLIS, stored.currentPeriodEndsAtEpochMillis)
+        assertEquals("1001", stored.freemiusUserId)
+        assertEquals("2001", stored.freemiusSubscriptionId)
+    }
+
+    @Test
     fun `the webhook route reads the raw body`() = app {
         // Deliberately odd whitespace: a JSON parser is free to normalise it away when it writes
         // the value back out, so a route that hashed a re-encoded copy would refuse this body.
-        val original = """{ "id": "evt-raw", "type": "subscription.created",  "created": 1000 }"""
+        val original = """{ "id": "evt-raw", "type": "subscription.created",  "created": "2025-01-01 00:00:00" }"""
         val reserialized = Json.encodeToString(JsonElement.serializer(), Json.parseToJsonElement(original))
         assertNotEquals(original, reserialized, "fixture error: re-serializing must change the bytes")
 
@@ -273,7 +353,7 @@ class BillingRoutesTest {
     @Test
     fun `the webhook refuses a bad signature with 401`() = app {
         val response = webhook(
-            """{"id":"evt-bad-sig","type":"subscription.created","created":1000}""",
+            webhookBody(id = "evt-bad-sig"),
             signature = "0000000000000000000000000000000000000000000000000000000000000000",
         )
 
@@ -282,10 +362,33 @@ class BillingRoutesTest {
     }
 
     @Test
+    fun `the webhook answers 400 and logs BILLING_UNPARSEABLE_EVENT for a signed body it cannot parse`() = app {
+        val appender = attachAppender()
+        try {
+            // This body is signed, so the signature check passes. The route then reaches
+            // FreemiusWebhook.parse. The body has no "id" field, so parse raises the same
+            // SerializationException a wrong-typed "created" field also raises. See
+            // FreemiusWebhookTest for that second case.
+            val body = """{"type":"subscription.created","created":"2025-01-01 00:00:00"}"""
+
+            val response = webhook(body)
+
+            assertEquals(HttpStatusCode.BadRequest, response.status)
+            val logged = requireNotNull(
+                appender.list.firstOrNull { it.formattedMessage.contains("BILLING_UNPARSEABLE_EVENT") },
+            ) { "BILLING_UNPARSEABLE_EVENT was not logged: ${appender.list.map { it.formattedMessage }}" }
+            assertEquals(Level.WARN, logged.level)
+            assertFalse(logged.formattedMessage.contains(body), "the log line must not carry the request body")
+        } finally {
+            detachAppender(appender)
+        }
+    }
+
+    @Test
     fun `the webhook answers 204 for a duplicate event`() = app {
         val email = signIn()
         val userId = requireNotNull(account.findByEmail(email)).id
-        val body = """{"id":"evt-dup","type":"subscription.created","created":1000,"email":"$email"}"""
+        val body = webhookBody(id = "evt-dup", email = email)
 
         val first = webhook(body)
         val second = webhook(body)
@@ -300,9 +403,7 @@ class BillingRoutesTest {
         val email = signIn()
         val userId = requireNotNull(account.findByEmail(email)).id
 
-        val response = webhook(
-            """{"id":"evt-first-payment","type":"subscription.created","created":1000,"email":"$email"}""",
-        )
+        val response = webhook(webhookBody(id = "evt-first-payment", email = email))
 
         assertEquals(HttpStatusCode.NoContent, response.status)
         val stored = requireNotNull(billingRepository.find(userId))
@@ -318,9 +419,7 @@ class BillingRoutesTest {
         val created = createSession()
         val before = stack.generations
 
-        val activated = webhook(
-            """{"id":"evt-pipeline-active","type":"subscription.created","created":1000,"email":"$email"}""",
-        )
+        val activated = webhook(webhookBody(id = "evt-pipeline-active", email = email))
         assertEquals(HttpStatusCode.NoContent, activated.status)
         assertEquals(SubscriptionStatus.ACTIVE, billingRepository.find(userId)?.status)
 
@@ -342,9 +441,7 @@ class BillingRoutesTest {
 
         // payment.refund maps straight to EXPIRED. The row is TRIALING with no prior event, so the
         // ordering rule in BillingService.apply never drops this as stale.
-        val expired = webhook(
-            """{"id":"evt-pipeline-expired","type":"payment.refund","created":1000,"email":"$email"}""",
-        )
+        val expired = webhook(webhookBody(id = "evt-pipeline-expired", type = "payment.refund", email = email))
         assertEquals(HttpStatusCode.NoContent, expired.status)
         assertEquals(SubscriptionStatus.EXPIRED, billingRepository.find(userId)?.status)
 
@@ -381,7 +478,7 @@ class BillingRoutesTest {
     ) {
         val response = client.post("/api/billing/webhook") {
             contentType(ContentType.Application.Json)
-            setBody("""{"id":"evt-1","type":"subscription.created","created":1000}""")
+            setBody(webhookBody(id = "evt-1"))
         }
 
         assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
@@ -398,5 +495,21 @@ class BillingRoutesTest {
 
         assertFalse(response.bodyAsText().contains("FREEMIUS_PRODUCT_ID"))
         assertFalse(response.bodyAsText().contains("super-secret-value"))
+    }
+
+    // ------------------------------------------------------------------ log capture
+    //
+    // This is the same technique `ErrorMappingTest` and `BillingServiceTest` use. It attaches a
+    // ListAppender straight to the route's own logger, and reads the alert token back. It then
+    // detaches the appender, so one test's appender never sees another test's log line.
+
+    private fun attachAppender(): ListAppender<ILoggingEvent> {
+        val appender = ListAppender<ILoggingEvent>().apply { start() }
+        (LoggerFactory.getLogger(BILLING_ROUTES_LOGGER) as ch.qos.logback.classic.Logger).addAppender(appender)
+        return appender
+    }
+
+    private fun detachAppender(appender: ListAppender<ILoggingEvent>) {
+        (LoggerFactory.getLogger(BILLING_ROUTES_LOGGER) as ch.qos.logback.classic.Logger).detachAppender(appender)
     }
 }

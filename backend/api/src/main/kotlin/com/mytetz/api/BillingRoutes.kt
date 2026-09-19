@@ -15,6 +15,7 @@ import io.ktor.server.routing.Route
 import io.ktor.server.routing.post
 import io.ktor.utils.io.toByteArray
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerializationException
 import org.slf4j.LoggerFactory
 import java.net.URLEncoder
 
@@ -138,7 +139,16 @@ fun Route.billingRoutes(
             return@post
         }
 
-        val event = FreemiusWebhook.parse(rawBody)
+        val event = try {
+            FreemiusWebhook.parse(rawBody)
+        } catch (cause: SerializationException) {
+            // Never the body. The signature already verified at this point. A valid signature is
+            // not proof that the JSON inside has the shape this route expects. This line must
+            // stay safe to grep, even when the sender is untrusted.
+            log.warn("BILLING_UNPARSEABLE_EVENT")
+            call.respond(HttpStatusCode.BadRequest, ApiError("INVALID_REQUEST", "the request was not valid for this endpoint"))
+            return@post
+        }
         val resolved = resolveUserReference(event) { email ->
             MagicLinkService.normaliseEmail(email)?.let { account.findByEmail(it)?.id }
         }
