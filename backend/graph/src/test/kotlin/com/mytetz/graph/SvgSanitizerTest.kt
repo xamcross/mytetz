@@ -247,6 +247,39 @@ class SvgSanitizerTest {
         assertTrue("evil.example" !in clean.svg, clean.svg)
     }
 
+    // ------------------------------------------------------------------ the SVG namespace
+
+    @Test
+    fun `an input with no xmlns gives an output whose root has the SVG namespace`() {
+        val result = SvgSanitizer.sanitize(
+            """<svg viewBox="0 0 10 10"><circle cx="1" cy="1" r="1"/></svg>"""
+        )
+        val clean = assertIs<SvgSanitizeResult.Clean>(result)
+        assertTrue(
+            Regex("""<svg\b[^>]*\bxmlns="http://www\.w3\.org/2000/svg"""").containsMatchIn(clean.svg),
+            "expected an explicit SVG namespace on the root: ${clean.svg}",
+        )
+    }
+
+    @Test
+    fun `a root element that is not svg is refused`() {
+        val result = SvgSanitizer.sanitize("""<g><circle cx="1" cy="1" r="1"/></g>""")
+        assertIs<SvgSanitizeResult.Refused>(result)
+    }
+
+    @Test
+    fun `an element with an allowed local name in another namespace ends in the SVG namespace`() {
+        // Selected: convert, never drop -- see toSvgNamespace's own KDoc for the reason. The
+        // circle is real diagram content; the foreign namespace string it arrived under must not
+        // survive into the output, and the element itself must.
+        val result = SvgSanitizer.sanitize(
+            """<svg><circle xmlns="http://example.com/other" cx="1" cy="1" r="1"/></svg>"""
+        )
+        val clean = assertIs<SvgSanitizeResult.Clean>(result)
+        assertTrue("<circle" in clean.svg)
+        assertTrue("example.com" !in clean.svg, "the foreign namespace must not survive: ${clean.svg}")
+    }
+
     @Test
     fun `nesting past the depth bound is refused`() {
         val nested = "<g>".repeat(41) + "<circle cx=\"1\" cy=\"1\" r=\"1\"/>" + "</g>".repeat(41)

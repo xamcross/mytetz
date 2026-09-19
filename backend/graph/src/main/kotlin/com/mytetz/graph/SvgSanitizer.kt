@@ -57,6 +57,13 @@ sealed interface SvgSanitizeResult {
  * recursive walk of a tree that deep can overflow the JVM's own call stack before the character
  * bound is ever reached.
  *
+ * A document whose root element's local name is not `svg` is refused. This renderer shows the
+ * diagram through an `<img>` bound to a `data:image/svg+xml` URL — the plan's own Decision 7 — and
+ * a browser parses that value as a standalone XML document, which it renders only when the root is
+ * `svg`. A document rooted at, for example, `<g>` would parse without error and render nothing: a
+ * silent, paid-for failure the learner sees as a blank image. Refusing it here, before persistence,
+ * is cheaper than that.
+ *
  * Malformed XML is refused outright, never partly sanitised.
  *
  * ## What this file drops rather than refuses
@@ -105,8 +112,18 @@ sealed interface SvgSanitizeResult {
  *
  * For `marker-start`, `marker-mid`, `marker-end` and `clip-path`, a value passes only as `none` or
  * as [LOCAL_URL_REFERENCE].
+ *
+ * ## The SVG namespace
+ *
+ * [sanitize] puts every surviving element into the SVG namespace and sets `xmlns` on the root
+ * explicitly, whatever the model wrote or omitted. See [toSvgNamespace]'s own KDoc for how, and
+ * for why an element the model declared under some other namespace still ends up converted into
+ * the SVG namespace, rather than dropped for carrying the wrong one.
  */
 object SvgSanitizer {
+
+    /** The namespace a browser's own SVG-as-image renderer requires on the root. See this file's own KDoc. */
+    internal const val SVG_NAMESPACE: String = "http://www.w3.org/2000/svg"
 
     /**
      * `<use>` is not on this list. Every allowed shape, marker, gradient and clip path refers to
@@ -158,12 +175,7 @@ object SvgSanitizer {
         val document = parse(rawSource)
         when (val verdict = sanitizeChildren(document, depth = -1)) {
             is Verdict.Refused -> SvgSanitizeResult.Refused(verdict.reason)
-            Verdict.Kept ->
-                if (document.documentElement == null) {
-                    SvgSanitizeResult.Refused("no root element survived sanitisation")
-                } else {
-                    SvgSanitizeResult.Clean(serialize(document))
-                }
+            Verdict.Kept -> finish(document)
         }
     } catch (e: SAXException) {
         SvgSanitizeResult.Refused(e.message ?: "malformed XML")
@@ -171,6 +183,30 @@ object SvgSanitizer {
         // Any other parser or DOM fault — an unexpected document shape included — is a refusal,
         // never a partial result. See this file's own KDoc: malformed XML is refused outright.
         SvgSanitizeResult.Refused(e.message ?: "could not sanitise the document")
+    }
+
+    /**
+     * Checks the root, once the walk has kept every element it visited, and serializes.
+     *
+     * The root check happens here rather than inside [sanitizeChildren], because a local name on
+     * [ALLOWED_ELEMENTS] — `g`, for instance — is a legitimate *nested* shape and must stay
+     * allowed there; it is only wrong as the document's own root. See this file's own KDoc for why
+     * a non-`svg` root is refused rather than merely dropped: dropping it would leave no root at
+     * all, or promote whatever it wrapped into that position with no guarantee that a `svg`
+     * element is what results.
+     */
+    private fun finish(document: Document): SvgSanitizeResult {
+        val root = document.documentElement
+            ?: return SvgSanitizeResult.Refused("no root element survived sanitisation")
+
+        val rootLocalName = (root.localName ?: root.tagName).lowercase()
+        if (rootLocalName != "svg") {
+            return SvgSanitizeResult.Refused("root element must be svg, was '$rootLocalName'")
+        }
+
+        val normalizedRoot = toSvgNamespace(document, root)
+        normalizedRoot.setAttribute("xmlns", SVG_NAMESPACE)
+        return SvgSanitizeResult.Clean(serialize(document))
     }
 
     private sealed interface Verdict {
@@ -282,6 +318,62 @@ object SvgSanitizer {
         if ("\\" in value) return false
         val trimmed = value.trim()
         return trimmed.equals("none", ignoreCase = true) || LOCAL_URL_REFERENCE.matches(trimmed)
+    }
+
+    /**
+     * Puts [element] and every element beneath it into [SVG_NAMESPACE], and removes a bare `xmlns`
+     * attribute the walk above kept on any of them — a leftover value from the model's own source
+     * would otherwise disagree with the namespace this method just set. [finish] adds the one,
+     * correct declaration back, once, on the root, after this method returns.
+     *
+     * This is not cosmetic. The renderer (the plan's own Decision 7) binds the sanitised source to
+     * an `<img>` through a `data:image/svg+xml` URL, and a browser parses that value as a
+     * standalone XML document — it renders the document only when the root is `svg` in this exact
+     * namespace. A model routinely omits `xmlns` altogether, or writes a diagram element under some
+     * other namespace URI it declared for itself; either way the serialized text must still say
+     * `http://www.w3.org/2000/svg`, because that text — not this server's own in-memory model of
+     * it — is what the browser goes on to parse.
+     *
+     * **Selected: every kept element ends up in the SVG namespace, never dropped for being in the
+     * wrong one.** By the time this method runs, [sanitizeChildren] has already kept the element
+     * because its *local name* is on [ALLOWED_ELEMENTS] — a `circle` is real, wanted diagram content
+     * whatever namespace URI the model happened to write on it. Dropping it here, on top of that
+     * check, would throw away content the rest of this file already decided to keep, for a reason
+     * (a namespace string) the diagram's own visible shape does not depend on. Converting it is also
+     * the only choice consistent with the root itself: this file already renames the root's own
+     * namespace regardless of what the model wrote there, and a nested element that disagreed with
+     * its own root's namespace would be a stranger defect to leave in place than the one this method
+     * exists to fix.
+     *
+     * **How:** `Document.renameNode`, on the JDK's own contract (`org.w3c.dom.Document`, read at
+     * `https://docs.oracle.com/en/java/javase/21/docs/api/java.xml/org/w3c/dom/Document.html` on
+     * 2026-09-19): "when possible this simply changes the name of the given node, otherwise this
+     * creates a new node with the specified name and replaces the existing node ... at the position
+     * the old node used to have in its parent's child nodes list", and, for an `Element`, "its
+     * attributes are moved to the new node". The same page separately documents a
+     * `NOT_SUPPORTED_ERR` "if the implementation does not support the renaming of the document
+     * element" — a warning aimed squarely at the root, which is exactly the node this method must
+     * rename. `SvgSanitizerTest`'s own namespace tests exercise this against the JDK's real,
+     * built-in `DocumentBuilderFactory` implementation, root included, and it succeeds: this file
+     * relies on that confirmed behaviour, not on the method's name alone. The return value is used,
+     * never the original reference, because "otherwise this creates a new node" means the JDK is
+     * free to (and for a namespace change, generally does) hand back a different object than the one
+     * passed in; assuming the argument was mutated in place would silently stop recursing into the
+     * real, replaced subtree.
+     */
+    private fun toSvgNamespace(document: Document, element: Element): Element {
+        val renamed = if (element.namespaceURI == SVG_NAMESPACE) {
+            element
+        } else {
+            document.renameNode(element, SVG_NAMESPACE, element.localName ?: element.tagName) as Element
+        }
+        renamed.removeAttribute("xmlns")
+
+        val children = renamed.childNodes
+        for (i in 0 until children.length) {
+            (children.item(i) as? Element)?.let { toSvgNamespace(document, it) }
+        }
+        return renamed
     }
 
     private fun parse(rawSource: String): Document {
