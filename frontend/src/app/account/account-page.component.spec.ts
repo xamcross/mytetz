@@ -87,6 +87,26 @@ describe('AccountPageComponent', () => {
     http.expectOne('/api/account').flush(active);
   });
 
+  it('the account page draws a skeleton card before the first answer', () => {
+    // Finding F14. The catalogue and the reader each draw a skeleton while their first request
+    // runs. The account page drew nothing at all. This proves the same shape now appears here:
+    // one raised card with four placeholder rows.
+    fixture.detectChanges();
+
+    const skeleton = fixture.nativeElement.querySelector('.account-page__skeleton');
+    expect(skeleton).not.toBeNull();
+    expect(skeleton.classList).toContain('mt-card--raised');
+    expect(skeleton.querySelectorAll('.mt-skeleton').length).toBe(4);
+
+    http.expectOne('/api/account').flush(active);
+  });
+
+  it('removes the skeleton once the first answer lands', async () => {
+    await mount((req) => req.flush(active));
+
+    expect(fixture.nativeElement.querySelector('.account-page__skeleton')).toBeNull();
+  });
+
   it('returning from checkout refreshes the account view', async () => {
     // A return from checkout with no `action` query parameter is an ordinary navigation to this
     // route. The browser boots the app fresh, and this component mounts. A plain `GET
@@ -106,10 +126,13 @@ describe('AccountPageComponent', () => {
     expect(text()).toContain('learner@example.com');
   });
 
-  it('the account page shows the status and the period end', async () => {
+  it('the account page shows a sentence for the status, and the period end', async () => {
+    // Finding F15. The row once printed the raw enum, for example "ACTIVE". A learner reads a
+    // sentence now, and never the wire value — see the describe block below for every status.
     await mount((req) => req.flush(active));
 
-    expect(text()).toContain('ACTIVE');
+    expect(text()).toContain('Your subscription is active.');
+    expect(text()).not.toContain('ACTIVE');
     expect(text()).toContain('August 7, 2024');
   });
 
@@ -126,10 +149,25 @@ describe('AccountPageComponent', () => {
     expect(text()).not.toContain('1970');
   });
 
-  it('the account page shows the status of a trial learner', async () => {
+  it('the account page shows a sentence for the status of a trial learner', async () => {
     await mount((req) => req.flush(trialing));
 
-    expect(text()).toContain('TRIALING');
+    expect(text()).toContain('Your trial is active.');
+    expect(text()).not.toContain('TRIALING');
+  });
+
+  it.each([
+    ['TRIALING', 'Your trial is active.'],
+    ['ACTIVE', 'Your subscription is active.'],
+    ['PAST_DUE', 'Your payment is overdue.'],
+    ['CANCELLED', 'Your subscription is cancelled.'],
+    ['EXPIRED', 'Your subscription has expired.'],
+    ['SOME_FUTURE_STATUS', 'We do not recognize this account status.'],
+  ])('finding F15: status %s shows the sentence %j, never the raw value', async (status, sentence) => {
+    await mount((req) => req.flush({ ...active, status }));
+
+    expect(text()).toContain(sentence);
+    expect(text()).not.toContain(status);
   });
 
   it('the account page shows no "Invalid Date" when the wire body has no period-end key', async () => {
@@ -221,6 +259,26 @@ describe('AccountPageComponent', () => {
     },
   );
 
+  it('marks "Manage subscription" busy, with a label that names the work, while its request runs', async () => {
+    // Finding F7, animation J. A busy control once faded to 55% opacity and said nothing about
+    // what it was doing. It now carries aria-busy and a label naming the work while the request
+    // is in flight, and stays disabled — so a second click cannot send a second request.
+    await mount((req) => req.flush(active));
+
+    const manage = fixture.nativeElement.querySelector(
+      '[data-action="manage-subscription"]',
+    ) as HTMLButtonElement;
+    manage.click();
+    fixture.detectChanges();
+
+    expect(manage.getAttribute('aria-busy')).toBe('true');
+    expect(manage.textContent).toContain('Opening the portal…');
+    expect(manage.disabled).toBe(true);
+
+    http.expectOne('/api/billing/portal').flush({ url: 'https://example.freemius.com/portal' });
+    await fixture.whenStable();
+  });
+
   it.each(['TRIALING', 'EXPIRED'])('manage subscription is absent for %s', async (status) => {
     await mount((req) => req.flush({ ...active, status }));
 
@@ -277,6 +335,40 @@ describe('AccountPageComponent', () => {
     expect(manage.compareDocumentPosition(terms) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  it('draws Terms as a plain link, and not a pill', async () => {
+    // Finding F15. A destructive control once sat beside a navigation link at the same visual
+    // weight. Terms drops the pill classes, so it reads as a plain link.
+    await mount((req) => req.flush(active));
+
+    const terms = fixture.nativeElement.querySelector('a[href="/terms"]') as HTMLAnchorElement;
+    expect(terms.classList).not.toContain('mt-pill');
+    expect(terms.classList).not.toContain('mt-pill--ghost');
+  });
+
+  it('puts delete account in its own block, below a divider, under its own heading', async () => {
+    // Finding F15. "Delete account" once sat in the same row as "Sign out", "Manage subscription"
+    // and "Terms", at one visual weight. It now sits in its own block, below a divider, under the
+    // heading "Close your account" — and the DOM order proves the block comes after the primary
+    // row and not before it.
+    await mount((req) => req.flush(active));
+
+    const actions = fixture.nativeElement.querySelector('.account-page__actions');
+    const signOut = fixture.nativeElement.querySelector('[data-action="sign-out"]');
+    const divider = fixture.nativeElement.querySelector('.account-page__divider');
+    const heading = fixture.nativeElement.querySelector('.account-page__danger-heading');
+    const del = fixture.nativeElement.querySelector('[data-action="delete-account"]');
+
+    expect(actions.querySelector('[data-action="delete-account"]')).toBeNull();
+    expect(heading?.textContent).toContain('Close your account');
+    expect(
+      signOut.compareDocumentPosition(divider) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      divider.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(heading.compareDocumentPosition(del) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('delete account opens a confirmation panel instead of sending a request at once', async () => {
     await mount((req) => req.flush(active));
 
@@ -312,6 +404,30 @@ describe('AccountPageComponent', () => {
       fixture.nativeElement.querySelector('[data-action="delete-account-confirm"]'),
     ).toBeNull();
     expect(fixture.nativeElement.querySelector('[data-action="delete-account"]')).not.toBeNull();
+  });
+
+  it('marks the delete confirm button busy, with a label that names the work, while its request runs', async () => {
+    // Finding F7, animation J. Same rule as "Manage subscription" above.
+    await mount((req) => req.flush(active));
+
+    (
+      fixture.nativeElement.querySelector('[data-action="delete-account"]') as HTMLButtonElement
+    ).click();
+    fixture.detectChanges();
+    const confirm = fixture.nativeElement.querySelector(
+      '[data-action="delete-account-confirm"]',
+    ) as HTMLButtonElement;
+    confirm.click();
+    fixture.detectChanges();
+
+    expect(confirm.getAttribute('aria-busy')).toBe('true');
+    expect(confirm.textContent).toContain('Deleting…');
+    expect(confirm.disabled).toBe(true);
+
+    http.expectOne('/api/account/delete').flush(null, { status: 204, statusText: 'No Content' });
+    await fixture.whenStable();
+    http.expectOne('/api/account').flush(signedOut, { status: 401, statusText: '' });
+    await fixture.whenStable();
   });
 
   it('confirming deletion posts to the delete route and ends signed out', async () => {
@@ -491,7 +607,7 @@ describe('AccountPageComponent — the post-purchase poll', () => {
     fixture.detectChanges();
 
     expect(store.view()).toEqual(active);
-    expect(text()).toContain('ACTIVE');
+    expect(text()).toContain('Your subscription is active.');
   });
 
   it('stops the poll once the status changes, and asks the server no more', async () => {

@@ -12,6 +12,29 @@ const POLL_INTERVAL_MILLIS = 2000;
 const POLL_TIMEOUT_MILLIS = 30000;
 
 /**
+ * Finding F15. The row once printed the raw enum value, for example `PAST_DUE`. A learner reads
+ * a plain sentence now. Each sentence states a fact about the account and never a promise or a
+ * price — a subscription's terms belong to Freemius, and not to this page.
+ *
+ * The five keys mirror the backend's own `SubscriptionStatus` enum
+ * (`backend/billing/src/main/kotlin/com/mytetz/billing/Subscription.kt`). [statusSentence] falls
+ * back to a neutral sentence for any other value, so a status this client does not yet know never
+ * reaches the learner as a raw code.
+ */
+const STATUS_SENTENCES: Readonly<Record<string, string>> = {
+  TRIALING: 'Your trial is active.',
+  ACTIVE: 'Your subscription is active.',
+  PAST_DUE: 'Your payment is overdue.',
+  CANCELLED: 'Your subscription is cancelled.',
+  EXPIRED: 'Your subscription has expired.',
+};
+
+/** The sentence for [status]. See [STATUS_SENTENCES]. */
+function sentenceForStatus(status: string): string {
+  return STATUS_SENTENCES[status] ?? 'We do not recognize this account status.';
+}
+
+/**
  * `/account` — the signed-in learner's own account page.
  *
  * The page reads `AccountStore.view` for the email, the status, the period end and the meter.
@@ -52,6 +75,16 @@ const POLL_TIMEOUT_MILLIS = 30000;
     <main class="account-page">
       @if (loading() && view() === null) {
         <p class="mt-sr-only" role="status">Loading your account…</p>
+        <!-- Finding F14. The catalogue and the reader each draw a skeleton while their first
+             request runs; this page drew nothing at all. aria-hidden: the status line above
+             already carries the loading announcement, so a screen reader does not read these
+             four placeholder rows too. -->
+        <div class="mt-card mt-card--raised account-page__skeleton" aria-hidden="true">
+          <span class="mt-skeleton account-page__skeleton-row"></span>
+          <span class="mt-skeleton account-page__skeleton-row account-page__skeleton-row--76"></span>
+          <span class="mt-skeleton account-page__skeleton-row account-page__skeleton-row--60"></span>
+          <span class="mt-skeleton account-page__skeleton-row account-page__skeleton-row--40"></span>
+        </div>
       }
 
       @if (error(); as message) {
@@ -68,7 +101,7 @@ const POLL_TIMEOUT_MILLIS = 30000;
           </div>
           <div class="account-page__row">
             <span class="account-page__label">Status</span>
-            <span class="account-page__value">{{ account.status }}</span>
+            <span class="account-page__value">{{ statusSentence(account.status) }}</span>
           </div>
           @if (periodEndText(account.currentPeriodEndsAtEpochMillis); as periodEnd) {
             <div class="account-page__row">
@@ -94,6 +127,9 @@ const POLL_TIMEOUT_MILLIS = 30000;
             <p class="account-page__error" role="alert">{{ message }}</p>
           }
 
+          <!-- Finding F15. The primary row holds the two controls a learner reaches for most
+               often. "Terms" is a plain link, and not a pill: it is a wayfinding link, not an
+               action on this account. -->
           <div class="account-page__actions">
             @if (manageVisible()) {
               <button
@@ -101,12 +137,12 @@ const POLL_TIMEOUT_MILLIS = 30000;
                 class="mt-pill mt-pill--ghost"
                 data-action="manage-subscription"
                 [disabled]="openingPortal()"
+                [attr.aria-busy]="openingPortal() ? 'true' : null"
                 (click)="manageSubscription()"
               >
-                Manage subscription
+                {{ openingPortal() ? 'Opening the portal…' : 'Manage subscription' }}
               </button>
             }
-            <a class="mt-pill mt-pill--ghost" routerLink="/terms">Terms</a>
             <button
               type="button"
               class="mt-pill mt-pill--ghost"
@@ -115,6 +151,14 @@ const POLL_TIMEOUT_MILLIS = 30000;
             >
               Sign out
             </button>
+            <a class="account-page__terms-link" routerLink="/terms">Terms</a>
+          </div>
+
+          <!-- Finding F15. A destructive control once stood beside a navigation link at the same
+               weight. It now sits below a divider, in its own block, under its own heading. -->
+          <hr class="account-page__divider" />
+          <div class="account-page__danger">
+            <h2 class="account-page__danger-heading">Close your account</h2>
             @if (!confirmingDelete()) {
               <button
                 type="button"
@@ -125,37 +169,38 @@ const POLL_TIMEOUT_MILLIS = 30000;
                 Delete account
               </button>
             }
-          </div>
 
-          @if (confirmingDelete()) {
-            <div class="mt-card mt-card--dashed account-page__confirm" role="alertdialog">
-              <p class="account-page__confirm-text">
-                This permanently deletes your account, every reading session and the allowance
-                meter. It does not delete any explanation — those stay in the catalogue for other
-                learners. This cannot be undone.
-              </p>
-              <div class="account-page__actions">
-                <button
-                  type="button"
-                  class="mt-pill mt-pill--coral"
-                  data-action="delete-account-confirm"
-                  [disabled]="deleting()"
-                  (click)="confirmDelete()"
-                >
-                  Yes, delete my account
-                </button>
-                <button
-                  type="button"
-                  class="mt-pill mt-pill--ghost"
-                  data-action="delete-account-cancel"
-                  [disabled]="deleting()"
-                  (click)="cancelDelete()"
-                >
-                  Cancel
-                </button>
+            @if (confirmingDelete()) {
+              <div class="mt-card mt-card--dashed account-page__confirm" role="alertdialog">
+                <p class="account-page__confirm-text">
+                  This permanently deletes your account, every reading session and the allowance
+                  meter. It does not delete any explanation — those stay in the catalogue for
+                  other learners. This cannot be undone.
+                </p>
+                <div class="account-page__actions">
+                  <button
+                    type="button"
+                    class="mt-pill mt-pill--coral"
+                    data-action="delete-account-confirm"
+                    [disabled]="deleting()"
+                    [attr.aria-busy]="deleting() ? 'true' : null"
+                    (click)="confirmDelete()"
+                  >
+                    {{ deleting() ? 'Deleting…' : 'Yes, delete my account' }}
+                  </button>
+                  <button
+                    type="button"
+                    class="mt-pill mt-pill--ghost"
+                    data-action="delete-account-cancel"
+                    [disabled]="deleting()"
+                    (click)="cancelDelete()"
+                  >
+                    Cancel
+                  </button>
+                </div>
               </div>
-            </div>
-          }
+            }
+          </div>
         </div>
       }
     </main>
@@ -179,6 +224,30 @@ const POLL_TIMEOUT_MILLIS = 30000;
         flex-direction: column;
         align-items: flex-start;
         gap: 16px;
+      }
+      /* Finding F14. The same padding as the loaded card, so the skeleton neither jumps nor
+         shrinks once the real content replaces it. */
+      .account-page__skeleton {
+        width: 100%;
+        padding: 32px 36px;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        box-sizing: border-box;
+      }
+      .account-page__skeleton-row {
+        display: block;
+        height: 18px;
+        width: 90%;
+      }
+      .account-page__skeleton-row--76 {
+        width: 76%;
+      }
+      .account-page__skeleton-row--60 {
+        width: 60%;
+      }
+      .account-page__skeleton-row--40 {
+        width: 40%;
       }
       .account-page__row {
         display: flex;
@@ -207,7 +276,34 @@ const POLL_TIMEOUT_MILLIS = 30000;
       .account-page__actions {
         display: flex;
         flex-wrap: wrap;
+        align-items: center;
         gap: 10px;
+      }
+      /* Finding F15. A plain link, and not a pill: "Terms" is wayfinding, not an action. */
+      .account-page__terms-link {
+        font-size: 14px;
+        font-weight: 600;
+      }
+      /* Finding F15. The divider above "Close your account" — the same rule used between the
+         header and the footer. See app-shell.component.ts. */
+      .account-page__divider {
+        width: 100%;
+        margin: 4px 0;
+        border: none;
+        border-top: var(--mt-border-w) solid var(--mt-rule);
+      }
+      .account-page__danger {
+        width: 100%;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 12px;
+      }
+      .account-page__danger-heading {
+        margin: 0;
+        font-size: 15px;
+        font-weight: 700;
+        color: var(--mt-ink);
       }
       .account-page__confirm {
         width: 100%;
@@ -352,6 +448,11 @@ export class AccountPageComponent implements OnInit {
    * stale cached answer, and against a later regression that puts a default back. */
   periodEndText(epochMillis: number | null | undefined): string | null {
     return epochMillis == null ? null : formatDate(epochMillis);
+  }
+
+  /** The sentence for a status, for the template. See [sentenceForStatus]. */
+  statusSentence(status: string): string {
+    return sentenceForStatus(status);
   }
 
   /**
