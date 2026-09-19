@@ -131,35 +131,29 @@ private val ALLOWED_LICENSE_SHORT_NAME = Regex(
 )
 
 /** The most characters [searchQueryFor] ever sends as `gsrsearch`. A search term is a few words,
- * never a sentence; this bound exists so one long ancestor span cannot grow the query without
- * limit. */
+ * never a sentence; this bound exists so one long span cannot grow the query without limit. */
 private const val MAX_SEARCH_QUERY_CHARS = 120
 
 /**
- * Builds the Commons search string: [span] alone, or [span] plus one short context term, when the
- * chain gives one.
+ * Builds the Commons search string: [span] alone, trimmed and bounded to
+ * [MAX_SEARCH_QUERY_CHARS].
  *
- * A phrase alone can name a different subject than the one the learner is reading about — "wave",
- * "field" and "energy" each mean something different in physics, in biology and in everyday
- * language, and Commons has no way to tell which one this search means. `Ancestor(span, body)` is
- * root-first (`PromptBuilder.kt`'s own KDoc), so [ancestors]' last entry is the nearest ancestor —
- * the span immediately above the one this call is about — and that is the one short, relevant term
- * the chain offers.
- *
- * [ancestors]' own `body` field never reaches this function's return value, under any
- * circumstance. A `body` is the model's own full explanation text — long, free-form prose — and
- * sending it to a third party is exactly the "no free-text path into a prompt" rule Task 6's own
- * "Global Constraints" state for every other verb; a search engine is a third party the same as a
- * model is.
- *
- * The result is never longer than [MAX_SEARCH_QUERY_CHARS], so one long ancestor span cannot grow
- * the request without bound.
+ * [ancestors] is accepted, and ignored, on purpose. A real sample table (eight live Commons
+ * searches, four phrases, run and read by hand) found no reliable gain from adding an ancestor's
+ * own span as extra context, and one case — "wave" plus "sound" — where it replaced an already-weak
+ * result with a worse one, a Royal Navy ship named "Wave Knight" moored in "Plymouth Sound". A
+ * second, structural problem sits under that finding: `ancestors.last().span` is the fixed
+ * placeholder string `"the topic introduction"` for every node one step below the seed —
+ * `SessionService.kt:774`, the single most common case a learner ever reaches — so an earlier
+ * version of this function searched for "mitosis the topic introduction" on that path, not
+ * "mitosis". Reading past that placeholder would couple this module to a string literal owned by
+ * `:backend:session`, for evidence that does not pay for the coupling. A later issue may let the
+ * model that draws the diagram name its own search terms instead; this function does not attempt
+ * that here.
  */
-internal fun searchQueryFor(span: String, ancestors: List<Ancestor>): String {
-    val context = ancestors.lastOrNull()?.span?.takeIf { it.isNotBlank() }
-    val query = if (context != null) "$span $context" else span
-    return query.take(MAX_SEARCH_QUERY_CHARS)
-}
+@Suppress("UNUSED_PARAMETER") // ancestors: kept for the CommonsLookup port's own shape; never read. See this function's own KDoc.
+internal fun searchQueryFor(span: String, ancestors: List<Ancestor>): String =
+    span.trim().take(MAX_SEARCH_QUERY_CHARS)
 
 /** At most 300 characters of attribution text reach the wire. A licence credit is a name and a
  * short phrase, never a paragraph; this bound exists only to cap what a hostile or a malformed
@@ -279,12 +273,11 @@ internal fun hasExactSchemeAndHost(raw: String, scheme: String, host: String): B
  *   `extmetadata` — the last four also named, without their exact casing pinned down, by
  *   `https://www.mediawiki.org/wiki/Extension:CommonsMetadata`.
  *
- * The whole search string built by [searchQueryFor] — [span] and, when one is usable, one short
- * context term from [ancestors] — reaches the request only through
+ * [span] reaches the request only through
  * [io.ktor.client.request.HttpRequestBuilder.parameter], never through string concatenation into
  * the URL, so a learner's selection cannot inject a second query parameter or otherwise reshape the
- * request. See [searchQueryFor]'s own KDoc for exactly what it adds, and why an ancestor's own
- * `body` never reaches this call at all.
+ * request. [ancestors] is accepted, for the `CommonsLookup` port's own shape, and never read — see
+ * [searchQueryFor]'s own KDoc for why.
  *
  * ## What "accept" means
  *

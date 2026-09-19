@@ -122,13 +122,28 @@ class CommonsClientTest {
     }
 
     /**
-     * `Ancestor(span, body)` is root-first (`PromptBuilder.kt`), so the *last* entry is the nearest
-     * ancestor — the one immediately above the span this call is about. That is the one short,
-     * relevant context term the chain offers: a phrase alone ("wave", "field", "energy") can name a
-     * completely different subject than the one the learner is actually reading about.
+     * The regression this pins: `ancestors.last().span` is the fixed placeholder
+     * `"the topic introduction"` for every node one step below the seed — `SessionService.kt:774` —
+     * which is the most common case a learner ever reaches. An earlier version of this class added
+     * that placeholder to the query, so a search for "mitosis" became a search for "mitosis the
+     * topic introduction". See [searchQueryFor]'s own KDoc for why this class ignores [ancestors].
      */
     @Test
-    fun `the nearest ancestor's own span is added to the search query as short context`() = runTest {
+    fun `the search query is the span alone, even with the root's own placeholder ancestor`() = runTest {
+        var captured: HttpRequestData? = null
+        val engine = MockEngine { request ->
+            captured = request
+            respond(bodyWithNoPages(), HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+        }
+        val client = CommonsClient(HttpClient(engine))
+
+        client.findImage("mitosis", listOf(Ancestor("the topic introduction", "a long seed body…")))
+
+        assertEquals("mitosis", requireNotNull(captured).url.parameters["gsrsearch"])
+    }
+
+    @Test
+    fun `no ancestor span and no ancestor body ever reach the search query`() = runTest {
         var captured: HttpRequestData? = null
         val engine = MockEngine { request ->
             captured = request
@@ -138,25 +153,11 @@ class CommonsClientTest {
 
         client.findImage(
             "wave",
-            listOf(Ancestor("the topic introduction", "a long seed body…"), Ancestor("sound", "a long body…")),
+            listOf(Ancestor("sound", "a full paragraph the model wrote, never sent to a third party")),
         )
 
-        assertEquals("wave sound", requireNotNull(captured).url.parameters["gsrsearch"])
-    }
-
-    @Test
-    fun `an ancestor's body never reaches the search query, only its span`() = runTest {
-        var captured: HttpRequestData? = null
-        val engine = MockEngine { request ->
-            captured = request
-            respond(bodyWithNoPages(), HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
-        }
-        val client = CommonsClient(HttpClient(engine))
-
-        client.findImage("wave", listOf(Ancestor("sound", "a full paragraph the model wrote, never sent to a third party")))
-
         val query = requireNotNull(captured).url.parameters["gsrsearch"].orEmpty()
-        assertFalse(query.contains("paragraph"), "an ancestor's body must never reach the search query: $query")
+        assertEquals("wave", query, "the query must be the span alone: no ancestor span, no ancestor body")
     }
 
     @Test
@@ -182,7 +183,7 @@ class CommonsClientTest {
         }
         val client = CommonsClient(HttpClient(engine))
 
-        client.findImage("wave", listOf(Ancestor("x".repeat(200), "body")))
+        client.findImage("x".repeat(200), emptyList())
 
         val query = requireNotNull(captured).url.parameters["gsrsearch"].orEmpty()
         assertTrue(query.length <= 120, "the search query must be bounded: ${query.length} characters")
