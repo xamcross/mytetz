@@ -1,7 +1,8 @@
-/* The Candy design system, for the static guide pages under /guides.
+/* The Candy design system, for the static guide pages under /guides, and, since issue #45,
+   for the Ktor-rendered topic pages under /topics too (see TopicPageHtml.kt).
    These pages live outside the Angular application, so they cannot link the hashed
    bundle that `outputHashing: "all"` produces. This file is copied from `public/`,
-   so its name never changes, and all seven pages share one cached copy.
+   so its name never changes, and every page that links it shares one cached copy.
    The token values below must stay equal to `frontend/src/styles.css` and to
    `frontend/src/app/ui/palette.spec.ts`. Change a value in one place and change it
    in all three. */
@@ -187,6 +188,18 @@ a:hover {
   font-size: 14px;
   color: var(--mt-muted);
   margin: 0 0 20px;
+}
+
+/* A topic page's category, read the same way catalog-page.component.ts reads it for a catalogue
+   tile: the plain category string, styled as a small eyebrow above the h1. */
+.topic__eyebrow {
+  display: block;
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--mt-muted);
 }
 
 h1 {
@@ -429,11 +442,30 @@ tbody tr:last-child td {
   color: var(--mt-surface);
   font-size: 17px;
   font-weight: 700;
+  font-family: inherit;
   text-decoration: none;
+  cursor: pointer;
 }
 .start__cta:active {
   transform: translateY(2px);
   box-shadow: 0 2px 0 var(--mt-coral-deep);
+}
+/* The topic page's own Start with this topic button, and not a guide page's plain link, can be
+   disabled while a request is in flight — see topic-start.js. */
+.start__cta:disabled {
+  opacity: 0.55;
+  box-shadow: none;
+  cursor: not-allowed;
+}
+/* The topic page's own failure message, next to the Start with this topic button. Empty, and so
+   invisible, until topic-start.js writes text into it. */
+.start__error {
+  margin: 12px 0 0;
+  color: var(--mt-coral-text);
+  font-size: 15px;
+}
+.start__error:empty {
+  margin: 0;
 }
 
 /* ── The guide index on the hub ────────────────────────────────────────────── */

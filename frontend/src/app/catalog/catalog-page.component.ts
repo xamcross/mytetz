@@ -1,12 +1,12 @@
 import { Component, OnInit, computed, inject, signal } from '@angular/core';
-import { HttpErrorResponse } from '@angular/common/http';
-import { Router } from '@angular/router';
 import { ApiService } from '../core/api.service';
-import { SessionView, TopicSummary } from '../core/models';
+import { TopicSummary } from '../core/models';
 
 /**
- * The product's entry point: `/`. Lists the curated catalogue and, on selection, creates a
- * session and hands off to the reader at `/learn/:sessionId`.
+ * The product's entry point: `/`. Lists the curated catalogue. Each tile is a plain link to its
+ * own topic page at `/topics/<slug>`, a page Ktor renders (`TopicPageHtml.kt`); the "Start with
+ * this topic" control that creates a session and hands off to the reader now lives on that page,
+ * not here — see `frontend/public/topic-start.js`. Issue #45 moved it there.
  *
  * Does not read `window`, `document` or `localStorage` on its render path (the `(input)` handler
  * below reads `Event.target`, which is unrelated to those globals and is available wherever the
@@ -75,24 +75,6 @@ import { SessionView, TopicSummary } from '../core/models';
           Do you want a method first? Read the <a href="/guides">study guides</a>.
         </p>
 
-        @if (sessionError(); as err) {
-          <div class="mt-card mt-card--error banner banner--error" role="alert">
-            <p class="banner__message">{{ err.message }}</p>
-            @if (err.retryLabel) {
-              <p class="banner__retry">{{ err.retryLabel }}</p>
-            }
-            @if (err.reopenSessionId; as sessionId) {
-              <button
-                type="button"
-                class="mt-pill mt-pill--coral banner__retry-button"
-                (click)="reopen(sessionId)"
-              >
-                Try again
-              </button>
-            }
-          </div>
-        }
-
         @if (topicsLoading()) {
           <p class="visually-hidden" role="status">Loading topics…</p>
           <ul class="topics" aria-hidden="true">
@@ -117,16 +99,13 @@ import { SessionView, TopicSummary } from '../core/models';
             </button>
           </div>
         } @else {
-          <ul class="topics" [attr.aria-busy]="tilesLocked()">
+          <ul class="topics">
             @for (t of filteredTopics(); track t.slug) {
               <li class="topic">
-                <button
-                  type="button"
-                  class="mt-card topic__button"
+                <a
+                  class="mt-card topic__tile"
+                  [attr.href]="'/topics/' + t.slug"
                   [attr.data-slug]="t.slug"
-                  [disabled]="tilesLocked()"
-                  [attr.title]="tileLockedReason()"
-                  (click)="open(t)"
                 >
                   <!-- Every tile's category is --mt-muted. The design gives the first tile a coral
                        eyebrow, and the code drops it: a coral retry pill is reachable in this same
@@ -135,12 +114,7 @@ import { SessionView, TopicSummary } from '../core/models';
                   <span class="mt-eyebrow topic__category">{{ t.category }}</span>
                   <h2 class="topic__title">{{ t.title }}</h2>
                   <p class="topic__summary">{{ t.summary }}</p>
-                  @if (pendingSlug() === t.slug) {
-                    <span class="mt-chip mt-chip--teal topic__pending" aria-live="polite"
-                      >Starting…</span
-                    >
-                  }
-                </button>
+                </a>
               </li>
             } @empty {
               <li class="topics__empty mt-card mt-card--dashed">
@@ -263,7 +237,7 @@ import { SessionView, TopicSummary } from '../core/models';
         display: flex;
         min-width: 0;
       }
-      .topic__button {
+      .topic__tile {
         position: relative;
         width: 100%;
         text-align: left;
@@ -272,21 +246,18 @@ import { SessionView, TopicSummary } from '../core/models';
         flex-direction: column;
         gap: 6px;
         color: inherit;
+        text-decoration: none;
         transition:
           transform 80ms ease-out,
           box-shadow 80ms ease-out;
       }
-      .topic__button:hover:not(:disabled) {
+      .topic__tile:hover {
         transform: translateY(-2px);
         box-shadow: 0 6px 0 var(--mt-border);
       }
-      .topic__button:active:not(:disabled) {
+      .topic__tile:active {
         transform: translateY(2px);
         box-shadow: 0 2px 0 var(--mt-border);
-      }
-      .topic__button:disabled {
-        opacity: 0.55;
-        box-shadow: none;
       }
       .topic__title {
         font-size: 23px;
@@ -298,11 +269,6 @@ import { SessionView, TopicSummary } from '../core/models';
         font-weight: 500;
         color: var(--mt-muted);
         text-wrap: pretty;
-      }
-      .topic__pending {
-        position: absolute;
-        top: 14px;
-        right: 14px;
       }
       .topic--skeleton {
         flex-direction: column;
@@ -353,15 +319,11 @@ import { SessionView, TopicSummary } from '../core/models';
         align-items: flex-start;
         gap: 10px;
       }
-      .banner__message,
-      .banner__retry {
+      .banner__message {
         margin: 0;
         font-size: 15px;
         line-height: 1.55;
         font-weight: 500;
-      }
-      .banner__retry {
-        font-weight: 700;
       }
       @media (min-width: 768px) {
         .topics {
@@ -399,52 +361,11 @@ import { SessionView, TopicSummary } from '../core/models';
 })
 export class CatalogPageComponent implements OnInit {
   private readonly api = inject(ApiService);
-  private readonly router = inject(Router);
 
   readonly topics = signal<TopicSummary[]>([]);
   readonly query = signal('');
   readonly topicsLoading = signal(true);
   readonly topicsError = signal<string | null>(null);
-
-  /**
-   * The slug of the topic currently mid-`createSession`, or `null` when nothing is in flight.
-   *
-   * Creating a session on a topic nobody has opened yet triggers a real model call to generate
-   * the seed — seconds, not milliseconds, not the tens of milliseconds a click usually implies.
-   * `open()` below checks this and returns immediately if it is already set, and every button is
-   * disabled while it is set — not just the one clicked — so a learner cannot burn a second slot
-   * out of the 30-per-hour session limit by double-clicking, or by clicking a different topic
-   * while the first request is still in flight.
-   */
-  readonly pendingSlug = signal<string | null>(null);
-  readonly sessionError = signal<SessionErrorView | null>(null);
-
-  /**
-   * Whether every topic tile should be disabled — not just the one that was clicked.
-   *
-   * `pendingSlug() !== null` covers the in-flight `createSession` window (see `pendingSlug`'s own
-   * doc comment). The second condition closes a narrower gap found in review: `failNavigation`
-   * clears `pendingSlug` so the "Try again" retry action becomes reachable, but a session for
-   * `sessionError().reopenSessionId` already exists at that point — if only `pendingSlug` gated
-   * the tiles, clearing it would re-enable *every* tile, including the one whose session already
-   * exists. Clicking that tile would run `createSession` a second time for a topic that already
-   * has one, spending another of the learner's 30 hourly slots (and, on a first-ever topic,
-   * another model call) for no reason. So a tile stays locked for as long as a reopen is being
-   * offered too, not only while a request is actually in flight.
-   */
-  readonly tilesLocked = computed(
-    () => this.pendingSlug() !== null || this.sessionError()?.reopenSessionId !== undefined,
-  );
-
-  /** Why the tiles are locked, for a `title` tooltip — a disabled control with no stated reason
-   * is its own small "nothing happened". `null` renders no `title` attribute at all. */
-  readonly tileLockedReason = computed(() => {
-    if (this.pendingSlug() !== null) return 'Starting your session…';
-    if (this.sessionError()?.reopenSessionId !== undefined) {
-      return 'Resolve the message above before starting another topic.';
-    }
-    return null;
-  });
 
   /**
    * The chosen category, or `null` for every category.
@@ -521,167 +442,4 @@ export class CatalogPageComponent implements OnInit {
   onQueryInput(event: Event): void {
     this.query.set((event.target as HTMLInputElement).value);
   }
-
-  async open(topic: TopicSummary): Promise<void> {
-    // A second click while one request is already in flight does nothing. This guard also
-    // covers the gap between the session existing and navigation completing — see
-    // `goToSession`'s doc comment for why `pendingSlug` is deliberately *not* cleared once
-    // `createSession` succeeds.
-    if (this.pendingSlug() !== null) return;
-
-    this.sessionError.set(null);
-    this.pendingSlug.set(topic.slug);
-
-    let session: SessionView;
-    try {
-      session = await this.api.createSession(topic.slug);
-    } catch (err) {
-      this.sessionError.set(describeSessionError(err));
-      this.pendingSlug.set(null);
-      return;
-    }
-
-    await this.goToSession(session.sessionId);
-  }
-
-  /**
-   * Retries navigating to an already-created session — never re-runs `createSession`, which
-   * would spend a second session slot (and, on a first-ever topic, a second model call) on a
-   * topic the learner already has an open session for.
-   *
-   * Deliberately does **not** clear `sessionError` before retrying. `tilesLocked` keys off
-   * `sessionError().reopenSessionId` to keep every tile disabled while a reopen is outstanding —
-   * clearing it here first would unlock every tile for the width of this retry's own `navigate()`
-   * call, reopening the exact gap `tilesLocked` exists to close, just moved into the retry path
-   * instead of the original one. If this retry fails again, `failNavigation` overwrites
-   * `sessionError` with the same shape, which is a harmless no-op from the tiles' perspective; if
-   * it succeeds, the component is torn down by the navigation and nothing reads `sessionError`
-   * again.
-   */
-  reopen(sessionId: string): void {
-    void this.goToSession(sessionId);
-  }
-
-  /**
-   * Navigates to an already-created session, awaited rather than fired-and-forgotten.
-   *
-   * Two defects from the first cut of this method, found in review, share one fix:
-   *
-   * 1. **`pendingSlug` must not be cleared on the success path.** The previous version reset it
-   *    in a `finally` that ran immediately after firing (not awaiting) `navigate()`. That
-   *    re-enabled every topic button while the route change — including, on a first visit, the
-   *    lazy fetch of Task 1.16's reader chunk — was still in flight. A click landing in that
-   *    window called `open()` again and created a *second*, paid session on a topic the learner
-   *    already had one open for: exactly the failure Problem E's guard exists to prevent, just
-   *    moved one step later. The fix is to never clear `pendingSlug` here on success at all: this
-   *    component is about to be torn down by the navigation that just succeeded, so there is
-   *    nothing left to re-enable for, and clearing it early is what reopens the window.
-   * 2. **A navigation failure must not be silently swallowed.** The previous version only logged
-   *    it (`.catch(() => console.error(...))`), which — from the learner's side — looks
-   *    identical to the click never having registered, except that a session slot (and possibly
-   *    a real model call, on a first-ever topic) has already been spent. `router.navigate()` can
-   *    fail two ways, confirmed by reading `@angular/router`'s own `Recognizer`/`Navigation
-   *    Transitions` source rather than assuming: a genuine `NavigationError` (e.g. a failed fetch
-   *    of the lazy chunk) rejects the returned promise, while a cancellation (no matching route,
-   *    a guard) resolves it to `false`. Both are handled and both are surfaced through
-   *    `sessionError`, with a `reopen()` action rather than routing the learner back through
-   *    `open()` — see that method's own comment for why.
-   */
-  private async goToSession(sessionId: string): Promise<void> {
-    try {
-      const navigated = await this.router.navigate(['/learn', sessionId]);
-      if (!navigated) this.failNavigation(sessionId);
-      // Otherwise: success, and `pendingSlug` is deliberately left set — see the doc comment
-      // above.
-    } catch {
-      this.failNavigation(sessionId);
-    }
-  }
-
-  private failNavigation(sessionId: string): void {
-    this.sessionError.set({
-      message:
-        'Your session was created, but the reader could not load. Other topics are locked ' +
-        'until this is resolved.',
-      retryLabel: null,
-      reopenSessionId: sessionId,
-    });
-    // `pendingSlug` is cleared so the "Try again" action below becomes reachable — but
-    // `tilesLocked` keeps every tile disabled regardless, via `sessionError().reopenSessionId`.
-    // See `tilesLocked`'s doc comment for why clearing this alone would not be safe.
-    this.pendingSlug.set(null);
-  }
-}
-
-interface SessionErrorView {
-  message: string;
-  retryLabel: string | null;
-  /** Set only for a navigation failure after a session already exists — see `reopen()`. Absent
-   * for a `createSession` failure, where there is no session yet to reopen. */
-  reopenSessionId?: string;
-}
-
-/**
- * The same `{code, message, retryAfter}` shape `ErrorMapping.kt` and `SessionRoutes.kt` respond
- * with on every refusal — 429 `RATE_LIMITED` (Task 1.11's 30-per-hour session limiter), 429
- * `QUOTA_EXCEEDED` and 503 `SPEND_LIMIT` (Task 1.12's per-principal quota and global spend
- * breaker) all use it, so one parser handles every case `POST /api/sessions` can return rather
- * than one branch per code. Not imported from a shared file: `sse.client.ts`'s `ErrorEventData`
- * is the same shape for the same reason and is kept private there too — this is a wire shape, not
- * a domain model, so it doesn't belong in `models.ts` alongside `TopicSummary`/`SessionView`.
- */
-interface ApiErrorBody {
-  code: string;
-  message: string;
-  retryAfter?: number | null;
-}
-
-function asApiErrorBody(value: unknown): ApiErrorBody | null {
-  if (
-    value !== null &&
-    typeof value === 'object' &&
-    typeof (value as Record<string, unknown>)['code'] === 'string' &&
-    typeof (value as Record<string, unknown>)['message'] === 'string'
-  ) {
-    return value as ApiErrorBody;
-  }
-  return null;
-}
-
-/**
- * Turns a failed `createSession` into what the learner sees.
- *
- * The distinction the brief asks for falls out of the data rather than a switch on `code`: a
- * `retryAfter` means "try later" (429 `RATE_LIMITED`, 429 `QUOTA_EXCEEDED`) and is rendered as a
- * concrete wait; its absence means "the service itself is degraded" (503 `SPEND_LIMIT`, 503
- * `QUOTA_UNAVAILABLE`) and no retry countdown is shown, because there is no server-known wait to
- * report — inventing one would be a promise this component cannot keep. Either way the backend's
- * own `message` is shown verbatim: `ErrorMapping.kt`/`SessionRoutes.kt` already write these for a
- * human reader, and re-wording them here would just be a second copy to keep in sync.
- */
-function describeSessionError(err: unknown): SessionErrorView {
-  const body = err instanceof HttpErrorResponse ? asApiErrorBody(err.error) : null;
-  if (body) {
-    return {
-      message: body.message,
-      retryLabel: body.retryAfter ? `Try again in ${formatRetryAfter(body.retryAfter)}.` : null,
-    };
-  }
-  return {
-    message: 'Could not start that topic. Please try again.',
-    retryLabel: null,
-  };
-}
-
-function formatRetryAfter(seconds: number): string {
-  if (seconds < 60) {
-    const s = Math.max(1, Math.ceil(seconds));
-    return `${s} second${s === 1 ? '' : 's'}`;
-  }
-  const minutes = Math.ceil(seconds / 60);
-  if (minutes < 60) {
-    return `${minutes} minute${minutes === 1 ? '' : 's'}`;
-  }
-  const hours = Math.ceil(minutes / 60);
-  return `${hours} hour${hours === 1 ? '' : 's'}`;
 }

@@ -251,11 +251,17 @@ test('aborts the in-flight fetch when the reader navigates away mid-stream', asy
   // Task 1.16 named this its own deferred item: its abort tests used fakes that complete normally,
   // so the real `fetch`-abort path — AbortController firing, the browser's own fetch rejecting with
   // AbortError — was only verified by symmetry with the code, never actually run. A real navigation
-  // away, driven by the browser's own back button, is what makes it real: it destroys
+  // away is what makes it real: clicking the app-shell's own home link (`routerLink="/"`) destroys
   // `ReaderPageComponent` through Angular's router (not a full document reload, so this is a soft
   // SPA navigation — `DestroyRef.onDestroy` fires, `SessionStore.abandon()` runs, and it calls
   // `AbortController.abort()` on the in-flight generation), and the mock's `ReadableStream` reacts to
   // that abort signal exactly as a real network stream would.
+  //
+  // Not `page.goBack()`: issue #45's `openQuantumPhysicsSession` reaches `/learn/:sessionId` with a
+  // hard `page.goto`, because the catalogue tile no longer creates a session on click (that control
+  // now belongs on the Ktor-rendered topic page). Going back from a hard-navigated page is itself a
+  // hard navigation, which would tear down the whole document rather than routing through Angular,
+  // and this test's whole point is the soft, in-app case.
   //
   // Critical, from review: asserting only that the page survived (no thrown error, the catalogue
   // still usable) does not distinguish the abort hook actually running from `DestroyRef.onDestroy`
@@ -277,13 +283,14 @@ test('aborts the in-flight fetch when the reader navigates away mid-stream', asy
   // `stream.close()` is deliberately never called.
   expect(await stream.aborted()).toBe(false);
 
-  await page.goBack();
+  await page.locator('.bar__mark').click();
 
   // The proof this test exists for: the abort path actually ran, not merely that nothing crashed.
   await expect.poll(() => stream.aborted()).toBe(true);
 
-  // Back on the catalogue, with the topic tile live again — the navigation itself completed cleanly.
-  await expect(page.getByRole('button', { name: /Quantum Physics/ })).toBeEnabled();
+  // Back on the catalogue, with the topic tile live again — the navigation itself completed
+  // cleanly. Issue #45 turns the tile into a plain link, so its accessible role is now "link".
+  await expect(page.getByRole('link', { name: /Quantum Physics/ })).toBeEnabled();
   // And nothing thrown by the aborted generation escaped as an uncaught exception or unhandled
   // rejection. `SessionStore.explain`'s `catch` checks `controller.signal.aborted` and returns
   // silently for exactly this reason; this is the assertion that it actually does.

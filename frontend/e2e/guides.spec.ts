@@ -22,7 +22,7 @@ import { stubCatalogueAndSession } from './support';
 test('the footer link opens the hub, and a hub link opens a guide', async ({ page }) => {
   await stubCatalogueAndSession(page);
   await page.goto('/');
-  await page.locator('.topic__button').first().waitFor();
+  await page.locator('.topic__tile').first().waitFor();
 
   await page.locator('footer a', { hasText: 'Guides' }).click();
   await expect(page.locator('h1')).toHaveText('Study guides');

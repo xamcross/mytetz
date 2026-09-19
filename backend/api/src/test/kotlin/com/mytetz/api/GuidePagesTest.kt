@@ -1,10 +1,14 @@
 package com.mytetz.api
 
+import com.mytetz.graph.ExplanationRepository
+import com.mytetz.persistence.Mongo
+import com.mytetz.persistence.MongoConfig
 import io.ktor.client.request.get
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.routing.routing
 import io.ktor.server.testing.testApplication
+import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -46,6 +50,58 @@ class GuidePagesTest {
                 response.bodyAsText().contains("""<link rel="canonical" href="https://mytetz.com$path" />"""),
                 "$path must name itself in its canonical tag",
             )
+        }
+    }
+
+    @Test
+    fun `no guide page still holds the issue 45 placeholder comment`() {
+        // The plan's own literal path, "../frontend/public/guides", is one level short: a Gradle
+        // `Test` task's working directory is the module's own project directory
+        // (`backend/api`), not the repository root, so that path silently walked a directory that
+        // does not exist and passed with an empty, meaningless offender list. Confirmed by running
+        // this test both ways.
+        val guidesRoot = File("../../frontend/public/guides")
+        assertTrue(guidesRoot.isDirectory, "guides root not found at ${guidesRoot.absolutePath}")
+
+        val offenders = guidesRoot.walkTopDown()
+            .filter { it.name == "index.html" }
+            .filter { it.readText().contains("issue #45") }
+            .map { it.path }
+            .toList()
+
+        assertTrue(offenders.isEmpty(), "these guide pages still name issue #45: $offenders")
+    }
+
+    /**
+     * Acceptance criterion 1 of #45, the "answers 200" half. Reads every real, built guide page
+     * from the static classpath (the same source `every guide page answers 200...` above reads
+     * from), finds every `/topics/<slug>` link its own "Start here" block now carries, and asks the
+     * real [topicPageRoutes] — wired to [TestFixtures.seededCatalog], the same catalogue
+     * `topics.json` seeds in production — for each one.
+     */
+    @Test
+    fun `every Start Here topic link in a guide page answers 200`() = testApplication {
+        val explanations = ExplanationRepository(
+            Mongo(MongoConfig(TestFixtures.connectionString, "test_api_guide_topic_links")).database
+        )
+        application {
+            routing {
+                topicPageRoutes(
+                    catalog = TestFixtures.seededCatalog(),
+                    explanations = explanations,
+                    modelFamily = "fake-model",
+                )
+            }
+        }
+
+        val slugs = GuidePages.paths
+            .map { path -> javaClass.getResource("/static$path/index.html")?.readText() ?: "" }
+            .flatMap { html -> Regex("""href="/topics/([a-z0-9-]+)"""").findAll(html).map { it.groupValues[1] } }
+            .distinct()
+
+        assertTrue(slugs.isNotEmpty(), "no /topics/<slug> link found in any guide page")
+        for (slug in slugs) {
+            assertEquals(HttpStatusCode.OK, client.get("/topics/$slug").status, "/topics/$slug must answer 200")
         }
     }
 

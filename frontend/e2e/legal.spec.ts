@@ -88,7 +88,7 @@ test('the footer carries the legal links on the catalogue, the reader, the auth 
 }) => {
   await stubCatalogueAndSession(page);
   await page.goto('/');
-  await page.locator('.topic__button').first().waitFor();
+  await page.locator('.topic__tile').first().waitFor();
   expect(await footerLinks(page)).toEqual(FOOTER_LINKS);
 
   await openReaderWall(page);
@@ -124,7 +124,7 @@ test('each footer link navigates to its own legal page', async ({ page }) => {
     ['Imprint', '/imprint'],
   ] as const) {
     await page.goto('/');
-    await page.locator('.topic__button').first().waitFor();
+    await page.locator('.topic__tile').first().waitFor();
     await page.locator('footer a', { hasText: label }).click();
     await expect(page).toHaveURL(new RegExp(`${path}$`));
   }

@@ -27,6 +27,9 @@ dependencies {
     // falls through to the /api/{...} catch-all as a 404.
     implementation(libs.ktor.server.auto.head.response)
     implementation(libs.ktor.server.cors)
+    // The Ktor HTML DSL (`respondHtml`, from kotlinx.html), for a page a crawler can read with no
+    // Angular and no model call. See TopicPageHtml.kt's own KDoc.
+    implementation(libs.ktor.server.html.builder)
     implementation(libs.ktor.server.call.logging)
     implementation(libs.logback.classic)
     testImplementation(libs.ktor.server.test.host)

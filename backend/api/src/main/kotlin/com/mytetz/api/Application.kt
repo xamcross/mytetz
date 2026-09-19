@@ -176,6 +176,16 @@ fun Application.module(components: Components = Components()) {
             freemiusApiClient = { components.freemiusApiClient },
             cookies = components.cookies,
         )
+        // `GET /topics/{slug}`. A dedicated route, ahead of the `/api/{...}` catch-all and
+        // `spaRoutes()` below — though registration order does not decide which one wins: a
+        // constant path segment plus a path parameter outranks a bare tailcard by Ktor's own
+        // routing quality, so this route matches first regardless of where it is registered. See
+        // TopicPageRoutes.kt's own KDoc and ApplicationTest's routing-precedence test.
+        topicPageRoutes(
+            catalog = components.catalog,
+            explanations = components.explanations,
+            modelFamily = components.modelFamily,
+        )
 
         // Every unmatched `/api/**` path, answered as JSON.
         //
