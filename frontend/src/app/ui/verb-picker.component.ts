@@ -136,7 +136,8 @@ const VERBS: ReadonlyArray<{ verb: Verb; name: string; caption: string }> = [
         display: flex;
         flex-direction: column;
         gap: 1px;
-        border: var(--mt-border-w) solid var(--mt-border);
+        /* --mt-edge, not --mt-border: this is a control edge, and SC 1.4.11 needs 3:1. */
+        border: var(--mt-border-w) solid var(--mt-edge);
         border-radius: var(--mt-r-row);
         background: var(--mt-surface);
         color: var(--mt-ink);
