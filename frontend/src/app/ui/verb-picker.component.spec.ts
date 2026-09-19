@@ -135,6 +135,42 @@ describe('VerbPickerComponent', () => {
     expect(document.activeElement).toBe(button('DIG_DEEPER'));
   });
 
+  /**
+   * Round 2 of issue #104. `animate.leave` keeps this component mounted, with every listener
+   * below still bound, for the whole close animation after it dismisses itself — exactly the
+   * state each test in this file already reaches the moment `dismissed` fires once, since no
+   * host here actually removes the fixture. A learner must not be able to act on a picker that
+   * has already told its host to close.
+   */
+  describe('once the picker has already dismissed itself', () => {
+    beforeEach(() => {
+      root().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      fixture.detectChanges();
+      expect(dismissed).toBe(1); // sanity: the scenario below starts from a real dismissal
+    });
+
+    it('ignores a further click on a verb', () => {
+      button('SIDE_VIEW').click();
+      expect(chosen).toEqual([]);
+    });
+
+    it('no longer traps Tab between the first and the last verb', () => {
+      button('VISUALIZE').focus();
+      pressTab(false);
+      // Unguarded, this wraps to EXPLAIN — see "wraps Tab from the last verb back to the first"
+      // above. Guarded, the trap does nothing, and jsdom has no native Tab traversal of its own
+      // to move focus in its place, so focus simply stays where the test left it.
+      expect(document.activeElement).toBe(button('VISUALIZE'));
+    });
+
+    it('emits dismissed only once, even when asked to close a second time', () => {
+      document.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      fixture.detectChanges();
+      expect(dismissed).toBe(1);
+      expect(reasons).toEqual(['escape']);
+    });
+  });
+
   it('places itself where the anchor says', () => {
     // The value, not the resulting pixel. jsdom has no layout, so the assertion is that the
     // component passes the anchor through to CSS rather than that the browser honoured it.

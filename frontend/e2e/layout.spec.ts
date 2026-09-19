@@ -6,8 +6,11 @@ import type {
   TopicSummary,
 } from '../src/app/core/models';
 import {
+  CHILD,
   SEED,
   accountView,
+  explainedView,
+  mockExplainRefusal,
   mockExplainStream,
   mockQuiz,
   openQuantumPhysicsSession,
@@ -375,6 +378,153 @@ test('the reader does not move down when the loaded session replaces the skeleto
   }
 });
 
+/**
+ * Round 2 of issue #104. `animate.leave` keeps the stream box mounted for the whole close
+ * animation, after the review's own trigger for animation A already runs: the session refreshes,
+ * the body lands, and `streamingText` clears. The three tests below confirm the moment stays
+ * safe with the animation on.
+ */
+
+test("the card's height changes once, not twice, when an answer lands", async ({ page }) => {
+  // A short streamed preview and a much longer landed body, on purpose: before `onStreamingLeave`
+  // took the box out of flow, the settled body landed at its own new height in one reflow, and
+  // the box leaving 160ms later shrank the card in a second, separate reflow — measured at
+  // roughly 402px, then 497px, then 417px for this exact fixture, before the fix. A short and a
+  // long text this different cannot hide that behind a coincidentally equal line count.
+  const landedBody =
+    'Quantum mechanics is the fundamental physical theory that describes matter and light ' +
+    'at the smallest scales. It replaces the deterministic laws of classical mechanics with ' +
+    'probabilities, superpositions, and measurement-dependent outcomes. Physicists developed ' +
+    'the theory in the early twentieth century to explain phenomena classical physics could ' +
+    'not, such as the photoelectric effect and atomic spectra.';
+  const shortPreview = 'A short answer.';
+
+  await stubCatalogueAndSession(page, explainedView(landedBody));
+  const stream = await mockExplainStream(page, 's1');
+  await page.setViewportSize(WIDTHS.wide);
+  await openQuantumPhysicsSession(page);
+
+  await selectPhrase(page, 'focus-body', 'fundamental physical theory');
+  await verb(page, 'Explain it').click();
+  await stream.send(sseFrame('meta', { contentKey: 'k1', cached: false }));
+  await stream.send(sseFrame('delta', { t: shortPreview }));
+  await page.locator('.focus__streaming').waitFor();
+  const midStream = await page.locator('.focus').boundingBox();
+
+  await stream.send(sseFrame('done', { contentKey: 'k1', grounded: true }));
+  await stream.close();
+
+  // The instant the new text is on screen — the streaming box is still in the DOM here, per
+  // animate.leave, so this is the moment a second, separate reflow would show if the box still
+  // counted as a normal flex item.
+  await page.getByText(/photoelectric effect/).waitFor();
+  const justLanded = await page.locator('.focus').boundingBox();
+
+  await expect(page.locator('.focus__streaming')).toHaveCount(0);
+  const settled = await page.locator('.focus').boundingBox();
+
+  expect(
+    Math.abs((justLanded?.height ?? 0) - (settled?.height ?? 0)),
+    'the card is already at its settled height the instant the new body is on screen',
+  ).toBeLessThanOrEqual(1);
+  expect(
+    justLanded?.height,
+    'the one real change in height happens here, between mid-stream and landed',
+  ).not.toBeCloseTo(midStream?.height ?? 0, 0);
+});
+
+test('the reader main column does not move when an answer lands', async ({ page }) => {
+  await stubCatalogueAndSession(page, explainedView(LONG_BODY));
+  const stream = await mockExplainStream(page, 's1');
+  await page.setViewportSize(WIDTHS.wide);
+  await openQuantumPhysicsSession(page);
+
+  await selectPhrase(page, 'focus-body', 'fundamental physical theory');
+  await verb(page, 'Explain it').click();
+  await stream.send(sseFrame('meta', { contentKey: 'k1', cached: false }));
+  await stream.send(sseFrame('delta', { t: 'A short answer.' }));
+  await page.locator('.focus__streaming').waitFor();
+  const before = await page.locator('.reader__main').boundingBox();
+
+  await stream.send(sseFrame('done', { contentKey: 'k1', grounded: true }));
+  await stream.close();
+  await expect(page.locator('.focus__streaming')).toHaveCount(0);
+
+  const after = await page.locator('.reader__main').boundingBox();
+  expect(
+    Math.abs((after?.y ?? 0) - (before?.y ?? 0)),
+    'the main column stays put while an answer lands, the same claim criterion 1 makes for the skeleton swap',
+  ).toBeLessThanOrEqual(1);
+});
+
+test('the leaving stream box cannot be selected, and the status paragraph changes exactly twice', async ({
+  page,
+}) => {
+  await stubCatalogueAndSession(page, explainedView(CHILD));
+  const stream = await mockExplainStream(page, 's1');
+  await openQuantumPhysicsSession(page);
+
+  // Collects every distinct text the status paragraph shows, from before the stream starts to
+  // well after the answer lands — the same claim `focus-card.component.spec.ts`'s own "announces
+  // one full stream exactly two times" makes in jsdom, checked here with the leave animation
+  // actually running.
+  await page.evaluate(() => {
+    const w = window as unknown as { __statusChanges: string[] };
+    w.__statusChanges = [];
+    const el = document.querySelector('.focus__stream-status')!;
+    let previous = el.textContent?.trim() ?? '';
+    new MutationObserver(() => {
+      const text = el.textContent?.trim() ?? '';
+      if (text !== previous) {
+        previous = text;
+        w.__statusChanges.push(text);
+      }
+    }).observe(el, { characterData: true, childList: true, subtree: true });
+  });
+
+  await selectPhrase(page, 'focus-body', 'fundamental physical theory');
+  await verb(page, 'Explain it').click();
+  await stream.send(sseFrame('meta', { contentKey: 'k1', cached: false }));
+  await stream.send(sseFrame('delta', { t: CHILD }));
+  await page.locator('.focus__streaming').waitFor();
+
+  // The leaving box keeps `user-select: none` — the same rule that already stops any selection
+  // over streamed prose today — so a drag that reaches it still cannot select it, animation or
+  // not. `onSelectionChanged` is bound to `.focus__body` alone besides, so a mouseup that lands
+  // on the streaming box could not reach it even if a selection did form there.
+  const userSelect = await page
+    .locator('.focus__streaming')
+    .evaluate((el) => getComputedStyle(el).userSelect);
+  expect(userSelect, 'the streamed box stays unselectable while it streams').toBe('none');
+
+  await stream.send(sseFrame('done', { contentKey: 'k1', grounded: true }));
+  await stream.close();
+  // `page.getByTestId('focus-body')`, and not `page.getByText(...)`: this claim is about the
+  // landed answer, and the leaving stream box holds the same words for the whole close
+  // animation, so a page-wide text search can match both and fail with a strict mode violation.
+  await expect(page.getByTestId('focus-body')).toContainText('subatomic scale');
+
+  // Still frozen and still unselectable while it fades — the moment this issue's round 2 adds.
+  const userSelectWhileLeaving = await page
+    .locator('.focus__streaming')
+    .evaluate((el) => getComputedStyle(el).userSelect);
+  expect(userSelectWhileLeaving, 'the leaving box stays unselectable while it fades').toBe('none');
+
+  // Round 3. The leaving box now holds the same words the body paragraph does, so a screen
+  // reader's virtual cursor must not walk over the answer twice while it fades.
+  await expect(page.locator('.focus__streaming')).toHaveAttribute('aria-hidden', 'true');
+
+  await expect(page.locator('.focus__streaming')).toHaveCount(0);
+
+  const changes = await page.evaluate(
+    () => (window as unknown as { __statusChanges: string[] }).__statusChanges,
+  );
+  expect(changes, 'exactly two announcements for one stream, with the animation on').toEqual([
+    'The explanation is on its way.',
+    'The explanation is ready.',
+  ]);
+});
+
 test('the picker opens below a phrase near the top of the card', async ({ page }) => {
   await stubCatalogueAndSession(page);
   await page.route('**/api/sessions/s1', (route) =>
@@ -385,6 +535,10 @@ test('the picker opens below a phrase near the top of the card', async ({ page }
 
   await selectPhrase(page, 'focus-body', 'Quantum mechanics');
   await picker(page).waitFor();
+  // Animation D moves the picker with `transform` while it opens. Waiting for its entrance
+  // animation to finish keeps this a claim about the settled layout, and not about a box that is
+  // still sliding into place.
+  await expect(picker(page)).toHaveCSS('opacity', '1');
   const body = await page.locator('.focus__body').boundingBox();
   const box = await picker(page).boundingBox();
   expect(box!.y, 'the picker sits under the phrase when there is room below it').toBeGreaterThan(
@@ -404,6 +558,9 @@ test('the picker flips above a phrase near the bottom, and stays inside the card
     // own bottom padding — the least room below of anywhere in the card.
     await selectPhrase(page, 'focus-body', 'matter and light.');
     await picker(page).waitFor();
+    // Same wait as the test above, for the same reason: the entrance animation moves the box
+    // with `transform` while it plays, and this claim is about where the box settles.
+    await expect(picker(page)).toHaveCSS('opacity', '1');
     const body = await page.locator('.focus__body').boundingBox();
     const box = await picker(page).boundingBox();
     const card = await page.locator('.focus').boundingBox();
@@ -491,6 +648,115 @@ test('Escape closes the picker and returns focus to the body paragraph', async (
   expect(landed.testId, 'focus lands on the paragraph the learner was reading').toBe('focus-body');
   expect(landed.focusVisible, 'Chromium does count this return as focus-visible').toBe(true);
   expect(landed.outlineStyle, 'no ring is drawn around 62ch of prose').toBe('none');
+});
+
+/**
+ * Round 2 of issue #104. `animate.leave` keeps the picker in the DOM for the whole close
+ * animation, and before this issue it left at once. The three tests below check that a learner
+ * cannot act on a picker that is on its way out.
+ */
+
+test('clicking a verb twice in fast succession sends exactly one explain request', async ({
+  page,
+}) => {
+  await stubCatalogueAndSession(page, explainedView(CHILD));
+  const stream = await mockExplainStream(page, 's1');
+  // Counts every attempt to reach the explain endpoint. Registered after `mockExplainStream`'s
+  // own `addInitScript`, so it wraps that shim rather than being short-circuited by it — the
+  // shim answers the explain path itself and never calls a fetch registered before it.
+  await page.addInitScript(
+    ({ sessionId }) => {
+      const w = window as unknown as { __explainCalls: number };
+      w.__explainCalls = 0;
+      const path = `/api/sessions/${sessionId}/explain`;
+      const inner = window.fetch.bind(window);
+      window.fetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url.endsWith(path)) w.__explainCalls += 1;
+        return inner(input, init);
+      };
+    },
+    { sessionId: 's1' },
+  );
+
+  await openQuantumPhysicsSession(page);
+  await selectPhrase(page, 'focus-body', 'fundamental physical theory');
+  // Two click events in fast succession on the same, still-present button — the button the
+  // learner pressed is still in the DOM and still bound while its host's close animation runs.
+  await verb(page, 'Explain it').click({ clickCount: 2 });
+
+  const calls = await page.evaluate(
+    () => (window as unknown as { __explainCalls: number }).__explainCalls,
+  );
+  expect(calls, 'exactly one explain request, although the button was clicked twice').toBe(1);
+
+  await stream.send(sseFrame('meta', { contentKey: 'k1', cached: false }));
+  await stream.send(sseFrame('done', { contentKey: 'k1', grounded: true }));
+  await stream.close();
+});
+
+test('after Escape closes the picker, a second Escape and a Tab do not reach the leaving picker', async ({
+  page,
+}) => {
+  const pageErrors: string[] = [];
+  page.on('pageerror', (e) => pageErrors.push(String(e)));
+
+  await stubCatalogueAndSession(page);
+  await page.setViewportSize(WIDTHS.wide);
+  await gotoReader(page);
+  await selectPhrase(page, 'focus-body', 'Quantum mechanics');
+  await picker(page).waitFor();
+
+  await page.keyboard.press('Escape');
+
+  // No wait for the close animation before this read: `close()` moves focus in the same handler
+  // that `dismissed` runs, well before `animate.leave` finishes removing the element.
+  const active = await page.evaluate(() => {
+    const el = document.activeElement as HTMLElement | null;
+    return {
+      testId: el?.getAttribute('data-testid') ?? null,
+      insidePicker: el?.closest('app-verb-picker') !== null,
+    };
+  });
+  expect(active.testId, 'focus already left the picker before its leave animation ends').toBe(
+    'focus-body',
+  );
+  expect(active.insidePicker, 'the active element is not inside the leaving picker').toBe(false);
+
+  // The leaving picker is still in the DOM and its own key handlers are still bound, but focus
+  // has already moved away from it, so a second Escape and a Tab must not reach them: no picker
+  // reappears, and no handler of the leaving picker throws.
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Tab');
+  await expect(picker(page)).toHaveCount(0);
+  expect(pageErrors, 'no handler of the leaving picker throws').toEqual([]);
+});
+
+test('closing the picker with an outside click, then selecting a new phrase at once, leaves one picker for the new phrase', async ({
+  page,
+}) => {
+  await stubCatalogueAndSession(page);
+  await page.route('**/api/sessions/s1', (route) =>
+    route.fulfill({ json: sessionWithBody(LONG_BODY) }),
+  );
+  await page.setViewportSize(WIDTHS.wide);
+  await gotoReader(page, LONG_BODY);
+  await selectPhrase(page, 'focus-body', 'Quantum mechanics');
+  await picker(page).waitFor();
+
+  // A press elsewhere on the page, outside the picker, is the outside-press path. The trail
+  // rail's own heading, and not `.focus__hint`: the open picker's dropdown covers the hint
+  // paragraph at this width, so a click there would hit the picker itself rather than land
+  // outside it.
+  await page.locator('.trail__head').click();
+  // At once: no wait for the close animation before the next selection starts, while the old
+  // picker is still in the DOM, still leaving.
+  await selectPhrase(page, 'focus-body', 'at the smallest scales');
+
+  // `toHaveCount`/`toContainText` retry until the old picker's leave animation actually finishes
+  // and Angular removes it, so this is a claim about the settled state.
+  await expect(picker(page)).toHaveCount(1);
+  await expect(picker(page)).toContainText('at the smallest scales');
 });
 
 test('every control still draws its focus ring', async ({ page }) => {
@@ -640,6 +906,98 @@ test.describe('with a reduced-motion preference', () => {
     expect(animationName).toBe('none');
 
     held.open();
+  });
+
+  test('the picker opens and closes with a 1ms fade, and leaves no element behind', async ({
+    page,
+  }) => {
+    // Animation D. The phone sheet's 100% travel is not a distance any --mt-move-* token
+    // covers, so its reduced-motion form is an explicit rule rather than a token substitution —
+    // this is the one animation of this issue that needs its own duration and name asserted,
+    // rather than relying on the generic token test above.
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await stubCatalogueAndSession(page);
+    await page.setViewportSize(WIDTHS.wide);
+    await gotoReader(page);
+    await selectPhrase(page, 'focus-body', 'Quantum mechanics');
+    await picker(page).waitFor();
+
+    const opened = await picker(page).evaluate((el) => {
+      const s = getComputedStyle(el);
+      return { animationName: s.animationName, animationDuration: s.animationDuration };
+    });
+    expect(opened.animationName, 'the picker fades in rather than sliding').toBe('picker-fade');
+    expect(opened.animationDuration).toBe('0.001s');
+
+    await page.keyboard.press('Escape');
+    // `animate.leave` keeps the picker in the DOM only until its animation ends. A duration of
+    // 1ms and not 0ms is what makes that `animationend` fire at all — see styles.css's own
+    // comment on the token block for why 0ms is unsafe here — so this is also the proof that the
+    // choice works for a real element, and not only for the tokens in isolation.
+    await expect(picker(page)).toHaveCount(0);
+  });
+
+  test('the answer replaces the stream box with no leftover element', async ({ page }) => {
+    // Animation A. The stream box leaves through `animate.leave`, and the reduced-motion tokens
+    // take its exit to 1ms. This is the proof that the element is actually gone afterwards, and
+    // not merely invisible.
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await stubCatalogueAndSession(page, explainedView(CHILD));
+    const stream = await mockExplainStream(page, 's1');
+    await openQuantumPhysicsSession(page);
+
+    await selectPhrase(page, 'focus-body', 'fundamental physical theory');
+    await verb(page, 'Explain it').click();
+    await stream.send(sseFrame('meta', { contentKey: 'k1', cached: false }));
+    await stream.send(sseFrame('delta', { t: CHILD }));
+    await page.locator('.focus__streaming').waitFor();
+
+    await stream.send(sseFrame('done', { contentKey: 'k1', grounded: true }));
+    await stream.close();
+
+    // The body, not a page-wide text search: the leaving box holds the same words while it
+    // fades, even at 1ms, so a page-wide search could resolve to both and fail with a strict
+    // mode violation.
+    await expect(page.getByTestId('focus-body')).toContainText('subatomic scale');
+    await expect(page.locator('.focus__streaming')).toHaveCount(0);
+    // Animation A's other half: the body settles at full opacity, and not stuck at the 0.25 the
+    // keyframe's `from` step declares.
+    await expect(page.locator('.focus__body')).toHaveCSS('opacity', '1');
+
+    // Animation E and F. A new trail row and a new crumb both land, and the current row still
+    // changes colour to say where the learner is — the duration tokens take 1ms, proved
+    // generically above, and this is the proof that the elements themselves still arrive and
+    // still carry the right state under that duration.
+    await expect(page.locator('.trail__item--current')).toContainText('fundamental physical');
+    await expect(page.locator('.trail__item--current')).toHaveCSS(
+      'background-color',
+      'rgb(15, 118, 110)',
+    );
+    await expect(page.locator('.crumb')).toHaveCount(2);
+  });
+
+  test('the sign-in panel replaces the focus card and settles at full opacity', async ({
+    page,
+  }) => {
+    // Animation M. The panel's own entrance is token-driven, so this is the proof that it still
+    // renders, in the slot the focus card would occupy, and ends up fully visible.
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await stubCatalogueAndSession(page);
+    await mockExplainRefusal(page, 's1', {
+      status: 401,
+      body: { code: 'SIGN_IN_REQUIRED', message: 'sign in to keep going' },
+    });
+    await openQuantumPhysicsSession(page);
+    await selectPhrase(page, 'focus-body', 'fundamental physical theory');
+    await verb(page, 'Explain it').click();
+
+    // The host, app-sign-in-panel, and not the .sign-in-panel div inside it: animate.enter's
+    // class and its opacity animation sit on the host, and a child's own computed opacity stays
+    // "1" regardless of what its ancestor's opacity is doing.
+    const host = page.locator('app-sign-in-panel');
+    await expect(host).toBeVisible();
+    await expect(host).toHaveCSS('opacity', '1');
+    await expect(page.locator('app-focus-card')).toHaveCount(0);
   });
 });
 

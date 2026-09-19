@@ -88,7 +88,12 @@ test('pick a topic, highlight a phrase, and watch the explanation stream in prog
   await stream.send(sseFrame('done', { contentKey: 'k1', grounded: false }));
   await stream.close();
 
-  await expect(page.getByText(/subatomic scale/)).toBeVisible();
+  // `page.getByTestId('focus-body')`, and not the page-wide `page.getByText(...)` this used to
+  // read: this assertion means the landed answer, and animation A keeps the old stream box in the
+  // DOM, holding the very same words, for the whole close animation — so a page-wide text search
+  // can resolve to both elements at once and fail with a strict mode violation. Naming the body
+  // paragraph is more exact, not weaker: it is the one element this claim is actually about.
+  await expect(page.getByTestId('focus-body')).toContainText('subatomic scale');
   // `exact: true` on its own already disambiguates from the trail rail's row for this node — that
   // button's accessible name is "Explain fundamental physical theory" (verb prefixed onto the span),
   // which an exact match on "fundamental physical theory" alone does not match. Scoping to `.crumb`

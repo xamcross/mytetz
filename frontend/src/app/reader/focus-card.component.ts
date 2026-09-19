@@ -1,4 +1,5 @@
 import {
+  AnimationCallbackEvent,
   Component,
   DestroyRef,
   ElementRef,
@@ -20,6 +21,31 @@ import {
 } from '../ui/verb-picker.component';
 import { MediaRendererComponent } from './media-renderer.component';
 import { rootTextMatchesBody, selectionToSpan } from './selection';
+
+/**
+ * Takes an element out of flow, at the exact place it already occupies, without moving it.
+ *
+ * Animation A's stream box needs this: `animate.leave` keeps the box mounted, as a normal flex
+ * item, for the whole close animation. Left alone, the settled body would land at its own new
+ * height in one reflow, and the box leaving 160ms later would shrink the card in a second,
+ * separate reflow — two jumps for one landing, where the design review allows one. Freezing the
+ * box out of flow the instant it starts leaving lets the card's height already reflect only the
+ * settled body from that render on; the box then simply fades over whatever now sits there.
+ *
+ * `offsetTop`/`offsetLeft`, and not `getBoundingClientRect()`: they already answer in the
+ * coordinate space `position: absolute` needs — the padding edge of the nearest positioned
+ * ancestor — with no border or scroll correction to redo by hand. Read before `position` changes,
+ * because that change is what they are about to stop describing.
+ */
+export function freezeOutOfFlow(el: HTMLElement): void {
+  const top = el.offsetTop;
+  const left = el.offsetLeft;
+  const width = el.getBoundingClientRect().width;
+  el.style.position = 'absolute';
+  el.style.top = `${top}px`;
+  el.style.left = `${left}px`;
+  el.style.width = `${width}px`;
+}
 
 /**
  * How long the status paragraph keeps "The explanation is ready." before it goes quiet again.
@@ -92,14 +118,16 @@ const READY_STATUS_MILLIS = 4000;
       <p
         #bodyEl
         class="focus__body"
+        [class.focus__body--landed]="landed()"
         data-testid="focus-body"
         tabindex="-1"
         (mouseup)="onSelectionChanged()"
         (touchend)="onSelectionChanged()"
+        (animationend)="onBodyAnimationEnd($event)"
       >{{ body() }}</p>
 
       @if (isStreaming() || streamingText().length > 0) {
-        <p class="focus__streaming" aria-live="off">
+        <p class="focus__streaming" (animate.leave)="onStreamingLeave($event)" aria-live="off">
           {{ streamingText() }}
           @if (isStreaming()) {
             <span class="focus__caret" aria-hidden="true">▍</span>
@@ -132,9 +160,19 @@ const READY_STATUS_MILLIS = 4000;
       </button>
 
       @if (pickerSpan(); as chosenSpan) {
+        <!--
+          Animation D. animate.leave goes on this tag, in this file, rather than inside
+          VerbPickerComponent's own template: Angular's animation guide states a nested
+          component's own animate.leave does not fire when an ancestor outside its template
+          removes it, and this @if is exactly such an ancestor. The class it adds still reaches
+          the picker's own visible box, because a component host carries the class its parent
+          template gives it, and verb-picker.component.ts's :host(.picker--out) selector reads it
+          from there.
+        -->
         <app-verb-picker
           [span]="chosenSpan"
           [anchor]="anchor()!"
+          animate.leave="picker--out"
           (chosen)="request($event)"
           (dismissed)="close($event)"
         />
@@ -213,6 +251,25 @@ const READY_STATUS_MILLIS = 4000;
         background: var(--mt-amber);
         color: var(--mt-amber-ink);
       }
+      /* Animation A. The bare .focus__body rule above carries no animation and no transition —
+         nothing must move the text under a learner's pointer, per the design review's own rule.
+         This modifier class is bound for one render only, after the paragraph has a new answer,
+         and a class attribute changes no text node, so the offsets selectionToSpan reads are
+         exactly the same while it is present. focus-card.component.spec.ts proves both halves of
+         that claim. */
+      .focus__body--landed {
+        animation: focus-land var(--mt-dur-panel) var(--mt-ease-settle) both;
+      }
+      @keyframes focus-land {
+        from {
+          opacity: 0.25;
+          transform: translateY(var(--mt-move-near));
+        }
+        to {
+          opacity: 1;
+          transform: none;
+        }
+      }
       .focus__streaming {
         margin: 0;
         padding: 16px;
@@ -226,6 +283,37 @@ const READY_STATUS_MILLIS = 4000;
         border-radius: var(--mt-r-panel);
         border-left: 3px solid var(--mt-coral-press);
         user-select: none;
+        /* Animation B. The box enters once, when the stream starts, and never per token: a
+           per-word animation would need a wrapper for every word, and a wrapper here breaks the
+           text selection the class comment above documents. The streamingText binding itself
+           carries no animation of its own, so the first token is on screen the instant it
+           arrives. */
+        animation: focus-open var(--mt-dur-state) var(--mt-ease-out) both;
+      }
+      @keyframes focus-open {
+        from {
+          opacity: 0;
+          transform: translateY(var(--mt-move-near)) scaleY(0.98);
+          transform-origin: top;
+        }
+        to {
+          opacity: 1;
+          transform: none;
+        }
+      }
+      /* Animation A's other half: the stream box hands off to the settled body, rather than
+         simply vanishing. animate.leave keeps it in the DOM, playing this animation, for the one
+         render where isStreaming and streamingText have both gone false-and-empty.
+         onStreamingLeave below adds this class and also takes the box out of flow, at the place
+         it already occupies — see freezeOutOfFlow's own comment for why. */
+      .focus__streaming--out {
+        animation: focus-hand-off var(--mt-dur-state) var(--mt-ease-in) both;
+      }
+      @keyframes focus-hand-off {
+        to {
+          opacity: 0;
+          transform: translateY(calc(-1 * var(--mt-move-near)));
+        }
       }
       .focus__caret {
         color: var(--mt-coral-text);
@@ -328,8 +416,16 @@ export class FocusCardComponent {
   protected readonly anchor = signal<PickerAnchor | null>(null);
   /** False when the rendered root and the stored body have diverged — see the class comment. */
   protected readonly bodyMatches = signal(true);
-  /** The body the last post-render check ran against, so a change can be told from a re-render. */
+  /** The body the last post-render check ran against, so a change can be told from a re-render.
+   * Also what tells animation A's first arrival from every later one: it starts `null`, and a
+   * real body is never `null`, so `checkedBody === null` means no check has happened yet. */
   private checkedBody: string | null = null;
+  /** True for the one render after a new answer replaces the one on screen — see animation A's
+   * class binding on `.focus__body` above. Cleared by [onBodyAnimationEnd], not by a timer: a
+   * timer in a zoneless component needs its own destroy guard, and `animationend` needs none,
+   * because the class carries no consequence once its own animation has already reached its
+   * final frame. */
+  protected readonly landed = signal(false);
   /** The text the status paragraph shows. A signal of its own, and not `streamStatus` itself,
    * because the constructor's effect below writes it from a timer, well after the render that
    * first read `isStreaming()`. */
@@ -382,11 +478,16 @@ export class FocusCardComponent {
         const matches = rootTextMatchesBody(this.bodyRef().nativeElement, body);
         this.bodyMatches.set(matches);
         if (body !== this.checkedBody) {
+          // A real body is never `null`, so this is true for one call only: the very first one,
+          // for the session's first body. Animation A answers an arrival the learner watched
+          // happen, and the first render of a card is not that — see [landed]'s own comment.
+          const isFirstBody = this.checkedBody === null;
           this.checkedBody = body;
           // The offsets held here index the body that was on screen a moment ago. Against the new
           // one they name a phrase the learner never highlighted.
           this.selectedSpan.set(null);
           this.anchor.set(null);
+          if (!isFirstBody) this.landed.set(true);
         }
       },
     });
@@ -405,6 +506,14 @@ export class FocusCardComponent {
         // stale, so its timer goes too.
         this.clearReadyStatusTimer();
         this.streamAnnouncement.set('The explanation is on its way.');
+        // Also the smallest correct place to guard against a missed animationend: if the last
+        // answer's landed class never got its own end event — the card sat inside a
+        // display: none ancestor at that moment, or the element left the DOM mid-animation — the
+        // class would otherwise still be on the paragraph, and the next answer would not
+        // animate, because a class already true does not change when set true again. Resetting
+        // it here, well before the next body ever lands, guarantees a real false-then-true
+        // transition for it.
+        this.landed.set(false);
       } else if (!streaming && wasStreaming) {
         if (this.explainFailed()) {
           // The stream ended, but it did not succeed. "Ready" would be false, so the element goes
@@ -423,6 +532,40 @@ export class FocusCardComponent {
     });
 
     inject(DestroyRef).onDestroy(() => this.clearReadyStatusTimer());
+  }
+
+  /**
+   * Ends animation A's landed state, on the animation's own last frame rather than on a timer.
+   *
+   * `animationName` is checked because Angular's own animation guide warns that a callback bound
+   * this way can see an event bubbled up from an unrelated animation; `.focus__body` has none
+   * today, but the check costs one line and stays correct if that ever changes.
+   */
+  protected onBodyAnimationEnd(event: AnimationEvent): void {
+    if (event.animationName === 'focus-land') this.landed.set(false);
+  }
+
+  /**
+   * Animation A's exit, as a function rather than a CSS class name: `freezeOutOfFlow` needs to
+   * run before the fade starts, and the string form of `animate.leave` has no such hook. Angular
+   * calls this once, the moment the stream box starts leaving, and waits for
+   * `animationComplete()` before it removes the element — the same contract the CSS form has,
+   * kept by hand here instead of by the compiler.
+   */
+  protected onStreamingLeave(event: AnimationCallbackEvent): void {
+    // `Element`, not `HTMLElement`, is the field's own declared type — narrowed here because
+    // `freezeOutOfFlow` reads `offsetTop`/`offsetLeft`/`style`, which only `HTMLElement` has, and
+    // the target of this event is always the `<p class="focus__streaming">` this handler is
+    // bound to.
+    const el = event.target as HTMLElement;
+    freezeOutOfFlow(el);
+    // The leaving box is now a copy of words the body paragraph already holds: `.focus__body`
+    // updates to the same answer in the same render that starts this animation. Without this, a
+    // screen reader's virtual cursor would walk over the answer twice — once here, once in the
+    // body — for the whole close animation.
+    el.setAttribute('aria-hidden', 'true');
+    el.classList.add('focus__streaming--out');
+    el.addEventListener('animationend', () => event.animationComplete(), { once: true });
   }
 
   private clearReadyStatusTimer(): void {

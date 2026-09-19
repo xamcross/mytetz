@@ -42,7 +42,11 @@ const VERB_LABELS: Readonly<Record<string, string>> = {
       </button>
       <ol class="trail__list" [class.trail__list--collapsed]="collapsed()">
         @for (node of nodes(); track node.nodeId) {
-          <li class="trail__row" [style.margin-left.px]="node.depth * 16">
+          <li
+            class="trail__row"
+            animate.enter="trail__row--in"
+            [style.margin-left.px]="node.depth * 16"
+          >
             <button
               type="button"
               class="mt-card mt-card--flat trail__item"
@@ -88,8 +92,28 @@ const VERB_LABELS: Readonly<Record<string, string>> = {
       .trail__list--collapsed {
         display: none;
       }
+      /* Animation E. A new row enters from the left, the direction the indentation grows, so the
+         motion itself says which node the new one comes from. Angular creates a fresh <li> for
+         every new track key, so this plays once per node and never replays for one already on
+         screen. */
+      .trail__row--in {
+        animation: trail-join var(--mt-dur-state) var(--mt-ease-settle) both;
+      }
+      @keyframes trail-join {
+        from {
+          opacity: 0;
+          transform: translateX(calc(-1 * var(--mt-move-far)));
+        }
+        to {
+          opacity: 1;
+          transform: none;
+        }
+      }
       /* The surface, the border and the absent lift all come from .mt-card--flat. This rule adds
-         the row's own layout, and the tighter radius the design gives a row. */
+         the row's own layout, and the tighter radius the design gives a row.
+         Animation F. The row's fill genuinely swaps from white to teal when the learner moves
+         between nodes, and a background-colour change is not a compositor-only property — the
+         one animation in this file that cannot rest on transform and opacity alone. */
       .trail__item {
         width: 100%;
         text-align: left;
@@ -100,8 +124,10 @@ const VERB_LABELS: Readonly<Record<string, string>> = {
         border-radius: var(--mt-r-row);
         color: var(--mt-ink);
         transition:
-          background var(--mt-dur-press) var(--mt-ease-press),
-          box-shadow var(--mt-dur-press) var(--mt-ease-press);
+          background-color var(--mt-dur-state) var(--mt-ease-out),
+          border-color var(--mt-dur-state) var(--mt-ease-out),
+          color var(--mt-dur-state) var(--mt-ease-out),
+          box-shadow var(--mt-dur-state) var(--mt-ease-out);
       }
       /* The current row is teal-filled (see the rule below), so a plain background change on
          hover would paint over its fill. This rule answers a pointer for every other row only.
@@ -136,6 +162,12 @@ const VERB_LABELS: Readonly<Record<string, string>> = {
         flex: none;
         border-radius: 999px;
         background: var(--mt-amber);
+        /* Animation F's other half: the current row's dot grows a little, on the same trigger as
+           the colour swap above. */
+        transition: transform var(--mt-dur-state) var(--mt-ease-settle);
+      }
+      .trail__item--current .trail__dot {
+        transform: scale(1.12);
       }
       .trail__text {
         display: flex;
