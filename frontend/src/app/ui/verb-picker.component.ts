@@ -73,7 +73,7 @@ const VERBS: ReadonlyArray<{ verb: Verb; name: string; caption: string }> = [
       aria-label="Explain the highlighted phrase"
       [style.--picker-top]="anchor().top + 'px'"
       [style.--picker-left]="anchor().left + 'px'"
-      (keydown.escape)="dismissed.emit('escape')"
+      (keydown.escape)="onEscape()"
       (keydown.tab)="onTab($event)"
       (keydown.shift.tab)="onTab($event)"
     >
@@ -88,7 +88,7 @@ const VERBS: ReadonlyArray<{ verb: Verb; name: string; caption: string }> = [
             [attr.data-verb]="v.verb"
             [attr.aria-label]="v.name"
             [attr.aria-describedby]="'cap-' + v.verb"
-            (click)="chosen.emit(v.verb)"
+            (click)="onVerbClick(v.verb)"
           >
             <span class="picker__name">{{ v.name }}</span>
             <span class="picker__caption" [id]="'cap-' + v.verb">{{ v.caption }}</span>
@@ -118,6 +118,40 @@ const VERBS: ReadonlyArray<{ verb: Verb; name: string; caption: string }> = [
         border: var(--mt-border-w) solid var(--mt-border);
         border-radius: var(--mt-r-panel);
         box-shadow: var(--mt-float);
+        /* Animation D. On a wide screen the popover grows from the phrase it explains, so the
+           origin sits at the corner nearest that phrase. */
+        transform-origin: top left;
+        animation: picker-open var(--mt-dur-panel) var(--mt-ease-out) both;
+      }
+      @keyframes picker-open {
+        from {
+          opacity: 0;
+          transform: translateY(calc(-1 * var(--mt-move-near))) scale(0.96);
+        }
+        to {
+          opacity: 1;
+          transform: none;
+        }
+      }
+      /* The host is the app-verb-picker tag itself, which the focus card's own template gives
+         the picker--out class through animate.leave — see the comment there for why it has to be
+         the host and not an element inside this file. :host() lets that class, added outside
+         this component, still select the visible box inside it.
+         pointer-events: none, because animate.leave keeps this element, and its five buttons, in
+         the DOM for the whole close animation. Before this issue the picker left the DOM at
+         once, so nothing under a fading box could ever be pressed by mistake or covered from a
+         press meant for whatever opens in its place — a fresh picker for a new selection, or the
+         plain body text underneath. The close is a dismissal already decided; nothing the
+         leaving box still shows needs a pointer to reach it. */
+      :host(.picker--out) .picker {
+        animation: picker-close var(--mt-dur-state) var(--mt-ease-in) both;
+        pointer-events: none;
+      }
+      @keyframes picker-close {
+        to {
+          opacity: 0;
+          transform: translateY(calc(-1 * var(--mt-move-press))) scale(0.98);
+        }
       }
       .picker__lead {
         margin: 0;
@@ -201,22 +235,48 @@ const VERBS: ReadonlyArray<{ verb: Verb; name: string; caption: string }> = [
           width: auto;
           max-height: 60vh;
           border-radius: var(--mt-r-card) var(--mt-r-card) 0 0;
-          animation: picker-rise 200ms ease-out;
+          /* The sheet rises from the edge it is attached to. */
+          transform-origin: bottom center;
+          animation: picker-rise var(--mt-dur-panel) var(--mt-ease-out) both;
+        }
+        @keyframes picker-rise {
+          from {
+            transform: translateY(100%);
+          }
+          to {
+            transform: none;
+          }
+        }
+        :host(.picker--out) .picker {
+          animation: picker-fall var(--mt-dur-state) var(--mt-ease-in) both;
+        }
+        @keyframes picker-fall {
+          to {
+            transform: translateY(100%);
+          }
         }
       }
-      @keyframes picker-rise {
-        from {
-          transform: translateY(100%);
-        }
-        to {
-          transform: translateY(0);
-        }
-      }
-      /* The rise above keeps its own raw duration and does not move to the motion tokens (issue
-         #102 does not touch it). A learner who asks for less motion still needs it silenced. */
+      /* The phone sheet travels 100% of its own height, a distance no --mt-move-* token covers,
+         so its reduced-motion form is explicit rather than token-driven — a plain cross-fade with
+         no travel at all. This rule stays in this file rather than in styles.css: issue #102 found
+         that a component's own rule always outranks a same-class rule in the global sheet, so an
+         override that must win here has to live here. This replaces the animation: none rule
+         issue #102 left in its place, which silenced the phone sheet but gave desktop's own new
+         entrance and exit nothing to fall back to either. */
       @media (prefers-reduced-motion: reduce) {
         .picker {
-          animation: none;
+          animation: picker-fade 1ms linear both;
+        }
+        :host(.picker--out) .picker {
+          animation: picker-fade 1ms linear reverse both;
+        }
+        @keyframes picker-fade {
+          from {
+            opacity: 0;
+          }
+          to {
+            opacity: 1;
+          }
         }
       }
     `,
@@ -237,6 +297,17 @@ export class VerbPickerComponent {
 
   private readonly verbButtons = viewChildren<ElementRef<HTMLButtonElement>>('verb');
 
+  /**
+   * True from the moment this picker first asks its host to dismiss it.
+   *
+   * `animate.leave` keeps this component mounted, with every listener below still bound, for the
+   * whole close animation — the host only destroys it once that animation ends. Before this
+   * issue the picker left the DOM at once, so no press or key could ever reach a picker already
+   * on its way out; now one can, unless every listener checks this first. Set once and never
+   * cleared: a picker that is closing never re-opens, a new one does.
+   */
+  private closing = false;
+
   constructor() {
     // The picker exists only while it is open, so "on creation" is "on open". `afterNextRender`
     // never runs on the server, which keeps this off the render path.
@@ -245,9 +316,25 @@ export class VerbPickerComponent {
 
   /** A press outside the picker closes it. A press inside it does nothing. */
   onDocumentPress(event: Event): void {
+    if (this.closing) return;
     const target = event.target;
     if (target instanceof Node && this.host.nativeElement.contains(target)) return;
+    this.closing = true;
     this.dismissed.emit('outside-press');
+  }
+
+  /** Escape closes the picker. See [closing] for why this checks it first. */
+  onEscape(): void {
+    if (this.closing) return;
+    this.closing = true;
+    this.dismissed.emit('escape');
+  }
+
+  /** A verb chosen while the picker is still open. See [closing] for why this checks it first:
+   * a press that lands on a still-mounted, already-closing picker must choose nothing. */
+  onVerbClick(verb: Verb): void {
+    if (this.closing) return;
+    this.chosen.emit(verb);
   }
 
   /**
@@ -256,8 +343,12 @@ export class VerbPickerComponent {
    * The template binds this to `keydown.tab` **and** to `keydown.shift.tab`. Angular builds a full
    * key name from the modifiers that are held, so `keydown.tab` alone never fires while Shift is
    * down, and the backward half of the trap below would be dead code.
+   *
+   * Guarded by [closing] too: a picker already on its way out must not trap a learner's Tab
+   * press inside a control that is no longer really there for them.
    */
   onTab(event: Event): void {
+    if (this.closing) return;
     // Angular types `$event` as `Event` for a compound key pseudo-event, so the narrow happens
     // here. The template call site stays type-checked.
     const key = event as KeyboardEvent;

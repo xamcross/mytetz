@@ -171,9 +171,9 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
             />
 
             @if (signInRequired()) {
-              <app-sign-in-panel />
+              <app-sign-in-panel animate.enter="wall--in" />
             } @else if (subscribeRequired(); as code) {
-              <app-wall-panel [code]="code" />
+              <app-wall-panel [code]="code" animate.enter="wall--in" />
             } @else {
               <app-focus-card
                 [body]="store.currentBody()"
@@ -232,6 +232,22 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
       }
       .reader {
         padding: 28px 32px;
+      }
+      /* Animation M. The wall panel stops a learner mid-task, and the sign-in panel does the
+         same, so both settle in gently from below rather than snapping into the focus card's own
+         slot. No overshoot: a wall is not an arrival to celebrate. */
+      .wall--in {
+        animation: wall-in var(--mt-dur-panel) var(--mt-ease-out) both;
+      }
+      @keyframes wall-in {
+        from {
+          opacity: 0;
+          transform: translateY(var(--mt-move-far));
+        }
+        to {
+          opacity: 1;
+          transform: none;
+        }
       }
       /* One column below 768px. Two above it: the trail rail, then the card. The design's third
          column at 4a is dropped — every card in it needs a route that does not exist yet. It
