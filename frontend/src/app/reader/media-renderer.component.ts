@@ -43,7 +43,7 @@ const FALLBACK_ALT = 'Diagram';
  * line instead. [diagramFailed] resets on its own the moment [media] changes to a different
  * diagram, through the constructor's own `effect`: this component's instance can outlive one
  * focus node (`SessionStore.currentMedia` supplies a new value as the learner moves between
- * nodes), so a failure recorded for an earlier diagram must not haunt a later, working one.
+ * nodes), so a failure of an earlier diagram must not hide a later diagram that decodes.
  *
  * ## The accessible title
  *
@@ -237,8 +237,8 @@ export class MediaRendererComponent {
   });
 
   constructor() {
-    // A new diagram deserves a fresh attempt — see this class's own doc comment for why an
-    // earlier failure must not carry over.
+    // A new diagram source clears the failure flag. The doc comment of this class gives the
+    // reason: an earlier failure must not hide a later diagram.
     effect(() => {
       this.diagramSrc();
       this.diagramFailed.set(false);
