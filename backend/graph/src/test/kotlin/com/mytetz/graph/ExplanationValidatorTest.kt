@@ -357,4 +357,22 @@ class ExplanationValidatorTest {
                 "act rather than a description of a feeling."
         )
     }
+
+    // ------------------------------------------------------------------ validateStructuredBody
+
+    @Test
+    fun `validateStructuredBody applies the same body checks as validate, with no stop reason gate`() {
+        // A forced tool call has no stop-reason ambiguity to defend against -- see Decision 2 of
+        // the Visualize plan: LlmClient.structured either returns a StructuredResult or throws.
+        // So this method skips straight to the body checks that `checkBody` shares with `validate`.
+        assertEquals(validBody, (validator.validateStructuredBody(validBody) as ValidationResult.Valid).body)
+    }
+
+    @Test
+    fun `validateStructuredBody rejects a body too short for the same reason validate does`() {
+        val result = validator.validateStructuredBody(bodyOfLength(24))
+
+        assertIs<ValidationResult.Invalid>(result)
+        assertContains(result.reason, "short", ignoreCase = true)
+    }
 }

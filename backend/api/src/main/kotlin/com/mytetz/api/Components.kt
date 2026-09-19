@@ -227,6 +227,11 @@ open class Components(
             llm = llm,
             validator = ExplanationValidator(),
             config = GraphConfig(),
+            // The real Wikimedia Commons client comes with Task 8. Until then, VISUALIZE serves
+            // the diagram only — the same default ExplanationGraph's own constructor already
+            // gives, spelled out here so a reader does not have to check that default to know
+            // what this deployment does today.
+            commonsLookup = { _, _ -> null },
         )
     }
 
