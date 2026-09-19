@@ -73,7 +73,7 @@ const VERBS: ReadonlyArray<{ verb: Verb; name: string; caption: string }> = [
       aria-label="Explain the highlighted phrase"
       [style.--picker-top]="anchor().top + 'px'"
       [style.--picker-left]="anchor().left + 'px'"
-      (keydown.escape)="dismissed.emit('escape')"
+      (keydown.escape)="onEscape()"
       (keydown.tab)="onTab($event)"
       (keydown.shift.tab)="onTab($event)"
     >
@@ -88,7 +88,7 @@ const VERBS: ReadonlyArray<{ verb: Verb; name: string; caption: string }> = [
             [attr.data-verb]="v.verb"
             [attr.aria-label]="v.name"
             [attr.aria-describedby]="'cap-' + v.verb"
-            (click)="chosen.emit(v.verb)"
+            (click)="onVerbClick(v.verb)"
           >
             <span class="picker__name">{{ v.name }}</span>
             <span class="picker__caption" [id]="'cap-' + v.verb">{{ v.caption }}</span>
@@ -136,9 +136,16 @@ const VERBS: ReadonlyArray<{ verb: Verb; name: string; caption: string }> = [
       /* The host is the app-verb-picker tag itself, which the focus card's own template gives
          the picker--out class through animate.leave — see the comment there for why it has to be
          the host and not an element inside this file. :host() lets that class, added outside
-         this component, still select the visible box inside it. */
+         this component, still select the visible box inside it.
+         pointer-events: none, because animate.leave keeps this element, and its five buttons, in
+         the DOM for the whole close animation. Before this issue the picker left the DOM at
+         once, so nothing under a fading box could ever be pressed by mistake or covered from a
+         press meant for whatever opens in its place — a fresh picker for a new selection, or the
+         plain body text underneath. The close is a dismissal already decided; nothing the
+         leaving box still shows needs a pointer to reach it. */
       :host(.picker--out) .picker {
         animation: picker-close var(--mt-dur-state) var(--mt-ease-in) both;
+        pointer-events: none;
       }
       @keyframes picker-close {
         to {
@@ -289,6 +296,17 @@ export class VerbPickerComponent {
 
   private readonly verbButtons = viewChildren<ElementRef<HTMLButtonElement>>('verb');
 
+  /**
+   * True from the moment this picker first asks its host to dismiss it.
+   *
+   * `animate.leave` keeps this component mounted, with every listener below still bound, for the
+   * whole close animation — the host only destroys it once that animation ends. Before this
+   * issue the picker left the DOM at once, so no press or key could ever reach a picker already
+   * on its way out; now one can, unless every listener checks this first. Set once and never
+   * cleared: a picker that is closing never re-opens, a new one does.
+   */
+  private closing = false;
+
   constructor() {
     // The picker exists only while it is open, so "on creation" is "on open". `afterNextRender`
     // never runs on the server, which keeps this off the render path.
@@ -297,9 +315,25 @@ export class VerbPickerComponent {
 
   /** A press outside the picker closes it. A press inside it does nothing. */
   onDocumentPress(event: Event): void {
+    if (this.closing) return;
     const target = event.target;
     if (target instanceof Node && this.host.nativeElement.contains(target)) return;
+    this.closing = true;
     this.dismissed.emit('outside-press');
+  }
+
+  /** Escape closes the picker. See [closing] for why this checks it first. */
+  onEscape(): void {
+    if (this.closing) return;
+    this.closing = true;
+    this.dismissed.emit('escape');
+  }
+
+  /** A verb chosen while the picker is still open. See [closing] for why this checks it first:
+   * a press that lands on a still-mounted, already-closing picker must choose nothing. */
+  onVerbClick(verb: Verb): void {
+    if (this.closing) return;
+    this.chosen.emit(verb);
   }
 
   /**
@@ -308,8 +342,12 @@ export class VerbPickerComponent {
    * The template binds this to `keydown.tab` **and** to `keydown.shift.tab`. Angular builds a full
    * key name from the modifiers that are held, so `keydown.tab` alone never fires while Shift is
    * down, and the backward half of the trap below would be dead code.
+   *
+   * Guarded by [closing] too: a picker already on its way out must not trap a learner's Tab
+   * press inside a control that is no longer really there for them.
    */
   onTab(event: Event): void {
+    if (this.closing) return;
     // Angular types `$event` as `Event` for a compound key pseudo-event, so the narrow happens
     // here. The template call site stays type-checked.
     const key = event as KeyboardEvent;

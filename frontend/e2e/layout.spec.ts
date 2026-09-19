@@ -503,6 +503,115 @@ test('Escape closes the picker and returns focus to the body paragraph', async (
   expect(landed.outlineStyle, 'no ring is drawn around 62ch of prose').toBe('none');
 });
 
+/**
+ * Round 2 of issue #104. `animate.leave` keeps the picker in the DOM for the whole close
+ * animation, and before this issue it left at once. The three tests below check that a learner
+ * cannot act on a picker that is on its way out.
+ */
+
+test('clicking a verb twice in fast succession sends exactly one explain request', async ({
+  page,
+}) => {
+  await stubCatalogueAndSession(page, explainedView(CHILD));
+  const stream = await mockExplainStream(page, 's1');
+  // Counts every attempt to reach the explain endpoint. Registered after `mockExplainStream`'s
+  // own `addInitScript`, so it wraps that shim rather than being short-circuited by it — the
+  // shim answers the explain path itself and never calls a fetch registered before it.
+  await page.addInitScript(
+    ({ sessionId }) => {
+      const w = window as unknown as { __explainCalls: number };
+      w.__explainCalls = 0;
+      const path = `/api/sessions/${sessionId}/explain`;
+      const inner = window.fetch.bind(window);
+      window.fetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url.endsWith(path)) w.__explainCalls += 1;
+        return inner(input, init);
+      };
+    },
+    { sessionId: 's1' },
+  );
+
+  await openQuantumPhysicsSession(page);
+  await selectPhrase(page, 'focus-body', 'fundamental physical theory');
+  // Two click events in fast succession on the same, still-present button — the button the
+  // learner pressed is still in the DOM and still bound while its host's close animation runs.
+  await verb(page, 'Explain it').click({ clickCount: 2 });
+
+  const calls = await page.evaluate(
+    () => (window as unknown as { __explainCalls: number }).__explainCalls,
+  );
+  expect(calls, 'exactly one explain request, although the button was clicked twice').toBe(1);
+
+  await stream.send(sseFrame('meta', { contentKey: 'k1', cached: false }));
+  await stream.send(sseFrame('done', { contentKey: 'k1', grounded: true }));
+  await stream.close();
+});
+
+test('after Escape closes the picker, a second Escape and a Tab do not reach the leaving picker', async ({
+  page,
+}) => {
+  const pageErrors: string[] = [];
+  page.on('pageerror', (e) => pageErrors.push(String(e)));
+
+  await stubCatalogueAndSession(page);
+  await page.setViewportSize(WIDTHS.wide);
+  await gotoReader(page);
+  await selectPhrase(page, 'focus-body', 'Quantum mechanics');
+  await picker(page).waitFor();
+
+  await page.keyboard.press('Escape');
+
+  // No wait for the close animation before this read: `close()` moves focus in the same handler
+  // that `dismissed` runs, well before `animate.leave` finishes removing the element.
+  const active = await page.evaluate(() => {
+    const el = document.activeElement as HTMLElement | null;
+    return {
+      testId: el?.getAttribute('data-testid') ?? null,
+      insidePicker: el?.closest('app-verb-picker') !== null,
+    };
+  });
+  expect(active.testId, 'focus already left the picker before its leave animation ends').toBe(
+    'focus-body',
+  );
+  expect(active.insidePicker, 'the active element is not inside the leaving picker').toBe(false);
+
+  // The leaving picker is still in the DOM and its own key handlers are still bound, but focus
+  // has already moved away from it, so a second Escape and a Tab must not reach them: no picker
+  // reappears, and no handler of the leaving picker throws.
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Tab');
+  await expect(picker(page)).toHaveCount(0);
+  expect(pageErrors, 'no handler of the leaving picker throws').toEqual([]);
+});
+
+test('closing the picker with an outside click, then selecting a new phrase at once, leaves one picker for the new phrase', async ({
+  page,
+}) => {
+  await stubCatalogueAndSession(page);
+  await page.route('**/api/sessions/s1', (route) =>
+    route.fulfill({ json: sessionWithBody(LONG_BODY) }),
+  );
+  await page.setViewportSize(WIDTHS.wide);
+  await gotoReader(page, LONG_BODY);
+  await selectPhrase(page, 'focus-body', 'Quantum mechanics');
+  await picker(page).waitFor();
+
+  // A press elsewhere on the page, outside the picker, is the outside-press path. The trail
+  // rail's own heading, and not `.focus__hint`: the open picker's dropdown covers the hint
+  // paragraph at this width, so a click there would hit the picker itself rather than land
+  // outside it.
+  await page.locator('.trail__head').click();
+  // At once: no wait for the close animation before the next selection starts, while the old
+  // picker is still in the DOM, still leaving.
+  await selectPhrase(page, 'focus-body', 'at the smallest scales');
+
+  // `toHaveCount`/`toContainText` retry until the old picker's leave animation actually finishes
+  // and Angular removes it, so this is a claim about the settled state.
+  await expect(picker(page)).toHaveCount(1);
+  await expect(picker(page)).toContainText('at the smallest scales');
+});
+
 test('every control still draws its focus ring', async ({ page }) => {
   // The paragraph is the one element whose ring is suppressed. This is the guard that the
   // suppression did not spread: a control that loses its ring is a control a keyboard cannot find.
