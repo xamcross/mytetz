@@ -159,14 +159,10 @@ const READY_STATUS_MILLIS = 4000;
 
       <!--
         Finding F11 of the design review. The hint carries the product's core instruction, and it
-        used to be the smallest text in the card. It reads as an instruction now, and not as a
-        footnote: mt-hint-sunk gives it a surface and a radius, from styles.css and not from this
-        file — issue #105 must not touch a colour or a border of this file, because draft pull
-        request #126 changes both here, and the two changes must join without a clash.
+        used to be the smallest text in the card, with no surface of its own. The sunk background
+        and the row radius below make it read as an instruction, and not as a footnote.
       -->
-      <p class="focus__hint mt-hint-sunk" [class.focus__hint--warning]="!bodyMatches()">
-        {{ hint() }}
-      </p>
+      <p class="focus__hint" [class.focus__hint--warning]="!bodyMatches()">{{ hint() }}</p>
 
       @if (pickerSpan(); as chosenSpan) {
         <!--
@@ -359,7 +355,11 @@ const READY_STATUS_MILLIS = 4000;
       .focus__hint {
         margin: 0;
         /* F11: 13px was the smallest text in the card, for the one line that carries the
-           product's core instruction. 15px reads as an instruction and not as a footnote. */
+           product's core instruction. 15px, a sunk surface and a row radius read as an
+           instruction, and not as a footnote. */
+        padding: 10px 14px;
+        border-radius: var(--mt-r-row);
+        background: var(--mt-sunk);
         font-size: 15px;
         font-weight: 700;
         color: var(--mt-muted);

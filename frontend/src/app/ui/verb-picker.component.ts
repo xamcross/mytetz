@@ -239,10 +239,8 @@ const VERBS: ReadonlyArray<{ verb: Verb; name: string; caption: string }> = [
       }
       /* F13. Hidden above 768px on purpose: a wide screen already closes the picker on Escape and
          on a press outside, so a second, always-on close control would only add noise there.
-         \`.mt-pill mt-pill--ghost\` on the tag above supplies every colour and border this control
-         needs, so nothing here draws either — issue #105 must not touch a colour or a border of
-         this file, because draft pull request #126 changes both here, and the two changes must
-         join without a clash. */
+         \`.mt-pill mt-pill--ghost\` on the tag above already supplies every colour and border this
+         control needs, so this rule only ever sets \`display\`. */
       .picker__cancel {
         display: none;
       }
