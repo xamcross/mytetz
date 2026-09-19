@@ -6,6 +6,7 @@ import {
   provideHttpClientTesting,
 } from '@angular/common/http/testing';
 import { ActivatedRoute, Router, convertToParamMap, provideRouter } from '@angular/router';
+import { RouterTestingHarness } from '@angular/router/testing';
 import { AccountPageComponent } from './account-page.component';
 import { AccountStore } from '../core/account.store';
 import { AccountView } from '../core/models';
@@ -498,5 +499,69 @@ describe('AccountPageComponent — the post-purchase poll', () => {
 
     expect(text()).not.toContain('19.99');
     expect(text()).not.toContain('other-inbox@example.com');
+  });
+});
+
+/**
+ * The describe block above answers `ActivatedRoute` with a fixed value, and mocks
+ * `Router.navigate` — a spy that never runs a real navigation. This describe block uses the real
+ * router instead, through `RouterTestingHarness`, because only a real navigation can show a real
+ * bug: `Router.navigate([], { queryParams: {}, replaceUrl: true })` completes and reuses this
+ * component, and the router replaces `ActivatedRoute.snapshot` with the snapshot of the cleared
+ * URL. A read of `route.snapshot.queryParamMap` made *after* that navigation therefore always
+ * finds no `action` parameter, on the very return trip the parameter was meant for.
+ */
+describe('AccountPageComponent — with the real router', () => {
+  let harness: RouterTestingHarness;
+  let http: HttpTestingController;
+  let router: Router;
+
+  beforeEach(async () => {
+    TestBed.configureTestingModule({
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        provideRouter([{ path: 'account', component: AccountPageComponent }]),
+      ],
+    });
+    http = TestBed.inject(HttpTestingController);
+    router = TestBed.inject(Router);
+    vi.useFakeTimers();
+    harness = await RouterTestingHarness.create();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    http.verify();
+  });
+
+  /** Settles the microtasks `whenStable` leaves behind. See the comment on the other `settle`,
+   * above the `AccountPageComponent — the post-purchase poll` describe block, for the trap
+   * itself. A real navigation runs through more microtask turns than a mocked one, so this
+   * `settle` loops longer than that one does. */
+  async function settle(): Promise<void> {
+    for (let i = 0; i < 50; i++) await Promise.resolve();
+  }
+
+  it('polls again after the router clears the return URL, and leaves no query string behind', async () => {
+    await harness.navigateByUrl(
+      '/account?action=purchase&email=learner%40example.com',
+      AccountPageComponent,
+    );
+    http.expectOne('/api/account').flush(trialing);
+    await harness.fixture.whenStable();
+    await settle();
+    harness.detectChanges();
+
+    // The address bar is already clear, proving the real `Router.navigate` call completed before
+    // this line — the same navigation that swaps out `ActivatedRoute.snapshot`.
+    expect(router.url).toBe('/account');
+
+    await vi.advanceTimersByTimeAsync(2000);
+
+    // The poll must survive that swap. On the present code it does not: `maybeStartPoll` reads
+    // `route.snapshot` again, after the swap, finds no `action` parameter, and never starts the
+    // poll — so this second request never appears.
+    http.expectOne('/api/account').flush(active);
   });
 });
