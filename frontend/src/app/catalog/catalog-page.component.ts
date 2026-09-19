@@ -35,7 +35,7 @@ import { TopicSummary } from '../core/models';
         </p>
 
         <div class="catalog__filter">
-          <label class="catalog__label" for="topic-filter">Filter topics</label>
+          <label class="mt-sr-only" for="topic-filter">Filter topics</label>
           <div class="catalog__row">
             <input
               id="topic-filter"
@@ -76,7 +76,7 @@ import { TopicSummary } from '../core/models';
         </p>
 
         @if (topicsLoading()) {
-          <p class="visually-hidden" role="status">Loading topics…</p>
+          <p class="mt-sr-only" role="status">Loading topics…</p>
           <ul class="topics" aria-hidden="true">
             @for (i of skeletons; track i) {
               <li class="topic topic--skeleton mt-card">
@@ -173,22 +173,6 @@ import { TopicSummary } from '../core/models';
         font-weight: 500;
         color: var(--mt-muted);
       }
-      .catalog__label {
-        position: absolute;
-        width: 1px;
-        height: 1px;
-        overflow: hidden;
-        clip-path: inset(50%);
-        white-space: nowrap;
-      }
-      .visually-hidden {
-        position: absolute;
-        width: 1px;
-        height: 1px;
-        overflow: hidden;
-        clip-path: inset(50%);
-        white-space: nowrap;
-      }
       /* The search takes its own line, and the categories take the next one.
          The design draws the two side by side, because its sample data has four categories. The
          real catalogue publishes twelve, so one line cannot hold both: the pills overflow the
@@ -253,11 +237,19 @@ import { TopicSummary } from '../core/models';
       }
       .topic__tile:hover {
         transform: translateY(-2px);
-        box-shadow: 0 6px 0 var(--mt-border);
+        box-shadow: var(--mt-lift-hover);
       }
       .topic__tile:active {
         transform: translateY(2px);
-        box-shadow: 0 2px 0 var(--mt-border);
+        box-shadow: var(--mt-press);
+      }
+      /* This tile keeps its own 80ms transition and does not move to the motion tokens (issue
+         #102 does not touch it). A learner who asks for less motion still needs it silenced, so
+         the rule below stays local instead of relying on a token it does not use. */
+      @media (prefers-reduced-motion: reduce) {
+        .topic__tile {
+          transition: none;
+        }
       }
       .topic__title {
         font-size: 23px;

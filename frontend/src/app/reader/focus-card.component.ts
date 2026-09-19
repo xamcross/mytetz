@@ -114,7 +114,7 @@ const READY_STATUS_MILLIS = 4000;
         starts. A screen reader ignores a live region that gets its text the same moment it joins
         the DOM, so the empty element has to be there first.
       -->
-      <p class="visually-hidden focus__stream-status" role="status">{{ streamStatus() }}</p>
+      <p class="mt-sr-only focus__stream-status" role="status">{{ streamStatus() }}</p>
 
       @if (media(); as m) {
         <app-media-renderer [media]="m" />
@@ -240,18 +240,6 @@ const READY_STATUS_MILLIS = 4000;
         100% {
           opacity: 0;
         }
-      }
-      /* Copied from reader-page.component.ts's own .visually-hidden rule, on purpose, and not
-         shared. Issue #102 later replaces every copy - catalog-page.component.ts,
-         reader-page.component.ts, account-page.component.ts, and this one - with one class.
-         This issue does not do that. */
-      .visually-hidden {
-        position: absolute;
-        width: 1px;
-        height: 1px;
-        overflow: hidden;
-        clip-path: inset(50%);
-        white-space: nowrap;
       }
       .focus__hint {
         margin: 0;
