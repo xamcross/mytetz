@@ -90,7 +90,7 @@ test('every guide in the hub index answers with its own heading', async ({ page 
 
   const links = page.locator('.index a');
   const count = await links.count();
-  expect(count).toBe(6);
+  expect(count).toBe(12);
 
   for (let i = 0; i < count; i++) {
     const heading = (await links.nth(i).locator('h2').textContent())?.trim();
