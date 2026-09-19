@@ -362,7 +362,14 @@ object SvgSanitizer {
      * real, replaced subtree.
      */
     private fun toSvgNamespace(document: Document, element: Element): Element {
-        val renamed = if (element.namespaceURI == SVG_NAMESPACE) {
+        // A prefixed element, for example <s:svg xmlns:s="…svg">, already carries the SVG
+        // namespace on [element.namespaceURI] — but its own [element.prefix] is still "s", so
+        // the serializer must keep declaring xmlns:s to print a valid "s:svg" tag. Skipping the
+        // rename here left that declaration in the output even after filterAttributes dropped the
+        // literal xmlns:s attribute earlier, which is the gap this method now closes: every kept
+        // element is renamed to a bare, unprefixed qualified name, so only the one default
+        // declaration [finish] adds to the root is ever needed, or ever printed.
+        val renamed = if (element.namespaceURI == SVG_NAMESPACE && element.prefix == null) {
             element
         } else {
             document.renameNode(element, SVG_NAMESPACE, element.localName ?: element.tagName) as Element

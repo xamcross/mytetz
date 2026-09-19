@@ -1,10 +1,59 @@
 package com.mytetz.graph
 
+import org.w3c.dom.Element
+import org.w3c.dom.Node
+import org.xml.sax.InputSource
+import java.io.StringReader
+import javax.xml.XMLConstants
+import javax.xml.parsers.DocumentBuilderFactory
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 class SvgSanitizerTest {
+
+    /**
+     * Parses [svg] again, with the same safe, namespace-aware settings [SvgSanitizer] itself uses
+     * to parse the model's own source. A text that is not well formed fails here, at the parse
+     * call, before any assertion below runs.
+     *
+     * A browser parses the TEXT this method receives, not the DOM `SvgSanitizer` built in memory.
+     * A re-parse is the only check that proves the text itself, and not merely the in-memory
+     * model, is correct.
+     */
+    private fun assertWellFormedSvgOutput(svg: String) {
+        val factory = DocumentBuilderFactory.newInstance().apply {
+            isNamespaceAware = true
+            setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
+            isExpandEntityReferences = false
+            isXIncludeAware = false
+            setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true)
+        }
+        val document = factory.newDocumentBuilder().parse(InputSource(StringReader(svg)))
+
+        val root = document.documentElement
+        assertEquals("svg", root.localName, "root local name, in:\n$svg")
+        assertEquals(SvgSanitizer.SVG_NAMESPACE, root.namespaceURI, "root namespace, in:\n$svg")
+
+        fun walk(node: Node) {
+            if (node is Element) {
+                assertEquals(
+                    SvgSanitizer.SVG_NAMESPACE,
+                    node.namespaceURI,
+                    "element <${node.tagName}> is not in the SVG namespace, in:\n$svg",
+                )
+            }
+            val children = node.childNodes
+            for (i in 0 until children.length) walk(children.item(i))
+        }
+        walk(root)
+
+        val xmlnsCount = svg.split("xmlns=").size - 1
+        assertEquals(1, xmlnsCount, "expected exactly one xmlns= declaration, in:\n$svg")
+        assertTrue("xmlns=\"\"" !in svg, "an empty default namespace must not appear, in:\n$svg")
+        assertTrue("xmlns:" !in svg, "a prefixed namespace declaration must not appear, in:\n$svg")
+    }
 
     @Test
     fun `a well-formed diagram passes clean`() {
@@ -285,5 +334,62 @@ class SvgSanitizerTest {
         val nested = "<g>".repeat(41) + "<circle cx=\"1\" cy=\"1\" r=\"1\"/>" + "</g>".repeat(41)
         val result = SvgSanitizer.sanitize("<svg>$nested</svg>")
         assertIs<SvgSanitizeResult.Refused>(result)
+    }
+
+    // ------------------------------------------------------------------ the serialized text, re-parsed
+
+    @Test
+    fun `well-formed output -- no xmlns on the root`() {
+        val result = SvgSanitizer.sanitize(
+            """<svg viewBox="0 0 10 10"><circle cx="1" cy="1" r="1"/></svg>"""
+        )
+        val clean = assertIs<SvgSanitizeResult.Clean>(result)
+        assertWellFormedSvgOutput(clean.svg)
+    }
+
+    @Test
+    fun `well-formed output -- xmlns already correct on the root`() {
+        val result = SvgSanitizer.sanitize(
+            """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><circle cx="1" cy="1" r="1"/></svg>"""
+        )
+        val clean = assertIs<SvgSanitizeResult.Clean>(result)
+        assertWellFormedSvgOutput(clean.svg)
+    }
+
+    @Test
+    fun `well-formed output -- a child declares a foreign default namespace`() {
+        val result = SvgSanitizer.sanitize(
+            """<svg xmlns="http://www.w3.org/2000/svg">
+               <circle xmlns="http://example.com/other" cx="1" cy="1" r="1"/></svg>"""
+        )
+        val clean = assertIs<SvgSanitizeResult.Clean>(result)
+        assertWellFormedSvgOutput(clean.svg)
+    }
+
+    @Test
+    fun `well-formed output -- a prefixed document`() {
+        val result = SvgSanitizer.sanitize(
+            """<s:svg xmlns:s="http://www.w3.org/2000/svg"><s:circle cx="1" cy="1" r="1"/></s:svg>"""
+        )
+        val clean = assertIs<SvgSanitizeResult.Clean>(result)
+        assertWellFormedSvgOutput(clean.svg)
+    }
+
+    @Test
+    fun `well-formed output -- a wrong default namespace on the root`() {
+        val result = SvgSanitizer.sanitize(
+            """<svg xmlns="http://example.com/wrong"><g><rect width="1" height="1"/></g></svg>"""
+        )
+        val clean = assertIs<SvgSanitizeResult.Clean>(result)
+        assertWellFormedSvgOutput(clean.svg)
+    }
+
+    @Test
+    fun `well-formed output -- an unlisted wrapper is removed, kept children survive`() {
+        val result = SvgSanitizer.sanitize(
+            """<svg><a><circle cx="1" cy="1" r="1"/></a></svg>"""
+        )
+        val clean = assertIs<SvgSanitizeResult.Clean>(result)
+        assertWellFormedSvgOutput(clean.svg)
     }
 }
