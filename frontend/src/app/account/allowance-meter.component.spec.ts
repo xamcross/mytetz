@@ -162,17 +162,59 @@ describe('AllowanceMeterComponent', () => {
     expect(text()).toContain('Subscribe');
   });
 
-  it('the subscribe button in the meter is inert', () => {
-    // Task 13 wires this button to `POST /api/billing/checkout`. That route does not exist yet,
-    // so a click today must call nothing.
-    store.view.set(none);
-    fixture.detectChanges();
+  function subscribeButton(): HTMLButtonElement {
+    return fixture.nativeElement.querySelector('.allowance-meter__subscribe') as HTMLButtonElement;
+  }
 
-    const button = fixture.nativeElement.querySelector(
-      '.allowance-meter__subscribe',
-    ) as HTMLButtonElement;
+  it('a click on Subscribe in the meter starts the checkout', async () => {
+    store.view.set(expired);
+    fixture.detectChanges();
+    const redirect = vi.spyOn(fixture.componentInstance, 'redirect').mockImplementation(() => {});
+
+    subscribeButton().click();
+
+    const req = http.expectOne('/api/billing/checkout');
+    expect(req.request.method).toBe('POST');
+    req.flush({
+      url: 'https://checkout.freemius.com/product/1/plan/2/?user_email=a%40b.com&readonly_user=true',
+    });
+    await fixture.whenStable();
+
+    // The server built the URL. This component only follows the URL. It never builds one itself.
+    expect(redirect).toHaveBeenCalledWith(
+      'https://checkout.freemius.com/product/1/plan/2/?user_email=a%40b.com&readonly_user=true',
+    );
+  });
+
+  it('a second click while the checkout call runs sends no second request', () => {
+    store.view.set(expired);
+    fixture.detectChanges();
+    vi.spyOn(fixture.componentInstance, 'redirect').mockImplementation(() => {});
+
+    const button = subscribeButton();
+    button.click();
+    fixture.detectChanges();
     button.click();
 
-    http.expectNone('/api/billing/checkout');
+    // One request only. The second click lands while `subscribing` is still true.
+    http.expectOne('/api/billing/checkout');
+  });
+
+  it('a failed checkout call shows a message and enables the button again', async () => {
+    store.view.set(expired);
+    fixture.detectChanges();
+    vi.spyOn(fixture.componentInstance, 'redirect').mockImplementation(() => {});
+
+    subscribeButton().click();
+
+    http
+      .expectOne('/api/billing/checkout')
+      .flush(null, { status: 500, statusText: 'Server Error' });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const alert = fixture.nativeElement.querySelector('[role="alert"]') as HTMLElement;
+    expect(alert.textContent).toContain('Could not start checkout');
+    expect(subscribeButton().disabled).toBe(false);
   });
 });
