@@ -335,15 +335,27 @@ describe('FocusCardComponent', () => {
     expect(rootTextMatchesBody(bodyEl(), BODY)).toBe(true);
   });
 
-  it('renders the topic label as the card heading', () => {
+  // Finding F11 of the design review. The topic name used to render three times at once: this
+  // card's own <h1>, the breadcrumb's root crumb, and the trail rail's root row. The card now
+  // carries the <h1> at step 1 only — reader-page.component.ts supplies a hidden one of its own
+  // past step 1, so the reader page still keeps exactly one <h1> at every step.
+  it('renders the topic label as the card heading at step 1', () => {
     // `topicLabel` defaults to `''`. A caller that forgets the binding therefore renders an empty
     // <h1> and nothing reports it — that defect shipped once already, past the whole suite. This
     // component owns the risky default, so the guard lives here.
     fixture.componentRef.setInput('topicLabel', 'Quantum Physics');
+    fixture.componentRef.setInput('step', 1);
     fixture.detectChanges();
     const heading: HTMLElement = fixture.nativeElement.querySelector('.focus__topic');
     expect(heading).not.toBeNull();
     expect(heading.textContent?.trim()).toBe('Quantum Physics');
+  });
+
+  it('drops the <h1> past step 1, so the topic name does not show a third time', () => {
+    fixture.componentRef.setInput('topicLabel', 'Quantum Physics');
+    fixture.componentRef.setInput('step', 2);
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.focus__topic')).toBeNull();
   });
 
   it('returns focus to the body paragraph when Escape closes the picker', () => {
@@ -379,21 +391,6 @@ describe('FocusCardComponent', () => {
     // An attribute lives in the open tag and contributes nothing to `textContent`. This states it
     // rather than assuming it, because the whole invariant rests on that string.
     expect(bodyEl().getAttribute('tabindex')).toBe('-1');
-    expect(bodyEl().textContent).toBe(BODY);
-    expect(rootTextMatchesBody(bodyEl(), BODY)).toBe(true);
-  });
-
-  it('emits testMeRequested when the Test me control is pressed, and never touches the body text', () => {
-    const spy = vi.fn();
-    fixture.componentInstance.testMeRequested.subscribe(spy);
-    const button: HTMLButtonElement =
-      fixture.nativeElement.querySelector('[data-testid="test-me"]');
-
-    button.click();
-
-    expect(spy).toHaveBeenCalled();
-    // The button is a sibling of the paragraph, not a child of it. A button inside
-    // `.focus__body` would add its own text to the string the offsets index.
     expect(bodyEl().textContent).toBe(BODY);
     expect(rootTextMatchesBody(bodyEl(), BODY)).toBe(true);
   });

@@ -240,6 +240,17 @@ button:disabled {
   white-space: nowrap;
 }
 
+/* Finding F11 of the design review, work package 6. Gives a line of text a sunk surface and a
+   row's own radius, so it reads as an instruction and not as a footnote. New here, and not in
+   focus-card.component.ts, its one caller today: draft pull request #126 changes a colour and a
+   border in that file, and this issue must change neither, so the two changes join without a
+   clash. */
+.mt-hint-sunk {
+  padding: 10px 14px;
+  border-radius: var(--mt-r-row);
+  background: var(--mt-sunk);
+}
+
 .mt-pill {
   display: inline-flex;
   align-items: center;

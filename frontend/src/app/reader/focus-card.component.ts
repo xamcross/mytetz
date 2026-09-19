@@ -103,7 +103,16 @@ const READY_STATUS_MILLIS = 4000;
         }
       </div>
 
-      <h1 class="focus__topic">{{ topicLabel() }}</h1>
+      <!--
+        Finding F11 of the design review. The topic name used to render three times at once: this
+        <h1>, the breadcrumb's root crumb, and the trail rail's root row. It now shows here at
+        step 1 only — the moment a learner opens the topic, when nothing else on screen has named
+        it yet. reader-page.component.ts carries a hidden <h1> of its own past step 1, so the
+        reader page still keeps exactly one <h1> at every step; see the comment there.
+      -->
+      @if (step() === 1) {
+        <h1 class="focus__topic">{{ topicLabel() }}</h1>
+      }
 
       <!--
         Prettier is held off this element deliberately, and it is not cosmetic: run over it,
@@ -148,16 +157,16 @@ const READY_STATUS_MILLIS = 4000;
         <app-media-renderer [media]="m" />
       }
 
-      <p class="focus__hint" [class.focus__hint--warning]="!bodyMatches()">{{ hint() }}</p>
-
-      <button
-        type="button"
-        class="mt-pill mt-pill--ghost"
-        data-testid="test-me"
-        (click)="testMeRequested.emit()"
-      >
-        Test me
-      </button>
+      <!--
+        Finding F11 of the design review. The hint carries the product's core instruction, and it
+        used to be the smallest text in the card. It reads as an instruction now, and not as a
+        footnote: mt-hint-sunk gives it a surface and a radius, from styles.css and not from this
+        file — issue #105 must not touch a colour or a border of this file, because draft pull
+        request #126 changes both here, and the two changes must join without a clash.
+      -->
+      <p class="focus__hint mt-hint-sunk" [class.focus__hint--warning]="!bodyMatches()">
+        {{ hint() }}
+      </p>
 
       @if (pickerSpan(); as chosenSpan) {
         <!--
@@ -190,6 +199,12 @@ const READY_STATUS_MILLIS = 4000;
         display: flex;
         flex-direction: column;
         gap: 16px;
+        /* Finding F11 moved Test me out of this card, so a one-sentence body (the shortest a
+           session ever renders) now makes the card shorter than the picker's own 264px height
+           cap. anchorFor's own comment explains the picker's flip-above math; this keeps the card
+           tall enough for that math to place a flipped picker without its bottom edge running
+           past the card's, whatever the body's length. */
+        min-height: 280px;
       }
       .focus__head {
         display: flex;
@@ -346,7 +361,9 @@ const READY_STATUS_MILLIS = 4000;
       }
       .focus__hint {
         margin: 0;
-        font-size: 13px;
+        /* F11: 13px was the smallest text in the card, for the one line that carries the
+           product's core instruction. 15px reads as an instruction and not as a footnote. */
+        font-size: 15px;
         font-weight: 700;
         color: var(--mt-muted);
       }
@@ -402,10 +419,6 @@ export class FocusCardComponent {
    * the request needs both. A bare `spanSelected` output would leave the page holding one half of a
    * request whose other half lives on buttons it does not own. */
   readonly explainRequested = output<{ span: SpanPayload; verb: Verb }>();
-
-  /** The learner wants a quiz on the node in focus. This never depends on a selection, so the
-   * button stays available whenever the card itself shows a body. */
-  readonly testMeRequested = output<void>();
 
   // `#bodyEl`, not `#body`: a template reference variable shadows the component's own members
   // inside the template, so `#body` would make `{{ body() }}` resolve to the HTMLParagraphElement
