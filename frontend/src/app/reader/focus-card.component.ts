@@ -218,15 +218,18 @@ const READY_STATUS_MILLIS = 4000;
         flex: 1;
         height: 8px;
         border-radius: 4px;
-        background: var(--mt-rule);
+        background: var(--mt-chip);
         overflow: hidden;
       }
+      /* --mt-amber on --mt-rule measured 1.20:1 and failed SC 1.4.11. --mt-amber-ink-2 is the
+         same amber family, already proven at 4.5:1 on an amber surface for text, and it clears
+         3:1 against --mt-chip too. palette.spec.ts proves the exact ratio from these two tokens. */
       .focus__band {
         display: block;
         width: 40%;
         height: 100%;
         border-radius: 4px;
-        background: var(--mt-amber);
+        background: var(--mt-amber-ink-2);
         animation: focus-travel 1.6s ease-in-out infinite;
       }
       @keyframes focus-travel {
@@ -263,7 +266,7 @@ const READY_STATUS_MILLIS = 4000;
          would shift every offset and break the invariant above, so the native selection carries
          the colour instead. No node is added. */
       .focus__body::selection {
-        background: var(--mt-amber);
+        background-color: var(--mt-amber);
         color: var(--mt-amber-ink);
       }
       /* Animation A. The bare .focus__body rule above carries no animation and no transition —

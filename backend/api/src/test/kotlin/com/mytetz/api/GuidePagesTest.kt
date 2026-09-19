@@ -160,12 +160,67 @@ class GuidePagesTest {
         }
     }
 
+    /** Issue #121's own step 8: each public page links to the FAQ page too. */
+    @Test
+    fun `every guide page's footer links to the FAQ page`() = testApplication {
+        application { routing { spaRoutes() } }
+
+        assertTrue(GuidePages.paths.isNotEmpty(), "the guide list must not be empty")
+        for (path in GuidePages.paths) {
+            val body = client.get(path).bodyAsText()
+            assertTrue(
+                """<a href="/faq">FAQ</a>""" in body,
+                "$path's footer carries no link to /faq",
+            )
+        }
+    }
+
     @Test
     fun `every guide path is lowercase and carries no trailing slash`() {
         assertTrue(GuidePages.paths.isNotEmpty(), "the guide list must not be empty")
         for (path in GuidePages.paths) {
             assertEquals(path.lowercase(), path, "$path must stay lowercase for a case-sensitive jar lookup")
             assertEquals(false, path.endsWith("/"), "$path must carry no trailing slash, so one URL is canonical")
+        }
+    }
+
+    /**
+     * The six new pages that issue #118 adds. The list is hardcoded here, and not read from
+     * [GuidePages], so this test fails while the pages do not exist yet, and it keeps passing
+     * once the registration commit adds the same six paths to [GuidePages.paths].
+     */
+    private val wave2Paths = listOf(
+        "/guides/how-to-understand-a-difficult-text",
+        "/guides/how-to-use-ai-to-study-without-cheating",
+        "/guides/how-to-explain-a-text-to-yourself-while-you-read",
+        "/guides/how-many-times-should-you-reread-something",
+        "/guides/how-do-you-know-if-you-understand-something",
+        "/guides/how-long-should-a-study-session-be",
+    )
+
+    @Test
+    fun `every wave 2 guide page answers 200, holds one h1 and names itself in its canonical tag`() =
+        testApplication {
+            application { routing { spaRoutes() } }
+
+            for (path in wave2Paths) {
+                val response = client.get(path)
+                assertEquals(HttpStatusCode.OK, response.status, "$path must answer 200")
+
+                val body = response.bodyAsText()
+                val h1Count = Regex("""<h1[ >]""").findAll(body).count()
+                assertEquals(1, h1Count, "$path must hold exactly one h1, found $h1Count")
+                assertTrue(
+                    body.contains("""<link rel="canonical" href="https://mytetz.com$path" />"""),
+                    "$path must name itself in its canonical tag",
+                )
+            }
+        }
+
+    @Test
+    fun `every wave 2 page is registered in GuidePages paths`() {
+        for (path in wave2Paths) {
+            assertTrue(GuidePages.paths.contains(path), "$path must be added to GuidePages.paths")
         }
     }
 }

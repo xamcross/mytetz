@@ -121,4 +121,16 @@ describe('AppShellComponent', () => {
     expect(link).toBeTruthy();
     expect(link.textContent?.trim()).toBe('How it works');
   });
+
+  it('carries a plain link to the FAQ page in the footer', () => {
+    fixture.detectChanges();
+
+    // A plain href, and not a routerLink, for the same reason as the /how-it-works link: /faq is
+    // a Ktor-rendered page, and app.routes.ts has no 'faq' path.
+    const link = fixture.nativeElement.querySelector(
+      'a.foot__link[href="/faq"]',
+    ) as HTMLAnchorElement;
+    expect(link).toBeTruthy();
+    expect(link.textContent?.trim()).toBe('FAQ');
+  });
 });

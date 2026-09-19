@@ -292,3 +292,22 @@ describe('a hover state for the controls that are not .mt-pill', () => {
     expect(hasSelector(hoverGuardedText(text), '.topic__tile:hover')).toBe(true);
   });
 });
+
+describe('.quiz-panel__option answers hover, press and the disabled state (issue #103)', () => {
+  const text = readFileSync('src/app/assess/quiz-panel.component.ts', 'utf8');
+
+  it('gives it a hover rule, guarded by (hover: hover)', () => {
+    expect(hasSelector(text, '.quiz-panel__option:hover:not(:disabled)')).toBe(true);
+    expect(hasSelector(hoverGuardedText(text), '.quiz-panel__option:hover:not(:disabled)')).toBe(
+      true,
+    );
+  });
+
+  it('gives it an active rule', () => {
+    expect(hasSelector(text, '.quiz-panel__option:active:not(:disabled)')).toBe(true);
+  });
+
+  it('gives it a disabled rule', () => {
+    expect(hasSelector(text, '.quiz-panel__option:disabled')).toBe(true);
+  });
+});

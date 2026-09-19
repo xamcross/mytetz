@@ -2,24 +2,39 @@
 
 > Mytetz is a learning app. A reader picks a topic from a curated catalogue and studies it in a focused, guided reader.
 
-The catalogue lists topics by title, category, and summary. A reader can search and filter the catalogue, then start a session that opens the topic in the reader.
+The catalogue lists topics by title, category and summary. A reader can search, filter, then start a session that opens the topic in the reader.
 
 ## Pages
 
-- [Catalogue](https://mytetz.com/): the curated list of topics, and the site's home page.
+- [Catalogue](https://mytetz.com/): the curated list of topics.
 - [How it works](https://mytetz.com/how-it-works): which model writes an explanation, the known limits, and a contact.
+- [FAQ](https://mytetz.com/faq): the price, the trial, and cancellation.
 - [Privacy policy](https://mytetz.com/privacy)
 - [Terms of service](https://mytetz.com/terms)
 - [Imprint](https://mytetz.com/imprint)
+
+## Product
+
+- Price: $12 a month, through a Freemius checkout. The trial needs no card.
+- Trial: 40 explanations over 7 days, no credit card.
+- Subscriber allowance: 25 explanations each day.
+- Cancel: the account page, Manage subscription.
+- No account is needed for the catalogue, a topic page and its seed text.
 
 ## Guides
 
 Editorial pages about self-study. Every claim names a primary source, with the year and the sample size.
 
-- [Study guides](https://mytetz.com/guides): the index of the six guides below.
-- [How to study on your own](https://mytetz.com/guides/how-to-study-on-your-own): a six-step loop, built on practice testing and distributed practice.
-- [What to use instead of a highlighter](https://mytetz.com/guides/what-to-use-instead-of-a-highlighter): why a 2013 review rated highlighting as low utility, and four replacements.
-- [How to test yourself while you read](https://mytetz.com/guides/how-to-test-yourself-while-you-read): active recall with no flashcard deck.
-- [When to review what you read](https://mytetz.com/guides/when-to-review-what-you-read): the forgetting curve, and a spaced review schedule.
-- [How students study now](https://mytetz.com/guides/how-students-study-now): the 2026 survey data on study and AI, with each sample size.
-- [Why a person stops an online course](https://mytetz.com/guides/why-a-person-stops-an-online-course): what the 2013-2018 completion data counts.
+- [Study guides](https://mytetz.com/guides): twelve guides below.
+- [How to study on your own](https://mytetz.com/guides/how-to-study-on-your-own): a six-step loop.
+- [What to use instead of a highlighter](https://mytetz.com/guides/what-to-use-instead-of-a-highlighter)
+- [How to test yourself while you read](https://mytetz.com/guides/how-to-test-yourself-while-you-read)
+- [When to review what you read](https://mytetz.com/guides/when-to-review-what-you-read)
+- [How students study now](https://mytetz.com/guides/how-students-study-now): 2026 survey data.
+- [Why a person stops an online course](https://mytetz.com/guides/why-a-person-stops-an-online-course)
+- [How to understand a difficult text](https://mytetz.com/guides/how-to-understand-a-difficult-text)
+- [How to use AI to study without cheating](https://mytetz.com/guides/how-to-use-ai-to-study-without-cheating)
+- [How to explain a text to yourself](https://mytetz.com/guides/how-to-explain-a-text-to-yourself-while-you-read)
+- [How many times to reread something](https://mytetz.com/guides/how-many-times-should-you-reread-something)
+- [How do you know if you understand something](https://mytetz.com/guides/how-do-you-know-if-you-understand-something)
+- [How long a study session should be](https://mytetz.com/guides/how-long-should-a-study-session-be)

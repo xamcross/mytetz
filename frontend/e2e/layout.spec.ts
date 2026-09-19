@@ -1193,6 +1193,146 @@ test('a coral pill keeps its smaller shadow while a learner presses it', async (
   await page.mouse.up();
 });
 
+/** #fff8e6, the hex value of --mt-amber-bg, as a browser reports it from getComputedStyle. */
+const AMBER_BG_RGB = 'rgb(255, 248, 230)';
+
+test('a chosen quiz option keeps its amber fill under the pointer, on a press, and on a keyboard focus', async ({
+  page,
+}) => {
+  // A click leaves the pointer over the option it landed on, so the option's own :hover rule
+  // still matches right after the learner chooses it — the exact moment the fill must read
+  // clearly as chosen, and not as merely hovered.
+  await stubCatalogueAndSession(page);
+  await mockQuiz(page, 's1', PRESS_TEMPLATE, PRESS_RESULT);
+  await gotoReader(page);
+
+  await page.getByTestId('test-me').click();
+  const quiz = page.locator('[role="dialog"]');
+  await quiz.getByText(PRESS_TEMPLATE.questions[0].stem).waitFor();
+  const chosen = quiz.getByRole('button', { name: PRESS_TEMPLATE.questions[0].options[0] });
+  await chosen.click();
+
+  await expect
+    .poll(() => chosen.evaluate((el) => getComputedStyle(el).backgroundColor), {
+      message: 'the chosen option keeps its amber fill while the pointer still rests on it',
+    })
+    .toBe(AMBER_BG_RGB);
+
+  // A press must not swap the fill to the plain :active background either.
+  const box = await chosen.boundingBox();
+  if (box === null) throw new Error('the chosen option has no box to press');
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await expect
+    .poll(() => chosen.evaluate((el) => getComputedStyle(el).backgroundColor), {
+      message: 'the chosen option keeps its amber fill while a learner presses it',
+    })
+    .toBe(AMBER_BG_RGB);
+  await page.mouse.up();
+
+  // Move the pointer well away, so no hover rule of any option can still be in play. The chosen
+  // option is the dialog's first focusable element, so focusing the dialog root itself (already
+  // programmatically reachable, and not a control) and then pressing Tab reaches it by keyboard
+  // alone — the one path Chromium counts as :focus-visible, the same technique `layout.spec.ts`
+  // already uses for the catalogue filter above.
+  await page.mouse.move(0, 0);
+  await quiz.evaluate((el) => (el as HTMLElement).focus());
+  await page.keyboard.press('Tab');
+  await expect
+    .poll(
+      async () => {
+        const state = await chosen.evaluate((el) => ({
+          fill: getComputedStyle(el).backgroundColor,
+          focusVisible: el.matches(':focus-visible'),
+        }));
+        return state;
+      },
+      { message: 'the chosen option keeps its amber fill while it holds the keyboard focus' },
+    )
+    .toEqual({ fill: AMBER_BG_RGB, focusVisible: true });
+});
+
+test('a quiz option carries the Candy lift, and presses like a pill', async ({ page }) => {
+  // The design review builds the option "from .mt-card", which carries the offset lift. This
+  // checks the second, unchosen option, so it never overlaps with the amber-fill test above.
+  await stubCatalogueAndSession(page);
+  await mockQuiz(page, 's1', PRESS_TEMPLATE, PRESS_RESULT);
+  await gotoReader(page);
+
+  await page.getByTestId('test-me').click();
+  const quiz = page.locator('[role="dialog"]');
+  await quiz.getByText(PRESS_TEMPLATE.questions[0].stem).waitFor();
+  const other = quiz.getByRole('button', { name: PRESS_TEMPLATE.questions[0].options[1] });
+
+  // --mt-lift is "0 4px 0 var(--mt-border)", and --mt-border is rgb(207, 233, 224).
+  await expect(other).toHaveCSS('box-shadow', 'rgb(207, 233, 224) 0px 4px 0px 0px');
+
+  const box = await other.boundingBox();
+  if (box === null) throw new Error('the option has no box to press');
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await expect
+    .poll(() => other.evaluate((el) => getComputedStyle(el).boxShadow), {
+      message: 'a pressed quiz option keeps a smaller shadow, the same as a pressed pill',
+    })
+    .toBe('rgb(207, 233, 224) 0px 2px 0px 0px');
+  await page.mouse.up();
+});
+
+/** Finding F10. The first option is one line. The second is long enough to wrap onto a second
+ * line inside the 560px-wide panel, at 15px and a 1.45 line-height. */
+const WRAP_TEMPLATE: QuizTemplateView = {
+  attemptId: 'attempt-wrap',
+  kind: 'TEST_ME',
+  questions: [
+    {
+      questionId: 'q1',
+      stem: 'Which option is correct?',
+      options: [
+        'Short',
+        'This option carries a much longer sentence than the one above it, long enough that it must wrap onto a second line inside the panel.',
+      ],
+    },
+  ],
+};
+
+const WRAP_RESULT: QuizResultView = {
+  score: 0,
+  total: 1,
+  correctIndices: { q1: 0 },
+  rationales: { q1: '' },
+};
+
+test('a long quiz option wraps to two lines, taller than a one-line option, with no overlap', async ({
+  page,
+}) => {
+  await stubCatalogueAndSession(page);
+  await mockQuiz(page, 's1', WRAP_TEMPLATE, WRAP_RESULT);
+  await gotoReader(page);
+
+  await page.getByTestId('test-me').click();
+  const quiz = page.locator('[role="dialog"]');
+  const options = quiz.locator('.quiz-panel__option');
+  await options.first().waitFor();
+
+  const shortBox = await options.nth(0).boundingBox();
+  const longBox = await options.nth(1).boundingBox();
+  if (shortBox === null || longBox === null) throw new Error('an option has no box to measure');
+
+  // Padding and border are fixed for both options, so a wrap to a second line adds one more line
+  // of text, not a whole extra option's worth of height. 15px is well under one 15px/1.45 line
+  // (about 22px), so this margin proves a wrap happened without pinning the exact font metrics.
+  expect(
+    longBox.height,
+    'the long option wrapped to a second line, so it stands taller than a one-line option',
+  ).toBeGreaterThan(shortBox.height + 15);
+
+  expect(
+    shortBox.y + shortBox.height,
+    'the short option ends before the long, wrapped one begins: the two never overlap',
+  ).toBeLessThanOrEqual(longBox.y);
+});
+
 /**
  * Finding F13 of the design review changes this test. It used to count five focusable controls —
  * the five verbs — at every width. Below 768px the picker now also shows a Cancel button, so the

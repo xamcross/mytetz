@@ -8,6 +8,8 @@ Reviewed at `origin/main` = `9c965cb`. No file changed. The skill `frontend-desi
 - No browser ran. Each contrast ratio is computed from the token values. Each control height and the header overflow of F5 are arithmetic from the CSS.
 - The main session confirmed five findings against `main` at `10a66e6`: F2, F3, F4 and F6 in full, and the CSS of F5. It did not confirm the other findings. Each issue below says which part of its evidence is confirmed.
 - #88, #89 and #91 changed the account files after commit `9c965cb`, so some line numbers of F5, F7, F14 and F15 are old.
+- #103 found two wrong values in this review. Section 3.2 names `#8ab6aa` for `--mt-edge`. That value measures 2.25:1 on `--mt-surface`, not "near 3:1". #103 uses `#4a9d84` instead, at 3.26:1.
+- Animation L names the pair `--mt-amber-deep` on `--mt-chip` for the progress band. That pair measures 1.45:1, not 3:1. #103 uses `--mt-amber-ink-2` on `--mt-chip` instead, at 4.33:1.
 
 | Issue | Holds | Kind |
 |---|---|---|

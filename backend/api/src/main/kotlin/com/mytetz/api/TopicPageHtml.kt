@@ -143,6 +143,7 @@ internal fun BODY.siteFooter() {
                 a(href = "/") { +"Catalogue" }
                 a(href = "/guides") { +"Guides" }
                 a(href = "/how-it-works") { +"How it works" }
+                a(href = "/faq") { +"FAQ" }
                 a(href = "/privacy") { +"Privacy" }
                 a(href = "/terms") { +"Terms" }
                 a(href = "/imprint") { +"Imprint" }

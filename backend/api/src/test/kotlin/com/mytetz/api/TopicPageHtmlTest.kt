@@ -281,6 +281,13 @@ class TopicPageHtmlTest {
     }
 
     @Test
+    fun `the footer links to the FAQ page`() {
+        val html = render(view())
+
+        assertTrue("""<a href="/faq">FAQ</a>""" in html, html)
+    }
+
+    @Test
     fun `the page loads exactly one external script, and exactly one other script, the JSON-LD one`() {
         val html = render(view())
 

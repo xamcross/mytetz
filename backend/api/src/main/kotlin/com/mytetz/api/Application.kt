@@ -201,6 +201,10 @@ fun Application.module(components: Components = Components()) {
         howItWorksRoutes(
             modelId = { resolveModelForLogging(System.getenv(AnthropicLlmClient.MODEL_ID_ENV)) },
         )
+        // `GET /faq`. Reads the one `BillingConfig` instance `components.billing` also reads —
+        // see `Components.billingConfig`'s own KDoc — so the trial length, the trial pool and the
+        // subscriber allowance on this page can never disagree with the real behaviour.
+        faqRoutes(billingConfig = components.billingConfig)
         // `GET /sitemap.xml`. Replaces the static file #32 shipped — see SitemapRoutes.kt's own
         // KDoc for why a static file cannot keep up with the catalogue, and for how it reads a
         // topic's lastmod date.
