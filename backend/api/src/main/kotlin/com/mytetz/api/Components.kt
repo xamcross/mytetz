@@ -12,6 +12,7 @@ import com.mytetz.account.ResendMailSender
 import com.mytetz.assess.QuizRepository
 import com.mytetz.assess.QuizService
 import com.mytetz.assess.QuizValidator
+import com.mytetz.billing.BillingConfig
 import com.mytetz.billing.BillingRepository
 import com.mytetz.billing.BillingService
 import com.mytetz.billing.FreemiusConfig
@@ -117,6 +118,16 @@ open class Components(
      * own FakeLlmClient` pins this.
      */
     val modelFamily: String = AnthropicLlmClient.resolveModel(System.getenv(AnthropicLlmClient.MODEL_FAMILY_ENV)),
+    /**
+     * The trial and subscriber numbers this deployment runs on, resolved once, from the
+     * environment, with [BillingConfig]'s own defaults. [billing] below reads this same instance,
+     * and so does `FaqRoutes.kt`'s `GET /faq` — the page states the real trial length, the real
+     * trial pool and the real subscriber allowance, because it reads the one value the product
+     * itself reads, and never a second call to [BillingConfig] with a second, hand-written
+     * fallback. `ComponentsTest`'s own `a test can override billingConfig, and the one instance
+     * reaches billing and the FAQ page alike` pins this.
+     */
+    val billingConfig: BillingConfig = BillingConfig(),
     llmFactory: () -> LlmClient = { AnthropicLlmClient() },
     // Each factory default reads its own credential from the environment, and each throws when the
     // credential is absent. Neither runs at construction: both sit inside a `by lazy` below, on the
@@ -261,7 +272,7 @@ open class Components(
 
     val quota = QuotaService(quotaRepository)
 
-    val billing: BillingService = BillingService(billingRepository)
+    val billing: BillingService = BillingService(billingRepository, billingConfig)
 
     /**
      * The three Freemius identifiers the checkout route and the webhook route need, read from

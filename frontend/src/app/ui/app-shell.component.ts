@@ -72,6 +72,11 @@ import { BackendState, StatusDotComponent } from './status-dot.component';
         /how-it-works is a Ktor-rendered page, and app.routes.ts has no 'how-it-works' path.
       -->
       <a class="foot__link" href="/how-it-works">How it works</a>
+      <!--
+        A plain href, and not a routerLink, for the same reason as the /how-it-works link above:
+        /faq is a Ktor-rendered page, and app.routes.ts has no 'faq' path.
+      -->
+      <a class="foot__link" href="/faq">FAQ</a>
       <a class="foot__link" routerLink="/privacy">Privacy</a>
       <a class="foot__link" routerLink="/terms">Terms</a>
       <a class="foot__link" routerLink="/imprint">Imprint</a>
