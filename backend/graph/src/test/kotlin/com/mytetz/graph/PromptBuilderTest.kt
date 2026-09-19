@@ -4,6 +4,7 @@ import java.security.MessageDigest
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
@@ -47,6 +48,14 @@ class PromptBuilderTest {
         Verb.SIDE_VIEW,
         Verb.VISUALIZE,
     )
+
+    /**
+     * The verbs whose instruction still travels through [PromptBuilder.user]. `VISUALIZE` now uses
+     * its own path, [PromptBuilder.visualizeUser], so [PromptBuilder.user] refuses that verb
+     * outright — see `PromptBuilder user must never be called for VISUALIZE` below. Every test that
+     * calls [PromptBuilder.user] once per verb must use this list, not [allVerbs].
+     */
+    private val verbsThroughUser = allVerbs - Verb.VISUALIZE
 
     @Test
     fun `system prompt states the length, context, prose and preamble rules`() {
@@ -184,28 +193,29 @@ class PromptBuilderTest {
 
     @Test
     fun `each verb yields a distinct instruction written as prose`() {
-        val prompts = allVerbs.map { PromptBuilder.user(quantumContext.copy(verb = it)) }
+        val prompts = verbsThroughUser.map { PromptBuilder.user(quantumContext.copy(verb = it)) }
 
         assertEquals(prompts.size, prompts.toSet().size, "verb instructions are not distinct")
 
         // Distinctness alone is free: a builder that appended `verb.name` would satisfy it while
-        // giving the model six identical instructions. The prompt is prose for a teacher, so no
+        // giving the model identical instructions. The prompt is prose for a teacher, so no
         // SCREAMING_SNAKE identifier may appear in it.
         prompts.forEachIndexed { i, prompt ->
             assertFalse(
                 Regex("""\b[A-Z]{2,}(_[A-Z]{2,})+\b""").containsMatchIn(prompt),
-                "${allVerbs[i]} prompt leaks an enum name:\n$prompt",
+                "${verbsThroughUser[i]} prompt leaks an enum name:\n$prompt",
             )
         }
 
-        // Each verb must ask for its own thing, not a generic "explain this".
+        // Each verb must ask for its own thing, not a generic "explain this". VISUALIZE is not
+        // here: it never reaches this method — see `PromptBuilder.visualizeUser` and the guard
+        // test below.
         val signature = mapOf(
             Verb.SEED to "1 to 3 sentences that introduce",
             Verb.EXPLAIN to "as it is used in this context",
             Verb.DIG_DEEPER to "deeper",
             Verb.BROADER_PICTURE to "Zoom out",
             Verb.SIDE_VIEW to "different angle",
-            Verb.VISUALIZE to "diagram",
         )
         signature.forEach { (verb, phrase) ->
             assertContains(PromptBuilder.user(quantumContext.copy(verb = verb)), phrase)
@@ -216,8 +226,9 @@ class PromptBuilderTest {
     fun `every verb that acts on a span carries the exact sentence it appeared in`() {
         // "Microscopic realm" resolves differently depending on whether its sentence concerned
         // scale or measurement, so the sentence has to reach the model for every span-bearing
-        // verb -- not just the ones where it felt natural to include it.
-        (allVerbs - Verb.SEED).forEach { verb ->
+        // verb -- not just the ones where it felt natural to include it. VISUALIZE is excluded
+        // here for a different reason than SEED: it never reaches this method at all.
+        (verbsThroughUser - Verb.SEED).forEach { verb ->
             val prompt = PromptBuilder.user(disjointContext.copy(verb = verb))
             assertContains(prompt, "SPAN-DELTA", message = "$verb dropped the span")
             assertContains(prompt, "SENTENCE-ECHO", message = "$verb dropped the span sentence")
@@ -253,7 +264,7 @@ class PromptBuilderTest {
         val a = PromptBuilder.user(quantumContext)
         val systemFirst = PromptBuilder.system()
         PromptBuilder.user(disjointContext)
-        PromptBuilder.user(quantumContext.copy(verb = Verb.VISUALIZE))
+        PromptBuilder.user(quantumContext.copy(verb = Verb.DIG_DEEPER))
 
         assertEquals(a, PromptBuilder.user(quantumContext))
         assertEquals(systemFirst, PromptBuilder.system())
@@ -344,23 +355,60 @@ class PromptBuilderTest {
         // bumping VERSION would leave every already-persisted explanation addressed by a key that
         // no longer describes the prompt that produced it -- silently stale content, with no
         // migration to notice it. This test makes that edit impossible to make quietly.
+        //
+        // VISUALIZE is not hashed here: it no longer reaches PromptBuilder.user, and it carries
+        // its own version, VISUALIZE_VERSION, independent of VERSION -- see Decision 5 of the
+        // Visualize plan. A change to the visualize prompt bumps that constant instead, and this
+        // digest is unaffected by it either way.
         val digest = MessageDigest.getInstance("SHA-256").apply {
             update(PromptBuilder.VERSION.toByteArray())
             update(PromptBuilder.system().toByteArray())
-            allVerbs.forEach { update(PromptBuilder.user(quantumContext.copy(verb = it)).toByteArray()) }
+            verbsThroughUser.forEach { update(PromptBuilder.user(quantumContext.copy(verb = it)).toByteArray()) }
         }.digest().joinToString("") { "%02x".format(it) }
 
         assertEquals(
-            // Re-pinned with the VERSION bump to v3. The first deployment found that the SEED
-            // instruction said "the opening paragraph" while rule 1 of the system prompt said
-            // "1 to 3 sentences. Never longer." The model obeyed the task and not the rule, so
-            // every seed came back longer than the validator's 600-character limit and no session
-            // could start. The instruction now repeats rule 1. This test caught the edit and
-            // demanded the bump, which is what it exists for.
-            "6b1d1ce5db8c96cb6fce240c6692afcd4088756b265f9abb3f9f918fd029dd2d",
+            // Re-pinned when VISUALIZE left this hash's own input set (it now has its own path
+            // and its own version), and once more for the VERSION bump to v3 before that. The
+            // first deployment found that the SEED instruction said "the opening paragraph" while
+            // rule 1 of the system prompt said "1 to 3 sentences. Never longer." The model obeyed
+            // the task and not the rule, so every seed came back longer than the validator's
+            // 600-character limit and no session could start. The instruction now repeats rule 1.
+            // This test caught the edit and demanded the bump, which is what it exists for.
+            "57251c96b5ff54c69f2a863134c0341e1d106482f94df403573a2231442c0c10",
             digest,
             "The prompt text or VERSION changed. If you edited the prompts: bump PromptBuilder.VERSION " +
                 "and re-pin this digest. If you bumped VERSION: re-pin this digest.",
         )
+    }
+
+    // ------------------------------------------------------------------ VISUALIZE
+
+    @Test
+    fun `the visualize schema requires both an explanation and an svg field`() {
+        val schema = PromptBuilder.visualizeSchema()
+        assertTrue(schema.containsKey("explanation"))
+        assertTrue(schema.containsKey("svg"))
+    }
+
+    @Test
+    fun `the visualize system prompt asks for one short sentence, not one to three`() {
+        // The shared system() prompt asks for "1 to 3 sentences." The visualize path asks for one,
+        // since the sentence sits beside a diagram and does not carry the whole answer.
+        assertTrue("one" in PromptBuilder.visualizeSystem().lowercase())
+    }
+
+    @Test
+    fun `PromptBuilder user must never be called for VISUALIZE`() {
+        assertFailsWith<IllegalStateException> {
+            PromptBuilder.user(
+                PromptContext(
+                    topicTitle = "t",
+                    ancestors = emptyList(),
+                    span = "s",
+                    spanSentence = "ss",
+                    verb = Verb.VISUALIZE,
+                )
+            )
+        }
     }
 }

@@ -1,7 +1,18 @@
 package com.mytetz.graph
 
+import kotlinx.serialization.Serializable
+
 /** One link in the chain the learner followed to reach the current span, root-first. */
 data class Ancestor(val span: String, val body: String)
+
+/**
+ * The forced tool call's own answer shape for `VISUALIZE`: one short sentence, and one inline SVG
+ * source, in the same call. `ExplanationGraph.generate` decodes a `StructuredResult.json` into
+ * this type, then validates each field on its own — [explanation] through
+ * `ExplanationValidator.validateStructuredBody`, [svg] through [SvgSanitizer.sanitize].
+ */
+@Serializable
+data class VisualizeAnswer(val explanation: String, val svg: String)
 
 /**
  * Everything the model is told about a request. Deliberately contains no user, principal or
@@ -39,6 +50,14 @@ object PromptBuilder {
      * orphan harmlessly and new ones regenerate lazily. Reverting the string rolls back.
      */
     const val VERSION: String = "v3"
+
+    /**
+     * Bump on any change to [visualizeSystem], [visualizeUser] or [visualizeSchema]. This is a
+     * separate counter from [VERSION] on purpose: a `VISUALIZE` request never reaches the shared
+     * prompt path, so a change to it must never re-key every other verb's already-cached
+     * explanation. See `ExplanationGraph.keyFor` and the plan's own Decision 5.
+     */
+    const val VISUALIZE_VERSION: String = "v1"
 
     /**
      * Puts a stored value on one line.
@@ -139,7 +158,54 @@ object PromptBuilder {
             "Explain the same thing again from a different angle — a different analogy " +
                 "or a different entry point. Do not repeat the wording they have already read."
 
-        Verb.VISUALIZE ->
-            "Describe what a diagram of ${quoted(context.span)} would show."
+        // Unreachable in practice: ExplanationGraph.generate calls visualizeSystem and
+        // visualizeUser for VISUALIZE, before it ever calls user() or instructionFor() for that
+        // verb. `when` over an enum must stay exhaustive, so this branch cannot simply disappear.
+        // It fails loudly on a wrong call instead of silently sending the model a stale
+        // instruction — the one this branch carried before this prompt moved to its own path.
+        Verb.VISUALIZE -> error(
+            "VISUALIZE never reaches PromptBuilder.user; see ExplanationGraph.generate " +
+                "and PromptBuilder.visualizeUser"
+        )
     }
+
+    const val VISUALIZE_TOOL_NAME: String = "submit_diagram"
+    const val VISUALIZE_TOOL_DESCRIPTION: String =
+        "Submit one short sentence and one inline SVG diagram for the highlighted phrase."
+
+    /**
+     * The visualize path's own system prompt. It does not share [system]'s "1 to 3 sentences"
+     * rule: a diagram carries most of the answer here, so one short sentence is enough, and the
+     * model is told to draw a self-contained inline SVG with no external reference of its own.
+     * `SvgSanitizer` enforces the safety half of this after the model answers; this text only asks
+     * for it first.
+     */
+    fun visualizeSystem(): String = """
+        You are an expert teacher drawing a simple diagram for a curious beginner.
+
+        Rules, in order of priority:
+        1. Write one short sentence describing what the diagram shows. Never more than one.
+        2. Draw the diagram as a single, valid, self-contained inline SVG document. Use only
+           basic shapes and text — no external references, no scripts, no embedded HTML.
+        3. Keep the diagram simple: a handful of shapes the learner can read in a glance.
+    """.trimIndent()
+
+    /**
+     * The visualize path's own user prompt. It carries the topic and the span the same way
+     * [user] does for every other verb, through [flattened] and [quoted] — see those two
+     * functions' own KDoc for what each one bounds. It carries no ancestry: a diagram answers one
+     * span on its own, and the model does not need the learner's earlier reading to draw it.
+     */
+    fun visualizeUser(context: PromptContext): String = buildString {
+        appendLine("Topic: ${flattened(context.topicTitle)}")
+        appendLine()
+        appendLine("Draw a diagram of: ${quoted(context.span)}")
+        appendLine("It appeared in this sentence: ${quoted(context.spanSentence)}")
+    }.trim()
+
+    /** The forced tool call's own JSON Schema `properties` object — see [VisualizeAnswer]. */
+    fun visualizeSchema(): Map<String, Any> = mapOf(
+        "explanation" to mapOf("type" to "string"),
+        "svg" to mapOf("type" to "string"),
+    )
 }
