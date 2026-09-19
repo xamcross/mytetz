@@ -7,12 +7,10 @@ package com.mytetz.api
  * copies them into the `static` resources that [spaRoutes] serves. Nothing generates them, so this
  * list is the only machine-readable record of which pages exist.
  *
- * Two consumers need that record:
- *
- * - `frontend/public/sitemap.xml` lists the same URLs today. `GuidePagesTest` compares the two, so
- *   a page that enters one and not the other fails the build.
- * - #46 replaces that static file with a `GET /sitemap.xml` route. Step 3 of #46 deletes the file,
- *   so the route must read this list instead. One list gives one truth.
+ * One consumer needs that record: the `GET /sitemap.xml` route in [sitemapRoutes] reads this list
+ * and writes one `<url>` entry for each path. `GuidePagesTest` asks that route for its answer and
+ * compares it against this list, so a page that enters one and not the other fails the build. One
+ * list gives one truth.
  *
  * A path stays lowercase. The runtime serves these files from inside `api.jar`, and
  * `JarFileContent` is case-sensitive, so `/Guides/...` would answer 200 on a Windows developer
