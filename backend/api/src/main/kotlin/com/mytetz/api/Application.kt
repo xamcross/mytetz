@@ -186,6 +186,13 @@ fun Application.module(components: Components = Components()) {
             explanations = components.explanations,
             modelFamily = components.modelFamily,
         )
+        // `GET /topics/{slug}/explain/{shortKey}`. Ahead of the `/api/{...}` catch-all and
+        // `spaRoutes()` below, for the same routing-quality reason `topicPageRoutes` is. See
+        // ExplanationPageRoutes.kt's own KDoc.
+        explanationPageRoutes(
+            catalog = components.catalog,
+            explanations = components.explanations,
+        )
 
         // Every unmatched `/api/**` path, answered as JSON.
         //
