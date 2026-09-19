@@ -510,6 +510,10 @@ test('the leaving stream box cannot be selected, and the status paragraph change
     .evaluate((el) => getComputedStyle(el).userSelect);
   expect(userSelectWhileLeaving, 'the leaving box stays unselectable while it fades').toBe('none');
 
+  // Round 3. The leaving box now holds the same words the body paragraph does, so a screen
+  // reader's virtual cursor must not walk over the answer twice while it fades.
+  await expect(page.locator('.focus__streaming')).toHaveAttribute('aria-hidden', 'true');
+
   await expect(page.locator('.focus__streaming')).toHaveCount(0);
 
   const changes = await page.evaluate(

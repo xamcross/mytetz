@@ -559,6 +559,11 @@ export class FocusCardComponent {
     // bound to.
     const el = event.target as HTMLElement;
     freezeOutOfFlow(el);
+    // The leaving box is now a copy of words the body paragraph already holds: `.focus__body`
+    // updates to the same answer in the same render that starts this animation. Without this, a
+    // screen reader's virtual cursor would walk over the answer twice — once here, once in the
+    // body — for the whole close animation.
+    el.setAttribute('aria-hidden', 'true');
     el.classList.add('focus__streaming--out');
     el.addEventListener('animationend', () => event.animationComplete(), { once: true });
   }
