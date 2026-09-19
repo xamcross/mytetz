@@ -261,7 +261,15 @@ class AnthropicLlmClient(
          * This function trims the value. `fly secrets set` leaves a trailing newline. A hand-edited
          * `.env` does the same. A model id with a newline gives a 404 from the API.
          */
-        internal fun resolveModel(raw: String?): String =
+        /**
+         * Public so a route that must never build an [AnthropicLlmClient] — see
+         * `TopicPageRoutes.kt`'s own KDoc — can still resolve the same value this class resolves for
+         * [modelId] and [modelFamily]. Reading the environment twice, here and in the constructor
+         * default, is deliberate: it is one function that computes one value, called from two
+         * places, and not two functions that could drift apart. See `Components.modelFamily`'s own
+         * KDoc.
+         */
+        fun resolveModel(raw: String?): String =
             raw?.trim()?.takeIf { it.isNotEmpty() } ?: DEFAULT_MODEL
 
         /**

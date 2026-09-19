@@ -83,6 +83,20 @@ open class Components(
     val mongo: Mongo = Mongo(MongoConfig.fromEnv()),
     val cookies: PrincipalCookieConfig = PrincipalCookieConfig(),
     val clientAddresses: ClientAddressConfig = ClientAddressConfig(),
+    /**
+     * The model family a public, no-model-client page uses to compute a
+     * [com.mytetz.graph.ContentKey] seed key. Resolved the same way [AnthropicLlmClient.modelFamily]
+     * resolves it in production, but as a plain `String`: this never builds an [AnthropicLlmClient]
+     * and never demands `ANTHROPIC_API_KEY`, which is exactly why `TopicPageRoutes.kt` and every
+     * later public-page route in this project read this value and never `llm.modelFamily`.
+     *
+     * A test that wires its own [llmFactory] with a [com.mytetz.llm.FakeLlmClient] of a different
+     * `modelFamily` must pass the same family here, or a page a route renders through this value,
+     * and a page a pre-warm run generates through [sessions]/[graph], compute two different content
+     * keys for the one seed. `ComponentsTest`'s own `a test can set modelFamily to agree with its
+     * own FakeLlmClient` pins this.
+     */
+    val modelFamily: String = AnthropicLlmClient.resolveModel(System.getenv(AnthropicLlmClient.MODEL_FAMILY_ENV)),
     llmFactory: () -> LlmClient = { AnthropicLlmClient() },
     // Each factory default reads its own credential from the environment, and each throws when the
     // credential is absent. Neither runs at construction: both sit inside a `by lazy` below, on the
@@ -116,7 +130,10 @@ open class Components(
 ) {
 
     private val topics = TopicRepository(mongo.database)
-    private val explanations = ExplanationRepository(mongo.database)
+
+    /** `internal`, and not `private`, so `TopicPageRoutes.kt`'s pure-read topic page can read it
+     * directly and never go through the lazy [graph]/[llm] chain. See [modelFamily]'s own KDoc. */
+    internal val explanations = ExplanationRepository(mongo.database)
     private val sessionRepository = SessionRepository(mongo.database)
     private val quizRepository = QuizRepository(mongo.database)
 

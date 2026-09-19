@@ -12,6 +12,7 @@ import com.mytetz.account.MailSender
 import com.mytetz.graph.Explanation
 import com.mytetz.graph.ExplanationRepository
 import com.mytetz.graph.Verb
+import com.mytetz.llm.AnthropicLlmClient
 import com.mytetz.llm.FakeLlmClient
 import com.mytetz.persistence.Mongo
 import com.mytetz.persistence.MongoConfig
@@ -428,6 +429,31 @@ class ComponentsTest {
         components.sessions
 
         assertEquals(1, built, "the model client was not built when a session service was needed")
+    }
+
+    @Test
+    fun `modelFamily resolves with no model client built`() {
+        var built = 0
+        val components = Components(
+            mongo = Mongo(MongoConfig(TestFixtures.connectionString, "test_api_model_family")),
+            cookies = TestFixtures.cookieConfig,
+            llmFactory = { built++; FakeLlmClient() },
+        )
+
+        assertEquals(AnthropicLlmClient.DEFAULT_MODEL, components.modelFamily)
+        assertEquals(0, built, "reading modelFamily built the model client")
+    }
+
+    @Test
+    fun `a test can set modelFamily to agree with its own FakeLlmClient`() {
+        val components = Components(
+            mongo = Mongo(MongoConfig(TestFixtures.connectionString, "test_api_model_family_override")),
+            cookies = TestFixtures.cookieConfig,
+            llmFactory = { FakeLlmClient(modelFamily = "fake-model") },
+            modelFamily = "fake-model",
+        )
+
+        assertEquals("fake-model", components.modelFamily)
     }
 
     @Test
