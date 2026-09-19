@@ -5,7 +5,11 @@ import com.mytetz.account.User
 import com.mytetz.billing.BillingService
 import com.mytetz.billing.EntitlementDecision
 import com.mytetz.billing.SubscriptionStatus
+import com.mytetz.graph.DiagramMedia
+import com.mytetz.graph.Explanation
 import com.mytetz.graph.GraphChunk
+import com.mytetz.graph.ImageMedia
+import com.mytetz.graph.Media
 import com.mytetz.graph.Verb
 import com.mytetz.quota.Allowance
 import com.mytetz.quota.PrincipalId
@@ -61,10 +65,49 @@ data class NodeView(
     val depth: Int,
 )
 
+/** The diagram half of a [MediaView], mirroring `com.mytetz.graph.DiagramMedia`. [kind] is the
+ * enum name (`SVG` today; `MERMAID` is reserved, unused until the plan's own Decision 1 is
+ * revisited) as a plain string, the same convention every other enum on this wire already uses. */
+@Serializable
+data class DiagramMediaView(val kind: String, val source: String)
+
+/** The image half of a [MediaView], mirroring `com.mytetz.graph.ImageMedia` field for field.
+ *
+ * No field here has a default. [MediaView.image] is the nullable one; every field an image
+ * carries, once it carries one at all, is always present. */
+@Serializable
+data class ImageMediaView(
+    val imageUrl: String,
+    val title: String,
+    val license: String,
+    val attributionHtml: String,
+    val commonsPageUrl: String,
+)
+
 /**
- * [status] has no default. `Application.kt`'s `ContentNegotiation` does not turn on
- * `encodeDefaults`, and a default value here would never reach the wire — the reader needs this
- * field on every response, so a caller cannot be allowed to forget it.
+ * The media one `VISUALIZE` explanation carries, mirroring `com.mytetz.graph.Media`.
+ *
+ * [image] carries no default, on the same rule [SessionView]'s own KDoc states for [SessionView.media]:
+ * a default here would let kotlinx.serialization drop the field from the wire on the one value —
+ * `null` — a client most needs to see written out. A learner's browser reads `image: null` as "no
+ * licensed picture, show the diagram alone"; an *absent* key would read, incorrectly, as "this
+ * client is still waiting to find out."
+ */
+@Serializable
+data class MediaView(val diagram: DiagramMediaView, val image: ImageMediaView?)
+
+/**
+ * [status] and [media] have no default. `Application.kt`'s `ContentNegotiation` does not turn on
+ * `encodeDefaults`, and a default value here would never reach the wire — the reader needs both
+ * fields on every response, so a caller cannot be allowed to forget either one. Issue #89 is the
+ * precedent: a defaulted `status` on `AccountView` silently vanished from the body for a whole
+ * class of learner, and this project no longer defaults a field a reader must always see.
+ *
+ * [media] is sparse, keyed on the same content key [explanations] uses: an entry exists only for a
+ * key whose stored `Explanation.media` is not null — every `VISUALIZE` answer, and no other verb's.
+ * A session with no `VISUALIZE` node still sends `"media":{}`, never an absent key, for the same
+ * reason `status` carries no default: a client that checks `media[key]` must be able to trust that
+ * a missing entry means "no diagram for this node," never "an old server that predates this field."
  */
 @Serializable
 data class SessionView(
@@ -75,6 +118,7 @@ data class SessionView(
     val nodes: List<NodeView>,
     val status: SessionStatus,
     val explanations: Map<String, String>,
+    val media: Map<String, MediaView>,
 )
 
 /**
@@ -441,7 +485,7 @@ fun Route.sessionRoutes(
             withContext(NonCancellable) { quota.recordSpend(principal, costMicros, allowance) }
         }
 
-        call.respond(created.session.toView(mapOf(created.seed.key to created.seed.body), sessions.statusOf(created.session)))
+        call.respond(created.session.toView(mapOf(created.seed.key to created.seed), sessions.statusOf(created.session)))
     }
 
     get("/api/sessions/{id}") {
@@ -455,7 +499,7 @@ fun Route.sessionRoutes(
         // and is this principal's, so a null here means it was deleted between two reads, which is
         // the same 404 by a different route.
         val (session, bodies) = sessions.load(id) ?: throw SessionNotFoundException(id)
-        call.respond(session.toView(bodies.mapValues { it.value.body }, sessions.statusOf(session)))
+        call.respond(session.toView(bodies, sessions.statusOf(session)))
     }
 
     /**
@@ -1017,12 +1061,29 @@ internal suspend fun ApplicationCall.bodyIsSmallEnough(): Boolean {
     return false
 }
 
+private fun DiagramMedia.toView() = DiagramMediaView(kind = kind.name, source = source)
+
+private fun ImageMedia.toView() = ImageMediaView(
+    imageUrl = imageUrl,
+    title = title,
+    license = license,
+    attributionHtml = attributionHtml,
+    commonsPageUrl = commonsPageUrl,
+)
+
+private fun Media.toView() = MediaView(diagram = diagram.toView(), image = image?.toView())
+
 /**
  * [status] is the caller's job to compute, through [SessionService.statusOf] — the one place the
  * 30-day rule is written. A `LearningSession.status` field read directly here would miss every
  * session that has gone quiet rather than been marked complete.
+ *
+ * [explanationsByKey] carries the full stored [Explanation] per key, not only its body, so this one
+ * map can build both [SessionView.explanations] and [SessionView.media] — the plan's own Task 9
+ * names this reuse: the caller already loads a full [Explanation] per key for [SessionView.explanations],
+ * so [SessionView.media] needs no second read of the store.
  */
-private fun LearningSession.toView(bodies: Map<String, String>, status: SessionStatus) = SessionView(
+private fun LearningSession.toView(explanationsByKey: Map<String, Explanation>, status: SessionStatus) = SessionView(
     sessionId = id,
     topicSlug = topicSlug,
     rootNodeId = rootNodeId,
@@ -1031,5 +1092,8 @@ private fun LearningSession.toView(bodies: Map<String, String>, status: SessionS
         NodeView(it.nodeId, it.parentNodeId, it.explanationKey, it.span, it.verb, it.variant, it.depth)
     },
     status = status,
-    explanations = bodies,
+    explanations = explanationsByKey.mapValues { it.value.body },
+    media = explanationsByKey.mapNotNull { (key, explanation) ->
+        explanation.media?.let { key to it.toView() }
+    }.toMap(),
 )
