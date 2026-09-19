@@ -118,6 +118,11 @@ class TopicPageHtmlTest {
 
     // ------------------------------------------------------------- the start control
 
+    /**
+     * `frontend/e2e/topic-pages.spec.ts`'s own `topicPageFixture` function holds this same button,
+     * alert paragraph and noscript text, with `special-relativity` swapped for a real slug. Change
+     * one and change the other, or that suite tests a fixture the backend no longer builds.
+     */
     @Test
     fun `the start control holds the button with the escaped slug, the alert paragraph and the noscript text`() {
         val html = render(view(related = emptyList()))
