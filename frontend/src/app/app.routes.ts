@@ -39,6 +39,15 @@ export const routes: Routes = [
     },
   },
   {
+    path: 'subscribe',
+    loadComponent: () =>
+      import('./account/subscribe-page.component').then((m) => m.SubscribePageComponent),
+    title: 'Subscribe | mytetz',
+    data: {
+      description: 'See the Premium and the Free plan, and start a subscription to mytetz.',
+    },
+  },
+  {
     path: 'learn/:sessionId',
     loadComponent: () =>
       import('./reader/reader-page.component').then((m) => m.ReaderPageComponent),
