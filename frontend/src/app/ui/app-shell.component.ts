@@ -140,16 +140,7 @@ import { BackendState, StatusDotComponent } from './status-dot.component';
       .bar__account {
         white-space: nowrap;
       }
-      /*
-       * Issue #133. Below 768px the nav goes, so a Ktor visitor never sees a live link into a
-       * page that has no route yet. The threshold was 767px, one pixel short of 768px: at exactly
-       * 768px, with the nav still shown, the bar has no room left for "Topics", "Glossary", the
-       * "Account" link, the meter and the status dot together — a real run measures "Glossary"
-       * running 16.6px into "Account". 768px is also the exact width issue #106 measured the
-       * meter against, so this fix moves the threshold up by one pixel instead of touching either
-       * measurement.
-       */
-      @media (max-width: 768px) {
+      @media (max-width: 767px) {
         .bar {
           padding: 0 20px;
         }

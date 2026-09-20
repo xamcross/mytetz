@@ -1622,49 +1622,87 @@ test('the header fits on one line for a signed-in learner at 390px and 400px, wi
  * issue #106 added `flex-wrap: wrap` to `.allowance-meter` so the account card's own meter could
  * wrap at a phone width. That rule reached the header too, because it carried no
  * `:host-context(.bar)` guard: at 768px, 772px, 776px, 780px and 800px, the header's own meter
- * wrapped onto two lines, 34px tall, with the detail text below the count. `.bar
- * .allowance-meter__detail` only hides below 768px, so a tablet at exactly 768px is the first
- * width where the detail shows again, right next to the count, and the header must keep that
- * pair on one line the same way it always did.
+ * wrapped onto two lines, 34px tall, with the detail text below the count.
  *
- * The count and the detail sharing one `y` position is the proof of one line: two elements laid
- * out on a wrapped, second row would each report a different, lower `y`.
+ * Updated by a review of issue #133: the detail now hides inside the header below 1024px, not
+ * only below 768px (see the CSS comment in `allowance-meter.component.ts` for the real cause
+ * this review found). The old assertion — `countBox.y` equal to `detailBox.y` — no longer applies
+ * at 768px and 800px, because the detail is hidden there and has no box a real browser reports.
+ * This test now asserts, at those two widths, that the detail stays hidden and the meter itself
+ * stays one line tall, well under the 34px a wrapped, two-line meter once measured; at 1024px it
+ * keeps the original assertion, because the detail shows again there and the two must still
+ * share one line — two elements on a wrapped, second row would each report a different, lower
+ * `y`.
  */
-test('the header meter stays on one line at 768px, 800px and 1024px, and does not wrap', async ({
+test('the header meter stays one line high at 768px and 800px, and shares one line with the detail at 1024px', async ({
   page,
 }) => {
   await stubCatalogueAndSession(page);
   await stubAccount(page, accountView());
 
-  for (const width of [768, 800, 1024]) {
+  for (const width of [768, 800]) {
     await page.setViewportSize({ width, height: 900 });
     await page.goto('/');
     await page.locator('.topic__tile').first().waitFor();
 
     const count = page.locator('header.bar .allowance-meter__count');
     const detail = page.locator('header.bar .allowance-meter__detail');
-    await expect(count).toBeVisible();
-    await expect(detail).toBeVisible();
+    const meter = page.locator('header.bar app-allowance-meter');
+    await expect(count, `the count is visible at ${width}px`).toBeVisible();
+    await expect(
+      detail,
+      `the detail stays hidden at ${width}px, below the 1024px this review sets`,
+    ).toBeHidden();
 
     const bar = (await page.locator('.bar').boundingBox())!;
-    const countBox = (await count.boundingBox())!;
-    const detailBox = (await detail.boundingBox())!;
+    const meterBox = (await meter.boundingBox())!;
     const doc = await page.evaluate(() => ({
       scroll: document.documentElement.scrollWidth,
       client: document.documentElement.clientWidth,
     }));
 
     console.log(
-      `[issue-106] width=${width} barHeight=${bar.height} countY=${countBox.y} detailY=${detailBox.y} ` +
+      `[issue-106] width=${width} barHeight=${bar.height} meterHeight=${meterBox.height} ` +
         `scrollWidth=${doc.scroll} clientWidth=${doc.client}`,
     );
 
     expect(bar.height, `the bar stays 64px tall at ${width}px`).toBe(64);
-    expect(countBox.y, `the count and the detail share one line at ${width}px`).toBe(detailBox.y);
+    expect(meterBox.height, `the meter is one line high at ${width}px, not wrapped`).toBeLessThan(
+      20,
+    );
     expect(doc.scroll, `the page does not scroll sideways at ${width}px`).toBeLessThanOrEqual(
       doc.client,
     );
   }
+
+  await page.setViewportSize({ width: 1024, height: 900 });
+  await page.goto('/');
+  await page.locator('.topic__tile').first().waitFor();
+
+  const count = page.locator('header.bar .allowance-meter__count');
+  const detail = page.locator('header.bar .allowance-meter__detail');
+  await expect(count).toBeVisible();
+  await expect(
+    detail,
+    'the detail shows again at 1024px, this review’s own new threshold',
+  ).toBeVisible();
+
+  const bar = (await page.locator('.bar').boundingBox())!;
+  const countBox = (await count.boundingBox())!;
+  const detailBox = (await detail.boundingBox())!;
+  const doc = await page.evaluate(() => ({
+    scroll: document.documentElement.scrollWidth,
+    client: document.documentElement.clientWidth,
+  }));
+
+  console.log(
+    `[issue-106] width=1024 barHeight=${bar.height} countY=${countBox.y} detailY=${detailBox.y} ` +
+      `scrollWidth=${doc.scroll} clientWidth=${doc.client}`,
+  );
+
+  expect(bar.height, 'the bar stays 64px tall at 1024px').toBe(64);
+  expect(countBox.y, 'the count and the detail share one line at 1024px').toBe(detailBox.y);
+  expect(doc.scroll, 'the page does not scroll sideways at 1024px').toBeLessThanOrEqual(doc.client);
 });
 
 /**
@@ -2172,6 +2210,54 @@ function sameRow(a: { y: number; height: number }, b: { y: number; height: numbe
   return a.y < b.y + b.height && b.y < a.y + a.height;
 }
 
+/**
+ * The four checks step 1 of issue #133 asks for: every box stays inside the viewport, no two
+ * boxes overlap, a gap of 8px or more stays between neighbours on the same row, and the page
+ * does not scroll sideways. Shared by the phone-width block below and by the tablet-width block
+ * a review of issue #133 added, so both read the same rule from one place.
+ */
+function assertHeaderGapInvariants(
+  boxes: BarElementBox[],
+  doc: { scroll: number; client: number },
+  width: number,
+): void {
+  for (const { label: elementLabel, box } of boxes) {
+    expect(
+      box.x,
+      `${elementLabel} starts inside the viewport at ${width}px`,
+    ).toBeGreaterThanOrEqual(0);
+    expect(
+      box.x + box.width,
+      `${elementLabel} ends inside the viewport at ${width}px`,
+    ).toBeLessThanOrEqual(doc.client);
+  }
+
+  for (let i = 0; i < boxes.length; i++) {
+    for (let j = i + 1; j < boxes.length; j++) {
+      expect(
+        overlaps(boxes[i].box, boxes[j].box),
+        `${boxes[i].label} does not overlap ${boxes[j].label} at ${width}px`,
+      ).toBe(false);
+    }
+  }
+
+  const sortedByX = [...boxes].sort((a, b) => a.box.x - b.box.x);
+  for (let i = 0; i + 1 < sortedByX.length; i++) {
+    const current = sortedByX[i];
+    const next = sortedByX[i + 1];
+    if (!sameRow(current.box, next.box)) continue;
+    const gap = next.box.x - (current.box.x + current.box.width);
+    expect(
+      gap,
+      `${current.label} and ${next.label} keep an 8px gap at ${width}px`,
+    ).toBeGreaterThanOrEqual(8);
+  }
+
+  expect(doc.scroll, `the page does not scroll sideways at ${width}px`).toBeLessThanOrEqual(
+    doc.client,
+  );
+}
+
 const HEADER_GAP_WIDTHS = [320, 360, 390, 412, 768];
 
 /** One case per status the header renders differently for. TRIALING carries the longest count
@@ -2226,41 +2312,53 @@ for (const { label, overrides } of HEADER_GAP_CASES) {
         `[issue-133] label=${label} width=${width} boxes=${JSON.stringify(boxes)} doc=${JSON.stringify(doc)}`,
       );
 
-      for (const { label: elementLabel, box } of boxes) {
-        expect(
-          box.x,
-          `${elementLabel} starts inside the viewport at ${width}px`,
-        ).toBeGreaterThanOrEqual(0);
-        expect(
-          box.x + box.width,
-          `${elementLabel} ends inside the viewport at ${width}px`,
-        ).toBeLessThanOrEqual(doc.client);
-      }
+      assertHeaderGapInvariants(boxes, doc, width);
+    });
+  }
+}
 
-      for (let i = 0; i < boxes.length; i++) {
-        for (let j = i + 1; j < boxes.length; j++) {
-          expect(
-            overlaps(boxes[i].box, boxes[j].box),
-            `${boxes[i].label} does not overlap ${boxes[j].label} at ${width}px`,
-          ).toBe(false);
-        }
-      }
+/**
+ * Issue #133, review round 2. Moving the nav's own breakpoint from 767px to 768px only ever hid
+ * the overlap at exactly 768px — the one width the block above tests. From 769px up to about
+ * 790px, with the nav shown again, "Glossary" still ran into "Account": a real run measured a
+ * gap of -15.6px at 769px and -4.6px at 780px for an active learner. The root cause was not the
+ * breakpoint: it was the detail text ("Trial ends …" or "Resets …") still showing from 768px up
+ * and leaving the row no room for the nav. This block proves the real fix — hiding the detail
+ * below 1024px — closes the gap across the whole tablet range, with the nav's own breakpoint
+ * back at its plain 767px.
+ *
+ * EXPIRED carries no detail text and was never part of this defect, so this block covers only
+ * TRIALING and ACTIVE, the two statuses the coordinator's own re-measurement named.
+ */
+const TABLET_GAP_WIDTHS = [768, 769, 780, 800, 1023, 1024, 1360];
+const TABLET_GAP_CASES = HEADER_GAP_CASES.filter((c) => c.label !== 'an expired learner');
 
-      const sortedByX = [...boxes].sort((a, b) => a.box.x - b.box.x);
-      for (let i = 0; i + 1 < sortedByX.length; i++) {
-        const current = sortedByX[i];
-        const next = sortedByX[i + 1];
-        if (!sameRow(current.box, next.box)) continue;
-        const gap = next.box.x - (current.box.x + current.box.width);
-        expect(
-          gap,
-          `${current.label} and ${next.label} keep an 8px gap at ${width}px`,
-        ).toBeGreaterThanOrEqual(8);
-      }
+for (const { label, overrides } of TABLET_GAP_CASES) {
+  for (const width of TABLET_GAP_WIDTHS) {
+    test(`no two header elements overlap or sit closer than 8px on a tablet, for ${label}, at ${width}px`, async ({
+      page,
+    }) => {
+      await stubCatalogueAndSession(page);
+      await stubAccount(page, accountView(overrides));
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto('/');
+      await page.locator('.topic__tile').first().waitFor();
 
-      expect(doc.scroll, `the page does not scroll sideways at ${width}px`).toBeLessThanOrEqual(
-        doc.client,
+      // The nav must actually be visible for this test to prove what it claims: a hidden nav
+      // would trivially pass the gap checks below without saying anything about this defect.
+      await expect(page.locator('.bar__nav'), `the nav is visible at ${width}px`).toBeVisible();
+
+      const boxes = await visibleBarBoxes(page);
+      const doc = await page.evaluate(() => ({
+        scroll: document.documentElement.scrollWidth,
+        client: document.documentElement.clientWidth,
+      }));
+
+      console.log(
+        `[issue-133] tablet label=${label} width=${width} boxes=${JSON.stringify(boxes)} doc=${JSON.stringify(doc)}`,
       );
+
+      assertHeaderGapInvariants(boxes, doc, width);
     });
   }
 }
