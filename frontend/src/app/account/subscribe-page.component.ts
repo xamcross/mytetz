@@ -114,8 +114,8 @@ const CHECKOUT_ERROR = 'Could not start checkout. Check your connection and try 
                 {{ plan.trialDays }} days. No card is necessary.
               </p>
               <p class="subscribe-page__line">
-                After the trial, the server declines a new explanation. Every session and every
-                explanation already read stays open.
+                After the trial, a new explanation needs Premium. Each session and each explanation
+                that you have stays open.
               </p>
               <a
                 class="mt-pill mt-pill--ghost subscribe-page__action"
