@@ -292,4 +292,54 @@ class SetTopicReviewDateTest {
     fun `parseSlugsFileText reads one slug per line and drops a blank line`() {
         assertEquals(listOf("a", "b"), parseSlugsFileText("a\n\n b \n"))
     }
+
+    // ------------------------------------------------------------------ the real process (issue #175)
+
+    /** See `PublishTopExplanationsTest.kt`'s own KDoc on this same shape of test. */
+    private fun runMainProcess(
+        args: List<String> = emptyList(),
+        env: Map<String, String> = emptyMap(),
+    ): ScriptProcessResult = runScriptProcess(
+        mainClass = "com.mytetz.graph.scripts.SetTopicReviewDateKt",
+        args = args,
+        env = mapOf(
+            "MONGODB_URI" to MongoTestSupport.connectionString,
+            "MONGODB_DATABASE" to "test_set_topic_review_date_process",
+        ) + env,
+    )
+
+    @Test
+    fun `main ends the process with exit code 0 on success`() {
+        val result = runMainProcess()
+
+        assertEquals(0, result.exitCode)
+    }
+
+    @Test
+    fun `main ends the process with a non-zero exit code and an Error line when the driver throws`() {
+        val result = runMainProcess(
+            env = mapOf(
+                "MONGODB_URI" to "mongodb://unreachable-host-issue175.invalid:27017",
+                "MYTETZ_MONGO_SERVER_SELECTION_TIMEOUT_MILLIS" to "200",
+            ),
+        )
+
+        assertFalse(result.exitCode == 0)
+        assertTrue("Error:" in result.output)
+    }
+
+    @Test
+    fun `main never prints the host name of an unreachable database`() {
+        val unreachableHost = "unreachable-host-issue175.invalid"
+
+        val result = runMainProcess(
+            env = mapOf(
+                "MONGODB_URI" to "mongodb://$unreachableHost:27017",
+                "MYTETZ_MONGO_SERVER_SELECTION_TIMEOUT_MILLIS" to "200",
+            ),
+        )
+
+        assertFalse(unreachableHost in result.output, "the host name must never be printed")
+        assertFalse("MONGODB_URI" in result.output, "the environment variable's name must never be printed")
+    }
 }

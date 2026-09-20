@@ -8,8 +8,6 @@ import com.mytetz.graph.ExplanationRepository
 import com.mytetz.graph.GraphConfig
 import com.mytetz.llm.AnthropicLlmClient
 import com.mytetz.persistence.Mongo
-import com.mytetz.persistence.MongoConfig
-import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.time.Instant
 import java.time.LocalDate
@@ -70,59 +68,58 @@ import kotlin.system.exitProcess
  * ## What this command never does
  *
  * It never reads a `.env` file. It reads the `MONGODB_URI` environment variable only, the same way
- * production does ([MongoConfig.fromEnv]). It never prints that variable's value. It never prints
- * any other part of a connection string. A database failure of any kind is reported by its
- * exception class name alone.
+ * production does (`MongoConfig.fromEnv`). It never prints that variable's value. It never prints
+ * any other part of a connection string. A database failure is reported by its exception class
+ * name alone, and never by its message. See `runOwnerScript`'s own KDoc, in `ScriptSupport.kt`.
  *
  * [setReviewedAt], [clearReviewedAt] and [listReviewRows] are the functions this issue's own tests
  * exercise. Each test runs against a real Testcontainers Mongo. No test connects to a live
  * database. See `SetTopicReviewDateTest.kt`.
+ *
+ * ## How this process ends (issue #175)
+ *
+ * [main] ends with one call to `exitProcess`, as its last statement. See `runOwnerScript`'s own
+ * KDoc, in `ScriptSupport.kt`, for the reason. That one call is the sole reason this process
+ * always ends. It does not depend on which thread of the driver is not a daemon thread, or on why.
  */
 fun main(args: Array<String>) {
     val command = parseReviewDateArgs(args.toList()) { path -> File(path).readText() }
-    if (command is ReviewDateCommand.InvalidArgs) {
+    val code = if (command is ReviewDateCommand.InvalidArgs) {
         System.err.println("Error: ${command.message}")
-        exitProcess(1)
+        1
+    } else {
+        runOwnerScript { mongo -> runCommand(mongo, command) }
     }
-    runCommand(command)
+    exitProcess(code)
 }
 
-private fun runCommand(command: ReviewDateCommand) {
-    try {
-        val mongo = Mongo(MongoConfig.fromEnv())
-        val topics = TopicRepository(mongo.database)
-        val explanations = ExplanationRepository(mongo.database)
-        val modelFamily = AnthropicLlmClient.resolveModel(System.getenv(AnthropicLlmClient.MODEL_FAMILY_ENV))
-        runBlocking {
-            when (command) {
-                is ReviewDateCommand.ListReviewed ->
-                    println(renderReviewRows(listReviewRows(topics, command.slugs)))
-                is ReviewDateCommand.SetReviewed -> reportOutcome(
-                    "written",
-                    setReviewedAt(topics, explanations, command.slugs, command.date, modelFamily, GraphConfig()),
-                )
-                is ReviewDateCommand.ClearReviewed ->
-                    reportOutcome("cleared", clearReviewedAt(topics, command.slugs))
-                is ReviewDateCommand.InvalidArgs -> Unit // handled in main, before this function runs
-            }
+private suspend fun runCommand(mongo: Mongo, command: ReviewDateCommand): Int {
+    val topics = TopicRepository(mongo.database)
+    val explanations = ExplanationRepository(mongo.database)
+    val modelFamily = AnthropicLlmClient.resolveModel(System.getenv(AnthropicLlmClient.MODEL_FAMILY_ENV))
+    return when (command) {
+        is ReviewDateCommand.ListReviewed -> {
+            println(renderReviewRows(listReviewRows(topics, command.slugs)))
+            0
         }
-    } catch (e: Exception) {
-        // Print the class name only, never `e.message`. A Mongo connection failure's own message
-        // can carry the connection string. This command must never print one. `CommonsClient.kt`
-        // and `FreemiusApiClient.kt` in `:backend:api` follow the same rule.
-        System.err.println("Error: a database operation failed. Exception class: ${e.javaClass.name}")
-        exitProcess(1)
+        is ReviewDateCommand.SetReviewed -> reportOutcome(
+            "written",
+            setReviewedAt(topics, explanations, command.slugs, command.date, modelFamily, GraphConfig()),
+        )
+        is ReviewDateCommand.ClearReviewed -> reportOutcome("cleared", clearReviewedAt(topics, command.slugs))
+        is ReviewDateCommand.InvalidArgs -> 0 // handled in main, before this function runs
     }
 }
 
-private fun reportOutcome(verb: String, outcome: ReviewDateOutcome) {
-    when (outcome) {
-        is ReviewDateOutcome.Applied -> println(renderApplied(verb, outcome.changes))
-        is ReviewDateOutcome.Rejected -> {
-            System.err.println("Nothing was $verb. Problems:")
-            outcome.problems.forEach { System.err.println("- $it") }
-            exitProcess(1)
-        }
+private fun reportOutcome(verb: String, outcome: ReviewDateOutcome): Int = when (outcome) {
+    is ReviewDateOutcome.Applied -> {
+        println(renderApplied(verb, outcome.changes))
+        0
+    }
+    is ReviewDateOutcome.Rejected -> {
+        System.err.println("Nothing was $verb. Problems:")
+        outcome.problems.forEach { System.err.println("- $it") }
+        1
     }
 }
 

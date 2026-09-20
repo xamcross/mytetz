@@ -19,4 +19,11 @@ object MongoTestSupport {
      * name that won't collide with any other `MongoTestSupport.database(...)` call in the module.
      */
     fun database(name: String): MongoDatabase = client.getDatabase("test_$name")
+
+    /**
+     * The container's own connection string. A child-JVM test (issue #175) runs a script's real
+     * `main` as a separate process. It gives that process this value as `MONGODB_URI`, the same
+     * way the owner's own shell does for a live run.
+     */
+    val connectionString: String get() = container.connectionString
 }

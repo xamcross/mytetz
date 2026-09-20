@@ -7,11 +7,8 @@ import com.mytetz.graph.ExplanationRepository
 import com.mytetz.graph.ExplanationValidator
 import com.mytetz.graph.Verb
 import com.mytetz.persistence.Mongo
-import com.mytetz.persistence.MongoConfig
-import kotlinx.coroutines.runBlocking
 import org.bson.Document
 import java.io.File
-import kotlin.coroutines.cancellation.CancellationException
 import kotlin.system.exitProcess
 
 /**
@@ -71,48 +68,47 @@ import kotlin.system.exitProcess
  * ## What this never does
  *
  * It never reads a `.env` file: it reads `MONGODB_URI` from the environment only, the same way
- * [MongoConfig.fromEnv] and `PublishTopExplanations.kt` both do. It never prints that variable's
- * value or any other part of a connection string — a failed database operation is reported by
- * its exception's class name only (see [main]). It never prints a learner's own text: the two
- * texts this command prints are the seed's own public wording, before and after, which is what
- * the dry run exists to show the owner.
+ * `MongoConfig.fromEnv` and `PublishTopExplanations.kt` both do. It never prints that variable's
+ * value or any other part of a connection string. A failed database operation is reported by its
+ * exception's class name only, and never by its message. See `runOwnerScript`'s own KDoc, in
+ * `ScriptSupport.kt`, for the reason. It never prints a learner's own text: the two texts this
+ * command prints are the seed's own public wording, before and after, which is what the dry run
+ * exists to show the owner.
+ *
+ * ## How this process ends (issue #175)
+ *
+ * [main] ends with one call to [exitProcess], as its last statement. That one call is the sole
+ * reason this process always ends. It does not depend on which thread of the driver is not a
+ * daemon thread, or on why.
  */
 fun main(args: Array<String>) {
     val command = parseCorrectionArgs(args.toList())
-    if (command is SeedCorrectionCommand.InvalidArgs) {
+    val code = if (command is SeedCorrectionCommand.InvalidArgs) {
         System.err.println("Error: ${command.message}")
-        exitProcess(1)
+        1
+    } else {
+        runOwnerScript { mongo -> execute(mongo, command) }
     }
-
-    try {
-        runBlocking { execute(command) }
-    } catch (e: CancellationException) {
-        throw e
-    } catch (e: Exception) {
-        // The class name only — never e.message, which can carry a hostname or other detail of
-        // the connection string. See this file's own KDoc, "What this never does".
-        System.err.println("Error: a database operation failed (${e::class.simpleName}).")
-        exitProcess(1)
-    }
+    exitProcess(code)
 }
 
-private suspend fun execute(command: SeedCorrectionCommand) {
-    val mongo = Mongo(MongoConfig.fromEnv())
+private suspend fun execute(mongo: Mongo, command: SeedCorrectionCommand): Int {
     val explanations = ExplanationRepository(mongo.database)
 
-    when (command) {
-        is SeedCorrectionCommand.InvalidArgs -> Unit // handled in main before this is reached
+    return when (command) {
+        is SeedCorrectionCommand.InvalidArgs -> 0 // handled in main before this is reached
 
         is SeedCorrectionCommand.DryRun -> {
             val newText = File(command.newBodyFile).readText().trim()
             when (val outcome = prepareReport(explanations, mongo.database, command.selector, newText)) {
                 is ReportOutcome.Refused -> {
                     System.err.println("Refused. Nothing was written. Reason: ${outcome.reason}")
-                    exitProcess(1)
+                    1
                 }
                 is ReportOutcome.Ready -> {
                     println(renderReport(outcome.report))
                     println("This was a dry run. Nothing was written. Add --write to apply this change.")
+                    0
                 }
             }
         }
@@ -122,7 +118,7 @@ private suspend fun execute(command: SeedCorrectionCommand) {
             when (val preview = prepareReport(explanations, mongo.database, command.selector, newText)) {
                 is ReportOutcome.Refused -> {
                     System.err.println("Refused. Nothing was written. Reason: ${preview.reason}")
-                    exitProcess(1)
+                    return 1
                 }
                 is ReportOutcome.Ready -> println(renderReport(preview.report))
             }
@@ -130,7 +126,7 @@ private suspend fun execute(command: SeedCorrectionCommand) {
             when (val outcome = applyWrite(explanations, command.selector, newText, System.currentTimeMillis())) {
                 is WriteOutcome.Refused -> {
                     System.err.println("Nothing was written. Reason: ${outcome.reason}")
-                    exitProcess(1)
+                    1
                 }
                 is WriteOutcome.Applied -> {
                     println(
@@ -138,6 +134,7 @@ private suspend fun execute(command: SeedCorrectionCommand) {
                             "new text is ${outcome.newChars} character(s).",
                     )
                     println("Take this back with: --key ${outcome.key} --revert")
+                    0
                 }
             }
         }
@@ -146,9 +143,12 @@ private suspend fun execute(command: SeedCorrectionCommand) {
             when (val outcome = applyRevert(explanations, command.selector)) {
                 is RevertOutcome.Refused -> {
                     System.err.println("Nothing was reverted. Reason: ${outcome.reason}")
-                    exitProcess(1)
+                    1
                 }
-                is RevertOutcome.Applied -> println("Reverted ${outcome.key} to its previous text.")
+                is RevertOutcome.Applied -> {
+                    println("Reverted ${outcome.key} to its previous text.")
+                    0
+                }
             }
         }
     }
