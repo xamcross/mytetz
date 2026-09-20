@@ -30,4 +30,22 @@ class TopicStartScriptTest {
             "expected a JavaScript content type, got: '$contentType'",
         )
     }
+
+    /**
+     * Issue #143's own account-control script, `frontend/public/site-header.js`, served the same
+     * way this file's own test above proves for `topic-start.js`.
+     */
+    @Test
+    fun `GET site-header js answers 200 with a JavaScript content type`() = testApplication {
+        application { routing { spaRoutes() } }
+
+        val response = client.get("/site-header.js")
+
+        assertEquals(HttpStatusCode.OK, response.status)
+        val contentType = response.headers[HttpHeaders.ContentType].orEmpty()
+        assertTrue(
+            "javascript" in contentType.lowercase(),
+            "expected a JavaScript content type, got: '$contentType'",
+        )
+    }
 }
