@@ -76,6 +76,34 @@ class BillingRepositoryTest {
         assertNull(repository.find("no-such-user"))
     }
 
+    // ------------------------------------------------------------------ deleteForUser
+
+    @Test
+    fun `deleteForUser removes the stored row`() = runTest {
+        repository.upsert(subscription("u1"))
+
+        repository.deleteForUser("u1")
+
+        assertNull(repository.find("u1"))
+    }
+
+    @Test
+    fun `deleteForUser leaves every other row untouched`() = runTest {
+        repository.upsert(subscription("u1"))
+        repository.upsert(subscription("u2"))
+
+        repository.deleteForUser("u1")
+
+        assertNotNull(repository.find("u2"))
+    }
+
+    @Test
+    fun `deleteForUser on an unknown user changes nothing, and does not throw`() = runTest {
+        repository.deleteForUser("no-such-user")
+
+        assertNull(repository.find("no-such-user"))
+    }
+
     // ------------------------------------------------------------------ findByFreemiusUserId
 
     @Test

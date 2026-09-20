@@ -369,6 +369,78 @@ class BillingServiceTest {
         assertEquals(stored, service.subscriptionFor("u1"))
     }
 
+    // ------------------------------------------------------------------ deleteSubscriptionFor
+
+    @Test
+    fun `deleteSubscriptionFor removes the stored row`() = runTest {
+        assertNotNull(service.startTrialIfAbsent("u1"))
+
+        service.deleteSubscriptionFor("u1")
+
+        assertNull(repository.find("u1"))
+    }
+
+    @Test
+    fun `deleteSubscriptionFor on a user with no row changes nothing, and does not throw`() = runTest {
+        service.deleteSubscriptionFor("no-such-user")
+
+        assertNull(repository.find("no-such-user"))
+    }
+
+    // ------------------------------------------------------------------ apply: a late webhook for a deleted user
+    //
+    // Issue #177. `POST /api/account/delete` deletes the subscription document with the account.
+    // A webhook that arrives after that point must change nothing, and must never create a fresh
+    // document for the freemiusUserId or the email the deleted account once carried.
+
+    @Test
+    fun `apply for a freemiusUserId whose row was already deleted changes nothing, and creates no row`(): Unit = runTest {
+        // Stands in for a late webhook: the learner's subscription row existed once, carried this
+        // freemiusUserId, and `BillingRepository.deleteForUser` has already removed it — the same
+        // state `POST /api/account/delete` leaves behind. `BillingRoutes.kt`'s own resolver finds
+        // no account either, once the account row is gone, so userReference stays null and this
+        // call falls back to freemiusUserId, exactly as it would for a real late webhook.
+        val event = freemiusEvent(
+            id = "evt-deleted-user",
+            type = "subscription.renewal.retry",
+            userReference = null,
+            freemiusUserId = "fs-deleted-1",
+        )
+
+        val applied = service.apply(event)
+
+        assertEquals(false, applied)
+        assertEquals(null, repository.findByFreemiusUserId("fs-deleted-1"))
+        assertEquals(0L, database.getCollection<Document>("subscriptions").countDocuments())
+    }
+
+    @Test
+    fun `apply for a deleted user logs BILLING_UNKNOWN_USER and does not consume the event id`(): Unit = runTest {
+        val event = freemiusEvent(
+            id = "evt-deleted-user-resend",
+            type = "subscription.renewal.retry",
+            userReference = null,
+            freemiusUserId = "fs-deleted-2",
+        )
+        val appender = attachAppender()
+
+        val firstApplied = try {
+            service.apply(event)
+        } finally {
+            detachAppender(appender)
+        }
+
+        assertEquals(false, firstApplied)
+        assertTrue(
+            appender.list.any { it.formattedMessage.contains("BILLING_UNKNOWN_USER") },
+            "a late webhook for a deleted user was not logged: ${appender.list.map { it.formattedMessage }}",
+        )
+        // The vendor may resend the same event. A consumed id would refuse this resend as a
+        // duplicate and hide the fact that this deployment never applied it either time.
+        val resend = event.copy(occurredAtEpochMillis = event.occurredAtEpochMillis + 1)
+        assertEquals(false, service.apply(resend))
+    }
+
     // ------------------------------------------------------------------ apply: mapping
 
     @Test

@@ -143,6 +143,25 @@ class BillingService(
     suspend fun subscriptionFor(userId: String): Subscription? = repository.find(userId)
 
     /**
+     * Deletes [userId]'s stored subscription row, if one exists.
+     *
+     * `AuthRoutes.kt`'s `POST /api/account/delete` calls this once it has confirmed the row's own
+     * [Subscription.status] is not [SubscriptionStatus.ACTIVE] and not [SubscriptionStatus.PAST_DUE]
+     * — the two statuses that still renew. No billing event row is deleted here: a
+     * [BillingEvent] carries no [userId] at all, and its own TTL index already bounds its life to
+     * 90 days — see [BillingRepository.ensureIndexes].
+     *
+     * A late webhook can arrive after this call. [apply] looks the row up by
+     * [FreemiusEvent.userReference] or by [FreemiusEvent.freemiusUserId], finds nothing once this
+     * method has run, logs `BILLING_UNKNOWN_USER`, and creates no fresh row — see [apply]'s own
+     * KDoc for why every check ahead of the event-id consume line can run more than once for the
+     * same event.
+     */
+    suspend fun deleteSubscriptionFor(userId: String) {
+        repository.deleteForUser(userId)
+    }
+
+    /**
      * Turns [event] into a change to the stored subscription row, or refuses it, and reports
      * which. Returns `true` only when a row changed.
      *
