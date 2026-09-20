@@ -20,19 +20,23 @@ internal data class ScriptProcessResult(val exitCode: Int, val output: String)
  * [env] adds entries to the current process's own environment, and can override an entry too. The
  * most common entries are `MONGODB_URI`, always pointed at the Testcontainers database, and
  * `MYTETZ_MONGO_SERVER_SELECTION_TIMEOUT_MILLIS`, to keep a deliberately unreachable host fast.
- * Standard output and standard error merge into one [ScriptProcessResult.output]. One test can
- * then check a printed line, and the absence of a leaked value, in a single string.
+ * [removeEnv] takes an inherited entry away instead. One example: it gives the child no
+ * `MONGODB_URI` at all. Standard output and standard error merge into one
+ * [ScriptProcessResult.output]. One test can then check a printed line, and the absence of a
+ * leaked value, in a single string.
  */
 internal fun runScriptProcess(
     mainClass: String,
     args: List<String> = emptyList(),
     env: Map<String, String> = emptyMap(),
+    removeEnv: Set<String> = emptySet(),
     timeoutSeconds: Long = 60,
 ): ScriptProcessResult {
     val javaBinary = File(System.getProperty("java.home"), "bin/java").absolutePath
     val command = listOf(javaBinary, mainClass) + args
     val builder = ProcessBuilder(command)
     builder.environment()["CLASSPATH"] = System.getProperty("java.class.path")
+    removeEnv.forEach { builder.environment().remove(it) }
     builder.environment().putAll(env)
     builder.redirectErrorStream(true)
 

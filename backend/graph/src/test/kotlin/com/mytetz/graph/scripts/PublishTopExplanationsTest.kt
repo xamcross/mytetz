@@ -338,4 +338,32 @@ class PublishTopExplanationsTest {
         assertFalse(unreachableHost in result.output, "the host name must never be printed")
         assertFalse("MONGODB_URI" in result.output, "the environment variable's name must never be printed")
     }
+
+    @Test
+    fun `main gives one clear line, and ends the process, when MONGODB_URI is not set`() {
+        val result = runScriptProcess(
+            mainClass = "com.mytetz.graph.scripts.PublishTopExplanationsKt",
+            removeEnv = setOf("MONGODB_URI"),
+        )
+
+        assertFalse(result.exitCode == 0)
+        assertTrue("Error: MONGODB_URI is not set" in result.output)
+    }
+
+    /**
+     * See `ScriptSupportTest.kt`'s own KDoc on this same malformed `MONGODB_URI`. It carries a
+     * distinct marker in its user part, its host part and one query option.
+     */
+    @Test
+    fun `main never prints a part of a malformed MONGODB_URI`() {
+        val malformedUri = "mongodb://markeruser:markerpass@[markerhost/markerdb?markeropt=markervalue"
+
+        val result = runMainProcess(env = mapOf("MONGODB_URI" to malformedUri))
+
+        assertFalse(result.exitCode == 0)
+        assertTrue("Error:" in result.output)
+        for (marker in listOf("markeruser", "markerpass", "markerhost", "markeropt", "markervalue")) {
+            assertFalse(marker in result.output, "'$marker' must never be printed")
+        }
+    }
 }

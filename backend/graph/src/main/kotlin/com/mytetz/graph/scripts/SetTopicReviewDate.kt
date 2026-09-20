@@ -78,19 +78,24 @@ import kotlin.system.exitProcess
  *
  * ## How this process ends (issue #175)
  *
- * [main] ends with one call to `exitProcess`, as its last statement. See `runOwnerScript`'s own
- * KDoc, in `ScriptSupport.kt`, for the reason. That one call is the sole reason this process
- * always ends. It does not depend on which thread of the driver is not a daemon thread, or on why.
+ * [main] ends with one call to `exitProcess`, as its last statement, on the result of `runMain`.
+ * `runMain` catches every `Throwable`. This one call is then the sole reason this process always
+ * ends. It does not depend on which thread of the driver is not a daemon thread, or on why.
  */
 fun main(args: Array<String>) {
-    val command = parseReviewDateArgs(args.toList()) { path -> File(path).readText() }
-    val code = if (command is ReviewDateCommand.InvalidArgs) {
-        System.err.println("Error: ${command.message}")
-        1
-    } else {
-        runOwnerScript { mongo -> runCommand(mongo, command) }
-    }
-    exitProcess(code)
+    exitProcess(
+        runMain {
+            val command = parseReviewDateArgs(args.toList()) { path -> File(path).readText() }
+            when {
+                command is ReviewDateCommand.InvalidArgs -> {
+                    System.err.println("Error: ${command.message}")
+                    1
+                }
+                !requireMongoUriSet() -> 1
+                else -> runOwnerScript { mongo -> runCommand(mongo, command) }
+            }
+        },
+    )
 }
 
 private suspend fun runCommand(mongo: Mongo, command: ReviewDateCommand): Int {

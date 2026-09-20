@@ -85,21 +85,27 @@ const val DEFAULT_LIST_LIMIT: Int = 50
  *
  * ## How this process ends (issue #175)
  *
- * [main] ends with one call to [exitProcess], as its last statement. See [runOwnerScript]'s own
- * KDoc for the reason. That one call is the sole reason this process always ends. It does not
- * depend on which thread of the driver is not a daemon thread, or on why.
+ * [main] ends with one call to [exitProcess], as its last statement, on the result of [runMain].
+ * [runMain] catches every [Throwable]. This one call is then the sole reason this process always
+ * ends. It does not depend on which thread of the driver is not a daemon thread, or on why.
  */
 fun main(args: Array<String>) {
-    val code = when (val command = parseArgs(args.toList()) { path -> File(path).readText() }) {
-        is ReviewCommand.InvalidArgs -> {
-            System.err.println("Error: ${command.message}")
-            1
-        }
-        is ReviewCommand.ListCandidates -> runListCandidatesCommand(command)
-        is ReviewCommand.Publish -> runOwnerScript { mongo -> runPublish(mongo, command) }
-        is ReviewCommand.Unpublish -> runOwnerScript { mongo -> runUnpublish(mongo, command) }
-    }
-    exitProcess(code)
+    exitProcess(
+        runMain {
+            when (val command = parseArgs(args.toList()) { path -> File(path).readText() }) {
+                is ReviewCommand.InvalidArgs -> {
+                    System.err.println("Error: ${command.message}")
+                    1
+                }
+                is ReviewCommand.ListCandidates ->
+                    if (!requireMongoUriSet()) 1 else runListCandidatesCommand(command)
+                is ReviewCommand.Publish ->
+                    if (!requireMongoUriSet()) 1 else runOwnerScript { mongo -> runPublish(mongo, command) }
+                is ReviewCommand.Unpublish ->
+                    if (!requireMongoUriSet()) 1 else runOwnerScript { mongo -> runUnpublish(mongo, command) }
+            }
+        },
+    )
 }
 
 /**
