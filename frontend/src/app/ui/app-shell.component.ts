@@ -32,9 +32,9 @@ import { BackendState, StatusDotComponent } from './status-dot.component';
   template: `
     <header class="bar">
       <div class="bar__left">
-        <a class="bar__mark" routerLink="/">
+        <a class="bar__mark" routerLink="/" aria-label="mytetz">
           <app-logo-mark />
-          <span class="bar__mark-text mt-sr-only">mytetz</span>
+          <span class="bar__mark-text">mytetz</span>
         </a>
         <nav class="bar__nav" aria-label="Sections">
           <a
@@ -163,20 +163,15 @@ import { BackendState, StatusDotComponent } from './status-dot.component';
         }
       }
       /*
-       * Issue #133, review round 2. Below 360px, the wordmark's own text adds about 87px that
-       * 320px does not have to spare, once the gap above already narrows as far as it reads well.
-       * The link still needs a name a learner can read and a screen reader can announce, so the
-       * text stays in the markup and keeps the .mt-sr-only treatment below 360px; the logo mark
-       * alone carries the link at that width. From 360px up, this rule undoes that treatment and
-       * the text shows again, the same way it always has.
+       * Issue #133. Below 360px the text of the wordmark takes about 87px that the row does not
+       * have. The text then goes out of view, and the logo mark alone shows the link. The link
+       * has aria-label="mytetz", so it keeps its name for a screen reader at each width. The
+       * text is visible by default, and only this media query hides it. styles.spec.ts permits
+       * no component copy of .mt-sr-only, so this rule uses display: none.
        */
-      @media (min-width: 360px) {
+      @media (max-width: 359px) {
         .bar__mark-text {
-          position: static;
-          width: auto;
-          height: auto;
-          overflow: visible;
-          clip-path: none;
+          display: none;
         }
       }
       .foot {
