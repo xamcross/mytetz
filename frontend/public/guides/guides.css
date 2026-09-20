@@ -219,6 +219,22 @@ a:hover {
     display: none;
   }
 }
+/* Issue #133: the bar's own side padding stays 20px at every phone width, and only the gap
+   inside the right-hand group narrows, for the two rare widths, 320px and 360px, where the
+   wordmark, the account link and the count still crowd each other. */
+@media (max-width: 479px) {
+  .bar__right {
+    gap: 12px;
+  }
+}
+/* Issue #133: below 360px the text of the wordmark takes more width than the row has. The text
+   goes out of view, and the logo mark alone shows the link; the link's own aria-label keeps its
+   name for a screen reader at every width. */
+@media (max-width: 359px) {
+  .bar__mark-text {
+    display: none;
+  }
+}
 
 /* ── Layout ────────────────────────────────────────────────────────────────── */
 
