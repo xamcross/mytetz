@@ -242,13 +242,16 @@ function presentationForStatus(status: string): StatusPresentation {
                   </button>
                 </div>
                 <div class="account-page__actions">
+                  <!-- "Close", and not "Cancel": next to the sentence "Cancel your subscription
+                       first.", a control with the label "Cancel" reads as "cancel the
+                       subscription". This control only closes the panel. -->
                   <button
                     type="button"
                     class="mt-pill mt-pill--ghost"
                     data-action="delete-account-cancel"
                     (click)="cancelDelete()"
                   >
-                    Cancel
+                    Close
                   </button>
                 </div>
               </div>

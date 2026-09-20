@@ -158,14 +158,12 @@ holds no personal data, so this rule does not change your data.
 
 The [account page](/account) deletes your account on request. Deletion removes
 your account row, every sign-in session, every learning session, every quiz
-attempt and your allowance counter. Deletion does not remove an explanation. An
-explanation belongs to no one learner, and holds no personal data, so it can stay
-on the site for other learners to read.
+attempt, your allowance counter and your subscription record. Deletion does not
+remove an explanation. An explanation belongs to no one learner, and holds no
+personal data, so it can stay on the site for other learners to read.
 
-Deletion does not cancel a paid subscription. Cancel a subscription first, with
-"Manage subscription" on the account page. Your subscription record stays in the
-database after you delete your account, because deletion does not remove it
-today.
+The account page refuses a deletion while your subscription can still renew.
+Cancel a subscription first, with "Manage subscription" on the account page.
 
 ## The legal basis for processing
 

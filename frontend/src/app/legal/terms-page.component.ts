@@ -88,10 +88,9 @@ import { RouterLink } from '@angular/router';
           highlight. mytetz may show each explanation to other learners and to the public.
         </p>
         <p>
-          Deleting your account does not cancel a paid subscription. Cancel a subscription first,
-          with "Manage subscription," before you delete your account. Your subscription record can
-          stay in the database after your account is gone, because account deletion does not remove
-          it today.
+          The account page refuses a deletion while your subscription can still renew. Cancel a
+          subscription first, with "Manage subscription," before you delete your account. A deletion
+          then also removes your subscription record.
         </p>
         <p>
           mytetz can suspend or close an account that breaks these terms. mytetz gives no guarantee
