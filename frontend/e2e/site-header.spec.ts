@@ -888,6 +888,12 @@ test('the account control and the dot start at the same x as the application hea
  * a "Subscribe" link and no count. This proves the public header's own Subscribe link sits at the
  * same x as the application header's own Subscribe link, and never a gap narrower than the
  * application header keeps, at the two widths this issue's own report names.
+ *
+ * Issue #173, review: this block also compares the pill's own height, at 390px. A real run once
+ * measured 37px here against the application header's own 38px — `.bar__subscribe` was missing
+ * `line-height: 1`, so its label's own line box, and the pill around it, stood a few pixels
+ * taller than `.mt-pill--coral`'s own padding and border add up to. The review only asked for
+ * this one width; the trial-parity block below covers the height at 768px and 1360px too.
  */
 test('the Subscribe link starts at the same x as the application header, for an expired learner', async ({
   context,
@@ -912,7 +918,8 @@ test('the Subscribe link starts at the same x as the application header, for an 
     const pubSubscribeBox = await pubPage.locator('#site-header-subscribe').boundingBox();
 
     console.log(
-      `[issue-173] position width=${width} app.subscribe.x=${appSubscribeBox!.x} public.subscribe.x=${pubSubscribeBox!.x}`,
+      `[issue-173] position width=${width} app.subscribe.x=${appSubscribeBox!.x} public.subscribe.x=${pubSubscribeBox!.x} ` +
+        `app.subscribe.height=${appSubscribeBox!.height} public.subscribe.height=${pubSubscribeBox!.height}`,
     );
 
     expect(
@@ -920,7 +927,95 @@ test('the Subscribe link starts at the same x as the application header, for an 
       `the Subscribe link starts at the same x at ${width}px`,
     ).toBeLessThanOrEqual(1);
 
+    if (width === 390) {
+      expect(
+        Math.abs(appSubscribeBox!.height - pubSubscribeBox!.height),
+        `the Subscribe pill has the same height as the application header at ${width}px`,
+      ).toBeLessThanOrEqual(0.5);
+    }
+
     await appPage.close();
     await pubPage.close();
   }
 });
+
+/**
+ * Issue #173, review: the owner, a learner in trial, saw three differences the first pass of this
+ * issue missed, all at 768px and above, where the count and the Subscribe pill stand side by
+ * side: "Account" and the count sat 8px to the left of the application header's own values, and
+ * the pill stood 37px tall against the application header's own 38px. The earlier parity checks
+ * above only ever covered a status with no pill next to a count (an expired learner, or no
+ * account at all), so they never exercised the one layout where this gap shows up.
+ *
+ * Root cause: the application header keeps the count and the pill 8px apart, inside
+ * `.allowance-meter`'s own `gap: 8px`. The public header renders them as two separate items of
+ * `.bar__right` instead, whose own `gap` is 16px — the same 16px every other pair in the row
+ * correctly keeps. `guides.css`'s own `.bar__subscribe--trial` rule now carries a `margin-left:
+ * -8px` at 768px and above, closing that one gap without touching any other.
+ */
+for (const width of [768, 1360]) {
+  test(`the account link, the count and the Subscribe link start at the same x as the application header, for a learner in trial at ${width}px`, async ({
+    context,
+  }) => {
+    const appPage = await context.newPage();
+    await stubCatalogueAndSession(appPage);
+    await stubAccount(
+      appPage,
+      accountView({
+        status: 'TRIALING',
+        trialEndsAtEpochMillis: Date.UTC(2026, 8, 20),
+        resetsAtEpochMillis: null,
+        remaining: 12,
+        allowance: 40,
+      }),
+    );
+    await appPage.route('**/api/health', (route) =>
+      route.fulfill({ json: { status: 'ok', mongo: true, ready: true } }),
+    );
+    await appPage.setViewportSize({ width, height: 900 });
+    await appPage.goto('/');
+    await appPage.locator('.topic__tile').first().waitFor();
+    const appAccountBox = await appPage.locator('a.bar__account').boundingBox();
+    const appCountBox = await appPage.locator('.allowance-meter__count-full').boundingBox();
+    const appSubscribeBox = await appPage
+      .locator('.allowance-meter__subscribe--trial')
+      .boundingBox();
+
+    const pubPage = await context.newPage();
+    await stubAccountStatus(pubPage, 'TRIALING');
+    await pubPage.setViewportSize({ width, height: 900 });
+    await gotoFixture(pubPage);
+    await expect(pubPage.locator('#site-header-account')).toHaveText('Account');
+    const pubAccountBox = await pubPage.locator('#site-header-account').boundingBox();
+    const pubCountBox = await pubPage.locator('.bar__count-full').boundingBox();
+    const pubSubscribeBox = await pubPage.locator('#site-header-subscribe').boundingBox();
+
+    console.log(
+      `[issue-173] trial-parity width=${width} ` +
+        `app.account.x=${appAccountBox!.x} public.account.x=${pubAccountBox!.x} ` +
+        `app.count.x=${appCountBox!.x} public.count.x=${pubCountBox!.x} ` +
+        `app.subscribe.x=${appSubscribeBox!.x} public.subscribe.x=${pubSubscribeBox!.x} ` +
+        `app.subscribe.height=${appSubscribeBox!.height} public.subscribe.height=${pubSubscribeBox!.height}`,
+    );
+
+    expect(
+      Math.abs(appAccountBox!.x - pubAccountBox!.x),
+      `the account link starts at the same x at ${width}px`,
+    ).toBeLessThanOrEqual(0.5);
+    expect(
+      Math.abs(appCountBox!.x - pubCountBox!.x),
+      `the count starts at the same x at ${width}px`,
+    ).toBeLessThanOrEqual(0.5);
+    expect(
+      Math.abs(appSubscribeBox!.x - pubSubscribeBox!.x),
+      `the Subscribe link starts at the same x at ${width}px`,
+    ).toBeLessThanOrEqual(0.5);
+    expect(
+      Math.abs(appSubscribeBox!.height - pubSubscribeBox!.height),
+      `the Subscribe pill has the same height as the application header at ${width}px`,
+    ).toBeLessThanOrEqual(0.5);
+
+    await appPage.close();
+    await pubPage.close();
+  });
+}

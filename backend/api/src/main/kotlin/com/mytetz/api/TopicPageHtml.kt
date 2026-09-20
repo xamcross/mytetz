@@ -84,7 +84,7 @@ internal const val SITE_URL = "https://mytetz.com"
  * stylesheet for that reason. A new version is a new URL, so no cache holds it.
  * `StylesheetVersionTest` fails, and prints the new value, when the file changes and this value
  * does not. */
-internal const val GUIDES_STYLESHEET_VERSION = "0eff4d84f0"
+internal const val GUIDES_STYLESHEET_VERSION = "2481b6eab8"
 internal const val GUIDES_STYLESHEET = "/guides/guides.css?v=$GUIDES_STYLESHEET_VERSION"
 
 /** The two external scripts of this layout, each with the version of its file in the URL, for the
