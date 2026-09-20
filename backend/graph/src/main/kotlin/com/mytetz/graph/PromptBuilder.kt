@@ -6,13 +6,20 @@ import kotlinx.serialization.Serializable
 data class Ancestor(val span: String, val body: String)
 
 /**
- * The forced tool call's own answer shape for `VISUALIZE`: one short sentence, and one inline SVG
- * source, in the same call. `ExplanationGraph.generate` decodes a `StructuredResult.json` into
- * this type, then validates each field on its own — [explanation] through
- * `ExplanationValidator.validateStructuredBody`, [svg] through [SvgSanitizer.sanitize].
+ * The forced tool call's own answer shape for `VISUALIZE`: one short sentence, one inline SVG
+ * source, and the model's own name for a Wikimedia Commons image search, all in the same call.
+ * `ExplanationGraph.generate` decodes a `StructuredResult.json` into this type, then validates
+ * each field on its own — [explanation] through `ExplanationValidator.validateStructuredBody`,
+ * [svg] through [SvgSanitizer.sanitize], and [imageSearchTerms] through
+ * `com.mytetz.api.CommonsClient`'s own `validatedImageSearchTerms`, on the far side of the
+ * `CommonsLookup` port.
+ *
+ * [imageSearchTerms] carries a default, `""`, so a stored fixture or an older test JSON with no
+ * such key still decodes — Issue 115's own compatibility rule, on the model of [Explanation.media]
+ * already decoding `null` for a document written before that field existed.
  */
 @Serializable
-data class VisualizeAnswer(val explanation: String, val svg: String)
+data class VisualizeAnswer(val explanation: String, val svg: String, val imageSearchTerms: String = "")
 
 /**
  * Everything the model is told about a request. Deliberately contains no user, principal or
@@ -57,7 +64,7 @@ object PromptBuilder {
      * prompt path, so a change to it must never re-key every other verb's already-cached
      * explanation. See `ExplanationGraph.keyFor` and the plan's own Decision 5.
      */
-    const val VISUALIZE_VERSION: String = "v2"
+    const val VISUALIZE_VERSION: String = "v3"
 
     /**
      * Puts a stored value on one line.
@@ -194,6 +201,10 @@ object PromptBuilder {
         3. Give the root <svg> element the attribute xmlns="http://www.w3.org/2000/svg" and a
            viewBox that fits the shapes you draw.
         4. Keep the diagram simple: a handful of shapes the learner can read in a glance.
+        5. In imageSearchTerms, name two to five plain words for a real photograph or diagram
+           of the highlighted phrase, in its own subject — for example "sound wave diagram"
+           for the phrase "wave" in a physics text, not the bare word "wave" on its own. Leave
+           imageSearchTerms empty when no real photograph would help this learner.
     """.trimIndent()
 
     /**
@@ -209,9 +220,22 @@ object PromptBuilder {
         appendLine("It appeared in this sentence: ${quoted(context.spanSentence)}")
     }.trim()
 
-    /** The forced tool call's own JSON Schema `properties` object — see [VisualizeAnswer]. */
+    /**
+     * The forced tool call's own JSON Schema `properties` object — see [VisualizeAnswer].
+     *
+     * `imageSearchTerms` is not in [ExplanationGraph.generateVisualize]'s own `requiredFields`
+     * list: an empty answer is a real, meaningful answer here ("no real photograph would help"),
+     * never a missing one, so the schema states no minimum length and the tool call is not forced
+     * to fill it.
+     */
     fun visualizeSchema(): Map<String, Any> = mapOf(
         "explanation" to mapOf("type" to "string"),
         "svg" to mapOf("type" to "string"),
+        "imageSearchTerms" to mapOf(
+            "type" to "string",
+            "description" to "Two to five plain words naming a real photograph or diagram of " +
+                "the phrase, in its own subject, for a Wikimedia Commons image search. Empty " +
+                "when no real photograph would help.",
+        ),
     )
 }

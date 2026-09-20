@@ -173,7 +173,7 @@ class ExplanationGraph(
      * caller of this constructor keeps compiling unchanged, and so this module needs no HTTP
      * client of its own — see [CommonsLookup]'s own KDoc for the rule this follows.
      */
-    private val commonsLookup: CommonsLookup = { _, _ -> null },
+    private val commonsLookup: CommonsLookup = { _, _, _ -> null },
 ) {
 
     private class KeyLock {
@@ -515,6 +515,11 @@ class ExplanationGraph(
      * into the same outcome — `image = null` — so the document still persists with the diagram
      * alone. See [CommonsLookup]'s own KDoc for the rule this follows, and Task 7's own test for
      * the degradation this is written to guarantee.
+     *
+     * The lookup is passed [VisualizeAnswer.imageSearchTerms] — Issue 115's own addition — beside
+     * [request.span] and [request.ancestors], unvalidated: the port's real implementation is where
+     * a hostile or an empty value is bounded, checked, and, when nothing survives, replaced with
+     * the span itself.
      */
     private suspend fun FlowCollector<GraphChunk>.generateVisualize(
         request: GraphRequest,
@@ -579,7 +584,12 @@ class ExplanationGraph(
 
         // Degradation, not a generation failure: a failed lookup and an empty lookup both answer
         // null here, and the diagram-only document below is still persisted either way.
-        val image = runCatching { commonsLookup(request.span, request.ancestors) }.getOrNull()
+        // answer.imageSearchTerms is the model's own name for the picture -- Issue 115's own
+        // addition, passed through unvalidated: the port's real implementation bounds and checks
+        // it, and falls back to request.span when it gives nothing usable.
+        val image = runCatching {
+            commonsLookup(request.span, request.ancestors, answer.imageSearchTerms)
+        }.getOrNull()
 
         emit(GraphChunk.Delta(validatedBody))
 

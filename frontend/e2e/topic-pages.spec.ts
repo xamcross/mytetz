@@ -63,6 +63,14 @@ test('the full path: tile link, topic page, start, reader', async ({ page }) => 
   // Topic page: the fixture answered the navigation, standing in for the real Ktor route.
   await expect(page.locator('h1')).toHaveText('Quantum Physics');
 
+  // The h1 renders as soon as the browser parses the response body, which can happen before
+  // /topic-start.js finishes its own, separate network fetch — the `defer` attribute lets the
+  // rest of the document parse first. A click issued between those two moments lands on a
+  // button with no listener yet, and does nothing. `domcontentloaded` is the browser's own
+  // signal that every deferred script has downloaded and run, so this waits for that real
+  // event instead of guessing how long the fetch takes.
+  await page.waitForLoadState('domcontentloaded');
+
   // Start: a real click, running the real, unstubbed topic-start.js against the stubbed
   // POST /api/sessions stubCatalogueAndSession already installed.
   await page.getByRole('button', { name: 'Start with this topic' }).click();
