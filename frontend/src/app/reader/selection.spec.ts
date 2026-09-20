@@ -493,3 +493,172 @@ describe('selectionToSpan — snapping to whole words', () => {
     });
   });
 });
+
+/**
+ * Review correction 1. The edge trim used to remove every `\p{P}` character without exception,
+ * which is wrong for a character that is itself part of the phrase's own meaning — a mathematics
+ * or a physics explanation holds "f(x)", "-273.15", "78%" and "C#", and stripping the bracket, the
+ * sign, the percent mark or the hash changes what the phrase says. Each fixture below is one row
+ * of the review's own table, with its offsets checked by a standalone script before writing the
+ * expectations (the same discipline `selection.spec.ts`'s own top block already uses).
+ */
+describe('selectionToSpan — keeping a meaningful edge character', () => {
+  afterEach(() => document.body.replaceChildren());
+
+  it('keeps a closing bracket that matches an opening one inside the phrase: "f(x)"', () => {
+    const el = elementWith('The function f(x) = x squared grows fast.');
+
+    const span = selectionToSpan(el, rangeOver(el.firstChild!, 13, 17));
+
+    expect(span!.text).toBe('f(x)');
+    expect(span!.start).toBe(13);
+    expect(span!.end).toBe(17);
+  });
+
+  // Regression pin: a bracket pair that wraps the *whole* phrase is still an ordinary delimiter,
+  // not a piece of notation — "(called superposition)" still loses both brackets, the same as
+  // before this correction. The opening bracket's match sits at the phrase's own last character,
+  // not somewhere inside it, which is what tells the two cases apart — see `bracketMatch`'s own
+  // comment in `selection.ts`.
+  it('still drops a bracket pair that wraps the whole phrase', () => {
+    const el = elementWith('Electrons move fast (called superposition) in this model.');
+
+    const span = selectionToSpan(el, rangeOver(el.firstChild!, 20, 42));
+
+    expect(span!.text).toBe('called superposition');
+  });
+
+  it('keeps a percent sign after a digit: "78%"', () => {
+    const el = elementWith('Nitrogen is about 78% of the air.');
+
+    const span = selectionToSpan(el, rangeOver(el.firstChild!, 18, 21));
+
+    expect(span!.text).toBe('78%');
+    expect(span!.start).toBe(18);
+    expect(span!.end).toBe(21);
+  });
+
+  it('keeps a hash sign after a letter: "C#"', () => {
+    const el = elementWith('I use C# at work every day.');
+
+    const span = selectionToSpan(el, rangeOver(el.firstChild!, 6, 8));
+
+    expect(span!.text).toBe('C#');
+    expect(span!.start).toBe(6);
+    expect(span!.end).toBe(8);
+  });
+
+  it('keeps a leading minus sign before a digit, when it is not preceded by a letter or a digit: "-273.15 °C"', () => {
+    const el = elementWith('Absolute zero is -273.15 °C, the coldest possible temperature.');
+
+    const span = selectionToSpan(el, rangeOver(el.firstChild!, 17, 27));
+
+    expect(span!.text).toBe('-273.15 °C');
+    expect(span!.start).toBe(17);
+    expect(span!.end).toBe(27);
+  });
+
+  // The hyphen here joins two numbers in a range, so it is not a sign: the character before it in
+  // the full text is a digit ("3"), which is exactly what tells this case apart from the one
+  // above.
+  it('drops a leading hyphen used as a range separator, not a sign: "-5" in "pages 3-5"', () => {
+    const el = elementWith('See pages 3-5 for the details.');
+
+    const span = selectionToSpan(el, rangeOver(el.firstChild!, 11, 13));
+
+    expect(span!.text).toBe('5');
+  });
+
+  // Regression pin: a plain quotation mark is not one of the kept characters, so a quoted phrase
+  // still loses both of its own quote marks, the same as before this correction.
+  it('still drops the two quote marks around a quoted phrase', () => {
+    const el = elementWith('The idea, "the safe operating margin", matters here.');
+
+    const span = selectionToSpan(el, rangeOver(el.firstChild!, 10, 37));
+
+    expect(span!.text).toBe('the safe operating margin');
+  });
+});
+
+/**
+ * Review correction 2. `Intl.Segmenter` reports "well", "-", "known" as three separate segments,
+ * the middle one not word-like, so the segmenter path used to grow only as far as whichever half
+ * of "well-known" the drag started or ended in. The regex fallback already joined a hyphen or an
+ * apostrophe between two word runs into one match, so the two paths disagreed. Rather than
+ * asserting one fixed answer per path, this runs each fixture through both and checks the two
+ * results are the same span — a real disagreement between the paths fails this test regardless of
+ * which side is "wrong".
+ */
+describe('selectionToSpan — the two word-rule paths agree', () => {
+  afterEach(() => document.body.replaceChildren());
+
+  const FIXTURES: ReadonlyArray<{
+    readonly name: string;
+    readonly html: string;
+    readonly start: number;
+    readonly end: number;
+  }> = [
+    // "kno", inside "well-known" — the review's own reproduction of the disagreement.
+    {
+      name: 'a hyphen joins two word runs',
+      html: 'That is a well-known result.',
+      start: 15,
+      end: 18,
+    },
+    // "sn'", inside "doesn't" — an apostrophe joining two word runs.
+    {
+      name: 'an apostrophe joins two word runs',
+      html: "The switch doesn't work.",
+      start: 14,
+      end: 17,
+    },
+    // "f(x", inside the notation itself.
+    {
+      name: 'a bracket kept at the phrase edge',
+      html: 'The function f(x) = x squared grows fast.',
+      start: 13,
+      end: 16,
+    },
+    // "alled superpositio", inside a bracket pair that wraps the whole phrase.
+    {
+      name: 'a bracket pair that wraps the whole phrase',
+      html: 'Electrons move fast (called superposition) in this model.',
+      start: 22,
+      end: 40,
+    },
+  ];
+
+  function withoutSegmenter<T>(fn: () => T): T {
+    const withOptionalSegmenter = Intl as unknown as { Segmenter?: typeof Intl.Segmenter };
+    const original = withOptionalSegmenter.Segmenter;
+    delete withOptionalSegmenter.Segmenter;
+    try {
+      return fn();
+    } finally {
+      withOptionalSegmenter.Segmenter = original;
+    }
+  }
+
+  for (const fixture of FIXTURES) {
+    it(`gives the same span on both paths: ${fixture.name}`, () => {
+      const withSegmenter = (() => {
+        const el = elementWith(fixture.html);
+        const span = selectionToSpan(el, rangeOver(el.firstChild!, fixture.start, fixture.end));
+        document.body.replaceChildren();
+        return span;
+      })();
+
+      const withPattern = withoutSegmenter(() => {
+        const el = elementWith(fixture.html);
+        const span = selectionToSpan(el, rangeOver(el.firstChild!, fixture.start, fixture.end));
+        document.body.replaceChildren();
+        return span;
+      });
+
+      expect(withSegmenter).toEqual(withPattern);
+      // A parity check alone would also pass two paths that agree on the *wrong* answer, so this
+      // also pins the actual text each one gives.
+      expect(withSegmenter).not.toBeNull();
+    });
+  }
+});
