@@ -502,4 +502,128 @@ class ExplanationRepositoryTest {
 
         assertEquals(2, repository.findPublishedByTopic("quantum-physics", limit = 2).size)
     }
+
+    // ------------------------------------------------------------------ seed correction (issue #162)
+
+    @Test
+    fun `a newly built Explanation defaults previousBody and correctedAtEpochMillis to null`() {
+        val fresh = explanation("k-fresh-correction", "a body")
+
+        assertNull(fresh.previousBody)
+        assertNull(fresh.correctedAtEpochMillis)
+    }
+
+    @Test
+    fun `a document stored before previousBody and correctedAtEpochMillis existed decodes with both null`() = runTest {
+        // The same style of test as "a document stored before this field existed decodes with
+        // media null" above: a raw document with neither key at all, the shape of every seed this
+        // project stored before issue #162.
+        database.getCollection<org.bson.Document>("explanations").insertOne(
+            org.bson.Document(
+                mapOf(
+                    "_id" to "k-legacy-3", "topicSlug" to "quantum-physics", "parentKey" to null,
+                    "span" to null, "spanSentence" to null, "verb" to "SEED", "variant" to 0, "depth" to 0,
+                    "body" to "Quantum mechanics is…", "grounded" to false, "sources" to emptyList<org.bson.Document>(),
+                    "promptVersion" to "v1", "modelFamily" to "claude-opus-5", "modelId" to "claude-opus-5",
+                    "inputTokens" to 10L, "outputTokens" to 20L, "costMicros" to 550L, "requestCount" to 0L,
+                    "createdAtEpochMillis" to 1_700_000_000_000L,
+                )
+            )
+        )
+
+        val found = repository.findByKey("k-legacy-3")
+
+        assertNotNull(found)
+        assertNull(found?.previousBody)
+        assertNull(found?.correctedAtEpochMillis)
+    }
+
+    @Test
+    fun `findSeedsByTopicSlug finds the one seed of a topic`() = runTest {
+        repository.insertIfAbsent(explanation("seed-qp", "Quantum body.", verb = Verb.SEED).copy(topicSlug = "quantum-physics"))
+        repository.insertIfAbsent(explanation("explain-qp", "A child.", verb = Verb.EXPLAIN).copy(topicSlug = "quantum-physics"))
+
+        val found = repository.findSeedsByTopicSlug("quantum-physics")
+
+        assertEquals(listOf("seed-qp"), found.map { it.key })
+    }
+
+    @Test
+    fun `findSeedsByTopicSlug is empty for an unknown slug`() = runTest {
+        assertEquals(emptyList(), repository.findSeedsByTopicSlug("no-such-topic"))
+    }
+
+    @Test
+    fun `findByParentKey finds every direct child`() = runTest {
+        repository.insertIfAbsent(explanation("seed-parent", "Seed.", verb = Verb.SEED))
+        repository.insertIfAbsent(explanation("child-a", "A.", verb = Verb.EXPLAIN).copy(parentKey = "seed-parent"))
+        repository.insertIfAbsent(explanation("child-b", "B.", verb = Verb.EXPLAIN).copy(parentKey = "seed-parent"))
+        repository.insertIfAbsent(explanation("grandchild", "C.", verb = Verb.EXPLAIN).copy(parentKey = "child-a"))
+
+        val children = repository.findByParentKey("seed-parent")
+
+        assertEquals(setOf("child-a", "child-b"), children.map { it.key }.toSet())
+    }
+
+    @Test
+    fun `replaceSeedBody changes only the body, and records the previous text and the time`() = runTest {
+        repository.insertIfAbsent(explanation("seed-replace", "Old text.", verb = Verb.SEED))
+
+        val applied = repository.replaceSeedBody("seed-replace", "New text.", nowEpochMillis = 12345L)
+
+        assertEquals(true, applied)
+        val found = repository.findByKey("seed-replace")
+        assertEquals("New text.", found?.body)
+        assertEquals("Old text.", found?.previousBody)
+        assertEquals(12345L, found?.correctedAtEpochMillis)
+        assertEquals("quantum-physics", found?.topicSlug, "every other field must be untouched")
+    }
+
+    @Test
+    fun `replaceSeedBody refuses a document that is not a SEED, and writes nothing`() = runTest {
+        repository.insertIfAbsent(explanation("not-a-seed", "Old text.", verb = Verb.EXPLAIN))
+
+        val applied = repository.replaceSeedBody("not-a-seed", "New text.", nowEpochMillis = 1L)
+
+        assertEquals(false, applied)
+        assertEquals("Old text.", repository.findByKey("not-a-seed")?.body)
+    }
+
+    @Test
+    fun `replaceSeedBody on an unknown key writes nothing`() = runTest {
+        assertEquals(false, repository.replaceSeedBody("missing-key", "New text.", nowEpochMillis = 1L))
+    }
+
+    @Test
+    fun `revertSeedBody restores the previous text and clears the correction fields`() = runTest {
+        repository.insertIfAbsent(explanation("seed-revert", "Old text.", verb = Verb.SEED))
+        repository.replaceSeedBody("seed-revert", "New text.", nowEpochMillis = 12345L)
+
+        val reverted = repository.revertSeedBody("seed-revert")
+
+        assertEquals(true, reverted)
+        val found = repository.findByKey("seed-revert")
+        assertEquals("Old text.", found?.body)
+        assertNull(found?.previousBody)
+        assertNull(found?.correctedAtEpochMillis)
+    }
+
+    @Test
+    fun `revertSeedBody a second time finds nothing to undo, and writes nothing`() = runTest {
+        repository.insertIfAbsent(explanation("seed-revert-twice", "Old text.", verb = Verb.SEED))
+        repository.replaceSeedBody("seed-revert-twice", "New text.", nowEpochMillis = 1L)
+        repository.revertSeedBody("seed-revert-twice")
+
+        val revertedAgain = repository.revertSeedBody("seed-revert-twice")
+
+        assertEquals(false, revertedAgain)
+        assertEquals("Old text.", repository.findByKey("seed-revert-twice")?.body)
+    }
+
+    @Test
+    fun `revertSeedBody on a document never corrected finds nothing to undo`() = runTest {
+        repository.insertIfAbsent(explanation("seed-never-corrected", "Old text.", verb = Verb.SEED))
+
+        assertEquals(false, repository.revertSeedBody("seed-never-corrected"))
+    }
 }
