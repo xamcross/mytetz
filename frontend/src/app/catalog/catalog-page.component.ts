@@ -204,8 +204,8 @@ import { TopicSummary } from '../core/models';
         color: var(--mt-muted);
         text-wrap: pretty;
       }
-      /* Own rule, apart from .catalog__intro: this block also sets its column count once the
-         grid gains a second and a third column, in the media queries near .topics below. */
+      /* Issue #146. One wide column with no max-width, as .catalog__intro: the owner selected
+         this form on 2026-09-20, and not text columns below the card columns. */
       .catalog__more {
         margin: 0;
         font-size: 16px;
@@ -397,19 +397,10 @@ import { TopicSummary } from '../core/models';
         .topics {
           grid-template-columns: repeat(2, 1fr);
         }
-        /* Two text columns below the two tile columns above, with the same 16px gap, so each
-           text column stands under one card column. */
-        .catalog__more {
-          columns: 2;
-          column-gap: 16px;
-        }
       }
       @media (min-width: 1120px) {
         .topics {
           grid-template-columns: repeat(3, 1fr);
-        }
-        .catalog__more {
-          columns: 3;
         }
       }
       @media (max-width: 767px) {
