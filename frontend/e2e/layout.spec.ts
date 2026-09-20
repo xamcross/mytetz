@@ -615,6 +615,14 @@ test('the leaving stream box cannot be selected, and the status paragraph change
 
   await expect(page.locator('.focus__streaming')).toHaveCount(0);
 
+  // Issue #139, review round 2: this page stubs no account, so the account read
+  // `SessionStore.explain` fires never settles with a usable count, and the status paragraph
+  // waits out the full 1500ms (TOKEN_RESULT_WAIT_MILLIS) before it writes "ready" alone.
+  await page
+    .locator('.focus__stream-status')
+    .filter({ hasText: 'The explanation is ready.' })
+    .waitFor();
+
   const changes = await page.evaluate(
     () => (window as unknown as { __statusChanges: string[] }).__statusChanges,
   );
