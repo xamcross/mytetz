@@ -731,7 +731,7 @@ class ExplanationGraphTest {
             llm = llm,
             validator = ExplanationValidator(),
             config = config,
-            commonsLookup = { _, _ -> throw java.io.IOException("down") },
+            commonsLookup = { _, _, _ -> throw java.io.IOException("down") },
         )
 
         val chunks = graphWithFailingCommons.getOrGenerate(request(verb = Verb.VISUALIZE)).toList()
@@ -739,6 +739,33 @@ class ExplanationGraphTest {
         val done = chunks.filterIsInstance<GraphChunk.Done>().single()
         assertNotNull(done.explanation.media?.diagram)
         assertNull(done.explanation.media?.image)
+    }
+
+    /**
+     * Issue 115: the model's own `imageSearchTerms` field must reach the `CommonsLookup` port,
+     * beside the span and the ancestors it already carried -- unvalidated here, the same way
+     * `span` itself is unvalidated at this layer. `CommonsClientTest` proves the far side, where
+     * a hostile or an empty value is bounded and checked.
+     */
+    @Test
+    fun `the model's own imageSearchTerms reach the commonsLookup port`() = runTest {
+        llm.nextStructuredJson = """
+            {"explanation":"A short valid sentence about the span.",
+             "svg":"<svg><circle cx=\"1\" cy=\"1\" r=\"1\"/></svg>",
+             "imageSearchTerms":"sound wave diagram"}
+        """.trimIndent()
+        var capturedTerms: String? = null
+        val graphWithCapturingCommons = ExplanationGraph(
+            repository = repository,
+            llm = llm,
+            validator = ExplanationValidator(),
+            config = config,
+            commonsLookup = { _, _, imageSearchTerms -> capturedTerms = imageSearchTerms; null },
+        )
+
+        graphWithCapturingCommons.getOrGenerate(request(verb = Verb.VISUALIZE)).toList()
+
+        assertEquals("sound wave diagram", capturedTerms)
     }
 
     @Test
