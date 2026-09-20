@@ -214,6 +214,47 @@ class TopicPageHtmlTest {
     }
 
     /**
+     * Issue #174: the start section shows the button and no title with the same words above it.
+     * The owner's rule is: no section title that repeats the button below it.
+     *
+     * The `<noscript>` sentence also names "Start with this topic", inside its own longer
+     * sentence for a visitor with no script — that sentence is not the removed title, and stays.
+     * This test counts the exact button text only, outside the `<noscript>` block.
+     */
+    @Test
+    fun `the start section shows Start with this topic one time, on the button, and holds no h2`() {
+        val html = render(view())
+
+        val startSection = html.substringAfter("""<section class="start">""").substringBefore("</section>")
+        assertFalse("<h2" in startSection, "the start section still holds an h2: $startSection")
+        val outsideNoScript = startSection.substringBefore("<noscript>")
+        val occurrences = Regex(">Start with this topic<").findAll(outsideNoScript).count()
+        assertEquals(1, occurrences, "the words appear $occurrences times as an element's own text: $startSection")
+    }
+
+    /**
+     * Issue #174: the page keeps one `<h1>` and skips no heading level, once the start section's
+     * own `<h2>` is gone. "Popular questions" and "Related topics" stay `<h2>` elements, so the
+     * page still reads `h1`, then `h2`, with no `h3` used anywhere.
+     */
+    @Test
+    fun `the page keeps one h1 and skips no heading level`() {
+        val html = render(
+            view(popularQuestions = listOf(PopularQuestionView(span = "wave function", shortKey = "abcdef012345"))),
+        )
+
+        val levels = Regex("""<h([1-6])[ >]""").findAll(html).map { it.groupValues[1].toInt() }.toList()
+        assertEquals(1, levels.count { it == 1 }, "the page must hold exactly one h1: $levels")
+        assertEquals(1, levels[0], "the first heading on the page must be the h1: $levels")
+        for (i in 1 until levels.size) {
+            assertTrue(
+                levels[i] - levels[i - 1] <= 1,
+                "heading level jumps from h${levels[i - 1]} to h${levels[i]}, and skips a level: $levels",
+            )
+        }
+    }
+
+    /**
      * Issue #161: the button ships disabled, so a click cannot reach `/api/sessions` before
      * `topic-start.js` attaches its own click handler. `topic-start.js` clears this attribute once
      * it is ready, and only then — see that file's own header comment.
