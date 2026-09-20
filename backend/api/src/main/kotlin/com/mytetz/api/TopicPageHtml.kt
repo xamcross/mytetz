@@ -84,7 +84,7 @@ internal const val SITE_URL = "https://mytetz.com"
  * stylesheet for that reason. A new version is a new URL, so no cache holds it.
  * `StylesheetVersionTest` fails, and prints the new value, when the file changes and this value
  * does not. */
-internal const val GUIDES_STYLESHEET_VERSION = "7800143224"
+internal const val GUIDES_STYLESHEET_VERSION = "ab5993fb8e"
 internal const val GUIDES_STYLESHEET = "/guides/guides.css?v=$GUIDES_STYLESHEET_VERSION"
 
 /** The two external scripts of this layout, each with the version of its file in the URL, for the
@@ -306,8 +306,10 @@ fun HTML.topicPageHtml(view: TopicPageView) {
             // No date means no line, and never a false one — see TopicPageView.reviewedAt's own KDoc.
             view.reviewedAt?.let { reviewedAt -> p(classes = "topic__reviewed") { +"Last reviewed ${isoDate(reviewedAt)}" } }
 
+            // Issue #174: the section holds no title. The owner's rule is: no section title that
+            // repeats the button below it. The button alone carries the words "Start with this
+            // topic".
             section(classes = "start") {
-                h2 { +"Start with this topic" }
                 button {
                     attributes["type"] = "button"
                     attributes["id"] = "topic-start-button"
