@@ -81,6 +81,23 @@ describe('AllowanceMeterComponent', () => {
     expect(text()).toContain('August 7, 2024');
   });
 
+  /**
+   * Issue #133. Below 768px, a CSS rule hides the period word ("today", "in your trial") inside
+   * the header only, so the row reads "12 of 40 left" and fits. jsdom applies no CSS, so this
+   * spec cannot see that rule fire — it instead proves the one fact a screen reader depends on:
+   * the sentence a screen reader announces stays whole in the markup, in a `.mt-sr-only` element,
+   * with no width and no status to hide it behind.
+   */
+  it('carries the full count sentence for a screen reader, with no status word missing', () => {
+    store.view.set(trialing);
+    fixture.detectChanges();
+
+    const srOnly = fixture.nativeElement.querySelector(
+      '.allowance-meter__count .mt-sr-only',
+    ) as HTMLElement;
+    expect(srOnly.textContent).toContain('17 of 40 left in your trial');
+  });
+
   it('the meter renders nothing when signed out', () => {
     store.view.set(null);
     fixture.detectChanges();

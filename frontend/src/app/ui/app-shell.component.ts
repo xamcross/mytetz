@@ -32,9 +32,9 @@ import { BackendState, StatusDotComponent } from './status-dot.component';
   template: `
     <header class="bar">
       <div class="bar__left">
-        <a class="bar__mark" routerLink="/">
+        <a class="bar__mark" routerLink="/" aria-label="mytetz">
           <app-logo-mark />
-          mytetz
+          <span class="bar__mark-text">mytetz</span>
         </a>
         <nav class="bar__nav" aria-label="Sections">
           <a
@@ -124,18 +124,45 @@ import { BackendState, StatusDotComponent } from './status-dot.component';
         align-items: center;
         gap: 16px;
       }
+      /*
+       * Issue #141. This rule once reserved the underline's own space with a padding-bottom of
+       * 3px and a transparent border-bottom of 3px, both below the text and none above it. The
+       * bar centres a link's whole box, so that one-sided space pushed the text itself about 3px
+       * above the true centre line -- the owner's own report of an "Account" link that sat higher
+       * than the count text next to it. The fix below gives the underline no box of its own: the
+       * link's box is now the text alone, the same as every other text in the bar, so it lands on
+       * the same centre line without a margin-top or a top-padding number to match it. The
+       * position rule below only sets the frame the underline positions itself against; it
+       * changes nothing else about the link's own layout.
+       */
       .bar__link {
+        position: relative;
         font-size: 15px;
         font-weight: 700;
         color: var(--mt-muted);
         text-decoration: none;
-        padding-bottom: 3px;
-        border-bottom: 3px solid transparent;
+      }
+      /*
+       * The underline itself, drawn outside the box the text sits in, so it never moves the text.
+       * It sits flush against the text's own bottom edge and reaches 3px further down — the same
+       * 3px thickness the old border-bottom drew, at the same distance below the text, so the
+       * active underline stays where a learner already knows it from.
+       */
+      .bar__link::after {
+        content: '';
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: -3px;
+        height: 3px;
+        background: transparent;
       }
       .bar__link--active {
         font-weight: 800;
         color: var(--mt-teal);
-        border-bottom-color: var(--mt-teal);
+      }
+      .bar__link--active::after {
+        background: var(--mt-teal);
       }
       .bar__account {
         white-space: nowrap;
@@ -145,6 +172,32 @@ import { BackendState, StatusDotComponent } from './status-dot.component';
           padding: 0 20px;
         }
         .bar__nav {
+          display: none;
+        }
+      }
+      /*
+       * Issue #133, review round 2. A padding of 8px below 480px (an earlier version of this
+       * rule) moved the page content 12px away from the header's own left edge at 390px and
+       * 412px, the two most common phone widths — the header no longer lined up with the page
+       * title below it. The page content itself starts 20px from the left at a phone width, so
+       * the bar's own side padding stays 20px at every phone width. Only the gap inside the
+       * right-hand group narrows, for the two rare widths, 320px and 360px, where the wordmark,
+       * the "Account" link, the meter and the status dot still crowd each other.
+       */
+      @media (max-width: 479px) {
+        .bar__right {
+          gap: 12px;
+        }
+      }
+      /*
+       * Issue #133. Below 360px the text of the wordmark takes about 87px that the row does not
+       * have. The text then goes out of view, and the logo mark alone shows the link. The link
+       * has aria-label="mytetz", so it keeps its name for a screen reader at each width. The
+       * text is visible by default, and only this media query hides it. styles.spec.ts permits
+       * no component copy of .mt-sr-only, so this rule uses display: none.
+       */
+      @media (max-width: 359px) {
+        .bar__mark-text {
           display: none;
         }
       }
