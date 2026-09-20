@@ -179,6 +179,48 @@ export async function selectPhrase(page: Page, testId: string, phrase: string): 
   await page.mouse.up();
 }
 
+/**
+ * Drags a real selection between two character offsets of the text inside the element identified
+ * by `testId` — the same real `page.mouse` drag `selectPhrase` performs above, but between two
+ * offsets chosen by the caller rather than the two edges of a whole phrase.
+ *
+ * Issue #169: a test of the word-growing rule needs a drag that starts or ends inside a word on
+ * purpose, and `selectPhrase`'s own `full.indexOf(phrase)` cannot express that — it always finds
+ * a whole substring, so both of its own edges already stand on a word's own edge. This measures
+ * the on-screen position of `start` and `end` with a `Range` over those two offsets, the same
+ * measuring technique `selectPhrase` uses, and then performs the same real, multi-step drag.
+ */
+export async function selectByOffsets(
+  page: Page,
+  testId: string,
+  start: number,
+  end: number,
+): Promise<void> {
+  const rects = await page.getByTestId(testId).evaluate(
+    (el, { start, end }) => {
+      const text = el.firstChild;
+      if (!text) throw new Error(`${el} has no text node to select within`);
+      const range = document.createRange();
+      range.setStart(text, start);
+      range.setEnd(text, end);
+      return Array.from(range.getClientRects()).map((r) => ({
+        left: r.left,
+        right: r.right,
+        top: r.top,
+        bottom: r.bottom,
+      }));
+    },
+    { start, end },
+  );
+
+  const first = rects[0];
+  const last = rects[rects.length - 1];
+  await page.mouse.move(first.left + 1, (first.top + first.bottom) / 2);
+  await page.mouse.down();
+  await page.mouse.move(last.right - 1, (last.bottom + last.top) / 2, { steps: 10 });
+  await page.mouse.up();
+}
+
 /** One `text/event-stream` frame, in the wire format `sse.client.ts`'s `parseFrame` expects. */
 export function sseFrame(event: string, data: unknown): string {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -243,6 +285,18 @@ export interface ExplainStream {
    * test can assert the callback actually ran.
    */
   aborted(): Promise<boolean>;
+  /**
+   * The JSON body of the one request this mock has answered, parsed, or `null` when no request
+   * has reached it yet.
+   *
+   * Issue #169: a test that drags a selection wants to check the request the drag produced —
+   * `text`, `start` and `end` together — and not only what lands on screen. `page.route` cannot
+   * see this request at all: `window.fetch` is replaced below before the request ever reaches the
+   * network, so Playwright's own request-interception layer, which watches the network and not
+   * `fetch` calls, never fires for it. Reading the body back out of the mock's own state, the same
+   * way `aborted()` reads its own flag, is what stands in for that here.
+   */
+  requestBody(): Promise<unknown | null>;
 }
 
 /**
@@ -304,10 +358,19 @@ export async function mockExplainStream(page: Page, sessionId: string): Promise<
         // comment for why this has to be observable from outside the stream's own closure rather
         // than a local variable.
         aborted: boolean;
+        // Issue #169. The raw JSON text of the one request this mock answers, or `null` before
+        // one arrives. `requestBody()` below parses it back out.
+        body: string | null;
       }
       const w = window as unknown as { __mtzExplain: Map<string, MockState> };
       w.__mtzExplain = new Map<string, MockState>();
-      w.__mtzExplain.set(sessionId, { queue: [], closed: false, waiters: [], aborted: false });
+      w.__mtzExplain.set(sessionId, {
+        queue: [],
+        closed: false,
+        waiters: [],
+        aborted: false,
+        body: null,
+      });
 
       const path = `/api/sessions/${sessionId}/explain`;
       const realFetch = window.fetch.bind(window);
@@ -322,6 +385,7 @@ export async function mockExplainStream(page: Page, sessionId: string): Promise<
         }
 
         const state = w.__mtzExplain.get(sessionId)!;
+        state.body = typeof init?.body === 'string' ? init.body : null;
         const encoder = new TextEncoder();
 
         const stream = new ReadableStream<Uint8Array>({
@@ -398,6 +462,19 @@ export async function mockExplainStream(page: Page, sessionId: string): Promise<
           }
           const w = window as unknown as { __mtzExplain: Map<string, MockState> };
           return w.__mtzExplain.get(sessionId)?.aborted ?? false;
+        },
+        { sessionId },
+      );
+    },
+    async requestBody(): Promise<unknown | null> {
+      return page.evaluate(
+        ({ sessionId }) => {
+          interface MockState {
+            body: string | null;
+          }
+          const w = window as unknown as { __mtzExplain: Map<string, MockState> };
+          const body = w.__mtzExplain.get(sessionId)?.body ?? null;
+          return body === null ? null : JSON.parse(body);
         },
         { sessionId },
       );
