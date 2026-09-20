@@ -100,6 +100,16 @@ class HeaderFooterParityTest {
         Regex("""<span\b[^>]*id="site-header-dot"[^>]*>""").find(html)?.value
             ?: error("no #site-header-dot span found in: $html")
 
+    /**
+     * Issue #173: the "Subscribe" link's own tag, found by its fixed id. A Ktor page and a static
+     * guide page are both a pure read with no account state of their own, so the server can only
+     * ever ship this link hidden — `frontend/public/site-header.js` shows it once `GET
+     * /api/account` names a status with no live count, or a learner in trial at 768px and above.
+     */
+    private fun subscribeTag(html: String): String =
+        Regex("""<a\b[^>]*id="site-header-subscribe"[^>]*>""").find(html)?.value
+            ?: error("no #site-header-subscribe link found in: $html")
+
     private fun assertHeaderAndFooter(html: String, page: String) {
         assertEquals(expectedNavLinks, navLinks(html), "$page's header nav")
         assertEquals(expectedSignedOutAccountLink, accountLink(html), "$page's account control")
@@ -111,6 +121,10 @@ class HeaderFooterParityTest {
         )
         assertFalse("Topics" in headerHtml(html), "$page's header still names Topics")
         assertFalse("bar__cta" in html, "$page still carries the removed Start a topic button")
+
+        val subscribe = subscribeTag(html)
+        assertTrue("""href="/subscribe"""" in subscribe, "$page's Subscribe link must open /subscribe: $subscribe")
+        assertTrue("hidden" in subscribe, "$page's Subscribe link must ship hidden: $subscribe")
 
         val dot = dotTag(html)
         assertTrue("""class="dot dot--checking"""" in dot, "$page's dot must start in the checking state: $dot")
