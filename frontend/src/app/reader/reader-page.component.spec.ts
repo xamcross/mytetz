@@ -746,6 +746,139 @@ describe('ReaderPageComponent', () => {
     expect(harness.routeNativeElement?.querySelector('[data-testid="new-session"]')).toBeTruthy();
   });
 
+  // ------------------------------------------------------------------ issue #139, the token price
+
+  const trialing = {
+    email: 'learner@example.com',
+    status: 'TRIALING' as const,
+    trialEndsAtEpochMillis: null,
+    currentPeriodEndsAtEpochMillis: null,
+    allowance: 40,
+    remaining: 36,
+    resetsAtEpochMillis: null,
+  };
+
+  describe('the token price on Test me and Exam', () => {
+    it('shows "1 token" on Test me and Exam for a signed-in learner with a live count', async () => {
+      TestBed.inject(AccountStore).view.set(trialing);
+      await open();
+
+      const testMe = harness.routeNativeElement?.querySelector('[data-testid="test-me"]');
+      const exam = harness.routeNativeElement?.querySelector('[data-testid="exam"]');
+      expect(testMe?.textContent).toContain('1' + ' ' + 'token');
+      expect(exam?.textContent).toContain('1' + ' ' + 'token');
+    });
+
+    it('shows no price for a visitor with no account', async () => {
+      TestBed.inject(AccountStore).view.set(null);
+      await open();
+
+      const testMe = harness.routeNativeElement?.querySelector('[data-testid="test-me"]');
+      const exam = harness.routeNativeElement?.querySelector('[data-testid="exam"]');
+      expect(testMe?.textContent).not.toContain('1 token');
+      expect(exam?.textContent).not.toContain('1 token');
+    });
+
+    it('puts the price of Test me in its accessible description, and keeps its name "Test me"', async () => {
+      TestBed.inject(AccountStore).view.set(trialing);
+      await open();
+
+      const testMe = harness.routeNativeElement?.querySelector(
+        '[data-testid="test-me"]',
+      ) as HTMLElement;
+      expect(testMe.getAttribute('aria-label')).toBe('Test me');
+      const describedBy = testMe.getAttribute('aria-describedby');
+      expect(describedBy).toBeTruthy();
+      expect(harness.routeNativeElement?.querySelector(`#${describedBy}`)?.textContent).toContain(
+        '1' + ' ' + 'token',
+      );
+    });
+  });
+
+  describe('the token result text, near the control row', () => {
+    it('shows "1 token used" with the new count once an explanation spends one', async () => {
+      TestBed.inject(AccountStore).view.set(trialing);
+      TestBed.inject(AccountStore).load = vi.fn(async () => {
+        TestBed.inject(AccountStore).view.set({ ...trialing, remaining: 35 });
+      });
+      script = async function* () {
+        yield { event: 'delta', data: { t: 'The four pillars are…' } };
+        yield { event: 'done', data: { contentKey: 'k4', grounded: true } };
+      };
+      await open();
+
+      highlightAndExplain();
+      await tick();
+      http.expectOne('/api/sessions/s1').flush({
+        ...view,
+        currentNodeId: 'n2',
+        nodes: [
+          ...view.nodes,
+          {
+            nodeId: 'n2',
+            parentNodeId: 'n1',
+            explanationKey: 'k2',
+            span: 'pillars',
+            verb: 'EXPLAIN',
+            variant: 0,
+            depth: 2,
+          },
+        ],
+        explanations: { ...view.explanations, k2: 'The four pillars are…' },
+      });
+      await harness.fixture.whenStable();
+      await tick();
+      harness.detectChanges();
+
+      expect(text()).toContain('1 token used. 35 tokens left.');
+    });
+
+    it('shows "No token used" once an explanation reused an existing answer', async () => {
+      TestBed.inject(AccountStore).view.set(trialing);
+      // Unchanged remaining: recordSpend recorded nothing for this cache hit.
+      TestBed.inject(AccountStore).load = vi.fn(async () => {
+        TestBed.inject(AccountStore).view.set({ ...trialing });
+      });
+      script = async function* () {
+        yield { event: 'delta', data: { t: 'The four pillars are…' } };
+        yield { event: 'done', data: { contentKey: 'k4', grounded: true } };
+      };
+      await open();
+
+      highlightAndExplain();
+      await tick();
+      http.expectOne('/api/sessions/s1').flush({
+        ...view,
+        currentNodeId: 'n2',
+        nodes: [
+          ...view.nodes,
+          {
+            nodeId: 'n2',
+            parentNodeId: 'n1',
+            explanationKey: 'k2',
+            span: 'pillars',
+            verb: 'EXPLAIN',
+            variant: 0,
+            depth: 2,
+          },
+        ],
+        explanations: { ...view.explanations, k2: 'The four pillars are…' },
+      });
+      await harness.fixture.whenStable();
+      await tick();
+      harness.detectChanges();
+
+      expect(text()).toContain('No token used. This text existed already.');
+    });
+
+    it('shows nothing when there is no token result to report', async () => {
+      await open();
+
+      const row = harness.routeNativeElement?.querySelector('.focus__token-result');
+      expect(row?.textContent?.trim()).toBe('');
+    });
+  });
+
   it('starting a new session on the same topic creates one and navigates to it', async () => {
     const createSession = vi.spyOn(TestBed.inject(ApiService), 'createSession').mockResolvedValue({
       ...view,

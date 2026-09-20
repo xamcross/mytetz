@@ -99,6 +99,23 @@ interface LastExplain {
 }
 
 /**
+ * What a finished explanation truly spent, from the account's own `remaining` before and after —
+ * never a guess. Issue #139: a cache hit spends nothing (`recordSpend` returns at once for a cost
+ * of zero, `SessionRoutes.kt`), and the client cannot know that before the answer arrives, so the
+ * true count is the only source of this fact.
+ */
+export interface TokenResult {
+  usedToken: boolean;
+  remaining: number;
+}
+
+/** How long [SessionStore.tokenResult] stays before it clears itself, absent a new action. The
+ * same duration `focus-card.component.ts`'s `READY_STATUS_MILLIS` uses for the screen reader's
+ * own "ready" text — the two clear together, in the ordinary case where nothing else happens
+ * meanwhile. */
+const TOKEN_RESULT_MILLIS = 4000;
+
+/**
  * The reader's whole state: one session, where the learner is in it, and whatever is streaming.
  *
  * Not `providedIn: 'root'`. It is provided by `ReaderPageComponent`, so each visit to
@@ -120,8 +137,20 @@ export class SessionStore {
   /** The generation currently streaming, so it can be abandoned — see [abandon]. */
   private inFlight: AbortController | null = null;
 
+  /** What the last finished explanation truly spent, or `null` when there is nothing to say — no
+   * explanation has finished yet, the last one failed or was refused, or the pending clear (see
+   * [tokenResultTimer]) has already run. See [TokenResult]. */
+  readonly tokenResult = signal<TokenResult | null>(null);
+  /** The pending clear of [tokenResult], or `null` when none is pending. Cleared on destroy, the
+   * same guard `focus-card.component.ts`'s `readyStatusTimer` uses for the same reason: a store
+   * the learner has already left must not write to a signal nobody reads any more. */
+  private tokenResultTimer: ReturnType<typeof setTimeout> | null = null;
+
   constructor() {
-    inject(DestroyRef).onDestroy(() => this.abandon());
+    inject(DestroyRef).onDestroy(() => {
+      this.abandon();
+      this.clearTokenResultTimer();
+    });
   }
 
   readonly session = signal<SessionView | null>(null);
@@ -375,6 +404,9 @@ export class SessionStore {
     this.isStreaming.set(true);
     this.streamingText.set('');
     this.error.set(null);
+    // Issue #139. A stale result from the previous action must not sit under a new one that has
+    // not finished yet — see this class's own note on [tokenResult].
+    this.clearTokenResult();
 
     // Abandoned if the learner leaves — see `abandon()`. `explainStream` passes this to `fetch`, so
     // an abort closes the connection rather than leaving it draining into a store nobody reads.
@@ -472,13 +504,6 @@ export class SessionStore {
       // before any of them finishes must not fire one account read per click.
       if (this.inFlight === controller) {
         this.inFlight = null;
-        // The order of the writes matters to a reader outside this class. On each failure path,
-        // `failStream` or `refresh` writes `error` before this line, and no `await` stands between
-        // the two writes. So `error()` tells the outcome at the moment `isStreaming` turns false.
-        // `FocusCardComponent` reads it at that moment, through its `explainFailed` input, to decide
-        // if a screen reader hears "The explanation is ready.". Its spec drives this store through
-        // a failed stream, so a change of this order fails that spec.
-        this.isStreaming.set(false);
         // A generation that reaches this point, win or refuse, changes the learner's remaining
         // allowance. A completed generation spends one unit. A refusal can too: TRIAL_EXHAUSTED
         // means the pool is now zero, and the meter must say so at once, not after a reload. The
@@ -487,11 +512,79 @@ export class SessionStore {
         //
         // SIGN_IN_REQUIRED is the one refusal this skips. A signed-out visitor gets that same
         // code on every attempt, and the account read would only ever answer 401 in reply.
-        if (this.error()?.code !== 'SIGN_IN_REQUIRED') {
+        //
+        // Not `await`ed, on a win or a refusal alike. An earlier version of this method awaited
+        // the win path, so `FocusCardComponent` could join the token result straight into "The
+        // explanation is ready." in one write. That delayed `isStreaming.set(false)` below by the
+        // length of the account round trip, and a real run of this project's own layout suite
+        // caught what that cost: the streaming box stayed mounted, empty, for that whole window
+        // (`streamingText` is already cleared by `refresh()`, above, but `isStreaming` was not
+        // yet), which the card's own template still renders — a real second reflow of the card,
+        // the exact defect `onStreamingLeave` exists to prevent. `FocusCardComponent` instead
+        // starts its announcement with "The explanation is ready." alone, the instant
+        // `isStreaming` turns false as it always has, and appends the token sentence in a second
+        // write of the same status paragraph once this call settles — see that component's own
+        // `tokenResultText` input and its KDoc for the one imperfection this leaves: on a slow
+        // connection a screen reader can hear "ready" before it hears the token sentence, rather
+        // than the two joined in one utterance.
+        if (this.error() === null) {
+          const remainingBefore = this.account.view()?.remaining ?? null;
+          void this.reportTokenResult(remainingBefore);
+        } else if (this.error()?.code !== 'SIGN_IN_REQUIRED') {
           void this.account.load();
         }
+        // The order of the writes matters to a reader outside this class. On each failure path,
+        // `failStream` or `refresh` writes `error` before this line, and no `await` stands between
+        // the two writes. So `error()` tells the outcome at the moment `isStreaming` turns false.
+        // `FocusCardComponent` reads it at that moment, through its `explainFailed` input, to decide
+        // if a screen reader hears "The explanation is ready.". Its spec drives this store through
+        // a failed stream, so a change of this order fails that spec.
+        this.isStreaming.set(false);
       }
     }
+  }
+
+  /**
+   * Reads the account after a successful explanation, and records whether it spent a token, from
+   * the true `remaining` before and after — never a guess. See [tokenResult].
+   *
+   * [remainingBefore] is captured by the caller, in the finally block's own synchronous code, and
+   * not read again here: by the time this method's own `await` resumes, `AccountStore.view` may
+   * already hold the new count, and reading it fresh here would compare the new count to itself.
+   *
+   * Not awaited by the caller — see the comment on that call for why. Sets [tokenResult] to
+   * nothing when the read itself fails, or answers with no usable count: a stale or wrong number
+   * is worse than none.
+   */
+  private async reportTokenResult(remainingBefore: number | null): Promise<void> {
+    await this.account.load();
+    if (this.account.error() !== null || remainingBefore === null) return;
+    const remainingAfter = this.account.view()?.remaining ?? null;
+    if (remainingAfter === null) return;
+
+    this.tokenResult.set({
+      usedToken: remainingAfter < remainingBefore,
+      remaining: remainingAfter,
+    });
+    this.clearTokenResultTimer();
+    this.tokenResultTimer = setTimeout(() => {
+      this.tokenResultTimer = null;
+      this.tokenResult.set(null);
+    }, TOKEN_RESULT_MILLIS);
+  }
+
+  /** Drops [tokenResult] and any pending clear of it — see [clearTokenResultTimer]. Run at the
+   * start of every new explain, so a stale result from a finished action never sits under one
+   * still in flight. */
+  private clearTokenResult(): void {
+    this.clearTokenResultTimer();
+    this.tokenResult.set(null);
+  }
+
+  private clearTokenResultTimer(): void {
+    if (this.tokenResultTimer === null) return;
+    clearTimeout(this.tokenResultTimer);
+    this.tokenResultTimer = null;
   }
 
   /**

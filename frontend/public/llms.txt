@@ -16,8 +16,8 @@ The dashboard lists topics by title, category and summary. A reader can search, 
 ## Product
 
 - Price: $12 a month, through a Freemius checkout. The trial needs no card.
-- Trial: 40 explanations over 7 days, no credit card.
-- Subscriber allowance: 25 explanations each day.
+- Trial: 40 tokens over 7 days, no credit card. One token pays for one new explanation or one quiz.
+- Subscriber allowance: 25 tokens each day.
 - Cancel: the account page, Manage subscription.
 - No account is needed for the dashboard, a topic page and its seed text.
 

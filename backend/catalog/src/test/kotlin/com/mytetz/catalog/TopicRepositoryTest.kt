@@ -53,6 +53,18 @@ class TopicRepositoryTest {
     }
 
     @Test
+    fun `clearReviewedAt removes the stored value, and findBySlug then reads null`() = runTest {
+        // Issue #47's owner command needs a way back. This test pins the repository half of
+        // that way back, the same way this file already pins [setReviewedAt] itself.
+        repository.upsert(Topic(slug = "t3", title = "T3", category = "Physics", summary = "s"))
+        repository.setReviewedAt("t3", 1_700_000_000_000L)
+
+        repository.clearReviewedAt("t3")
+
+        assertNull(repository.findBySlug("t3")?.reviewedAt)
+    }
+
+    @Test
     fun `upsertPreservingStatus does not erase an existing reviewedAt`() = runTest {
         // The regression this test guards against: CatalogService.seedFromResource calls
         // upsertPreservingStatus on every boot, with a Topic freshly decoded from topics.json,

@@ -472,12 +472,174 @@ describe('FocusCardComponent', () => {
   });
 
   it('says the explanation is ready once the stream ends', () => {
+    // Issue #139, review round 2: with no token result bound, the status line waits up to
+    // TOKEN_RESULT_WAIT_MILLIS (1500ms) before it settles on "ready" alone — see the describe
+    // block below this one for the full reason.
+    vi.useFakeTimers();
     fixture.componentRef.setInput('isStreaming', true);
     fixture.detectChanges();
     fixture.componentRef.setInput('isStreaming', false);
     fixture.detectChanges();
+    vi.advanceTimersByTime(1500);
+    fixture.detectChanges();
 
     expect(statusEl().textContent?.trim()).toBe('The explanation is ready.');
+  });
+
+  /**
+   * Issue #139, review round 2. `ReaderPageComponent` binds `tokenResultText` from
+   * `SessionStore.tokenResult()`, which is not always settled by the time `isStreaming` turns
+   * false — the account round trip can still be in flight. A status region is read in full on
+   * every change, so writing "The explanation is ready." immediately and then writing the token
+   * sentence into it a moment later would have a screen reader speak "ready" twice for the one
+   * event. This component instead waits up to `TOKEN_RESULT_WAIT_MILLIS` (1500ms) for the result,
+   * and writes the status paragraph exactly once either way: with the result if it arrives in
+   * time, or with "The explanation is ready." alone if it does not — and never again after that,
+   * even if the result arrives late. issue #99's own rule still holds throughout: a failed stream
+   * says nothing at all.
+   *
+   * Every test below records the paragraph's own value after each step, rather than only its
+   * final text, so a wrongly-doubled write is caught even where the final text would look correct
+   * on its own.
+   */
+  describe('the token result, and the one status write after a stream ends', () => {
+    /** Every distinct value `statusEl()` has held since this was called, in order. */
+    function recordStatusChanges(): { changes: string[]; record: () => void } {
+      const changes: string[] = [];
+      let previous = statusEl().textContent?.trim() ?? '';
+      const record = (): void => {
+        const text = statusEl().textContent?.trim() ?? '';
+        if (text !== previous) {
+          changes.push(text);
+          previous = text;
+        }
+      };
+      return { changes, record };
+    }
+
+    it('joins a used-token result into the one sentence, when it is already known', () => {
+      fixture.componentRef.setInput('isStreaming', true);
+      fixture.detectChanges();
+      fixture.componentRef.setInput('tokenResultText', '1 token used. 35 tokens left.');
+      fixture.componentRef.setInput('isStreaming', false);
+      fixture.detectChanges();
+
+      expect(statusEl().textContent?.trim()).toBe(
+        'The explanation is ready. 1 token used. 35 tokens left.',
+      );
+    });
+
+    it('joins a no-token-used result into the one sentence, when it is already known', () => {
+      fixture.componentRef.setInput('isStreaming', true);
+      fixture.detectChanges();
+      fixture.componentRef.setInput('tokenResultText', 'No token used. This text existed already.');
+      fixture.componentRef.setInput('isStreaming', false);
+      fixture.detectChanges();
+
+      expect(statusEl().textContent?.trim()).toBe(
+        'The explanation is ready. No token used. This text existed already.',
+      );
+    });
+
+    it('writes the status line exactly once when a fast account read arrives inside 1500ms', () => {
+      vi.useFakeTimers();
+      fixture.componentRef.setInput('isStreaming', true);
+      fixture.detectChanges();
+      fixture.componentRef.setInput('isStreaming', false);
+      fixture.detectChanges();
+
+      const { changes, record } = recordStatusChanges();
+      // Well inside the 1500ms wait — a fast account read.
+      vi.advanceTimersByTime(700);
+      fixture.detectChanges();
+      record();
+      fixture.componentRef.setInput('tokenResultText', '1 token used. 35 tokens left.');
+      fixture.detectChanges();
+      record();
+      // The rest of the wait passes. A second write here is the exact defect this fixes.
+      vi.advanceTimersByTime(1000);
+      fixture.detectChanges();
+      record();
+
+      expect(changes).toEqual(['The explanation is ready. 1 token used. 35 tokens left.']);
+    });
+
+    it('writes "The explanation is ready." alone once 1500ms pass with no result, and never again', () => {
+      vi.useFakeTimers();
+      fixture.componentRef.setInput('isStreaming', true);
+      fixture.detectChanges();
+      fixture.componentRef.setInput('isStreaming', false);
+      fixture.detectChanges();
+
+      const { changes, record } = recordStatusChanges();
+      vi.advanceTimersByTime(1499);
+      fixture.detectChanges();
+      record();
+      expect(changes, 'nothing yet, one millisecond short of the wait').toEqual([]);
+
+      vi.advanceTimersByTime(1);
+      fixture.detectChanges();
+      record();
+      expect(changes).toEqual(['The explanation is ready.']);
+
+      // The result arrives late. The status line has already decided and does not change again —
+      // the visible text below the reader's own control row is what carries the result instead.
+      fixture.componentRef.setInput('tokenResultText', '1 token used. 35 tokens left.');
+      fixture.detectChanges();
+      record();
+      expect(changes).toEqual(['The explanation is ready.']);
+    });
+
+    it('says only "ready" when there is no token result to report at all', () => {
+      vi.useFakeTimers();
+      fixture.componentRef.setInput('isStreaming', true);
+      fixture.detectChanges();
+      fixture.componentRef.setInput('isStreaming', false);
+      fixture.detectChanges();
+
+      vi.advanceTimersByTime(1500);
+      fixture.detectChanges();
+
+      expect(statusEl().textContent?.trim()).toBe('The explanation is ready.');
+    });
+
+    it('says nothing about a token when the stream failed, even with a result text bound, and starts no wait', () => {
+      // Belt and braces: `ReaderPageComponent` never binds a token result on a failed explain (see
+      // `SessionStore.reportTokenResult`), but the announcement must stay silent even if it did —
+      // issue #99's own rule that a failed stream never says "ready".
+      vi.useFakeTimers();
+      fixture.componentRef.setInput('isStreaming', true);
+      fixture.detectChanges();
+      fixture.componentRef.setInput('tokenResultText', '1 token used. 35 tokens left.');
+      fixture.componentRef.setInput('explainFailed', true);
+      fixture.componentRef.setInput('isStreaming', false);
+      fixture.detectChanges();
+
+      expect(statusEl().textContent?.trim()).toBe('');
+      // A failed stream waits for nothing: no 1500ms decision and no 4000ms auto-clear pending.
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('drops a stale 1500ms wait when a new stream starts before it fires', () => {
+      vi.useFakeTimers();
+      fixture.componentRef.setInput('isStreaming', true);
+      fixture.detectChanges();
+      fixture.componentRef.setInput('isStreaming', false);
+      fixture.detectChanges();
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
+
+      fixture.componentRef.setInput('isStreaming', true);
+      fixture.detectChanges();
+
+      const { changes, record } = recordStatusChanges();
+      vi.advanceTimersByTime(1500);
+      fixture.detectChanges();
+      record();
+
+      // The stale wait from the first stream must not write "ready" over the second stream's own
+      // "on its way" text.
+      expect(changes).toEqual([]);
+    });
   });
 
   it('announces one full stream exactly two times, and not once for every token', () => {
@@ -535,6 +697,11 @@ describe('FocusCardComponent', () => {
     // Mirrors the `finally` block of `SessionStore.explain`.
     store.isStreaming.set(false);
     fixture.componentRef.setInput('isStreaming', store.isStreaming());
+    fixture.detectChanges();
+    recordChange();
+    // Issue #139, review round 2: with no token result bound, "ready" alone is not written until
+    // this wait runs out.
+    vi.advanceTimersByTime(1500);
     fixture.detectChanges();
     recordChange();
 
@@ -681,7 +848,15 @@ describe('FocusCardComponent', () => {
     await tick();
     http.expectOne('/api/sessions/s1').flush(SESSION_VIEW_AFTER_EXPLAIN);
     await explaining;
+    // Issue #139, review round 2: with no token result bound, "ready" alone waits up to
+    // TOKEN_RESULT_WAIT_MILLIS (1500ms). Fake timers start only now, after every real await this
+    // test needed has already settled, so the wait this next `pushFromStore` schedules is the
+    // only timer this test's own clock ever has to move.
+    vi.useFakeTimers();
     pushFromStore();
+    fixture.detectChanges();
+    recordChange();
+    vi.advanceTimersByTime(1500);
     fixture.detectChanges();
     recordChange();
 
@@ -701,6 +876,10 @@ describe('FocusCardComponent', () => {
     fixture.componentRef.setInput('isStreaming', true);
     fixture.detectChanges();
     fixture.componentRef.setInput('isStreaming', false);
+    fixture.detectChanges();
+    // Issue #139, review round 2: with no token result bound, "ready" alone waits up to
+    // TOKEN_RESULT_WAIT_MILLIS (1500ms) first.
+    vi.advanceTimersByTime(1500);
     fixture.detectChanges();
     expect(statusEl().textContent?.trim()).toBe('The explanation is ready.');
 
