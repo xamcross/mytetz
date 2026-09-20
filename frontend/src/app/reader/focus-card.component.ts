@@ -58,6 +58,21 @@ export function freezeOutOfFlow(el: HTMLElement): void {
 const READY_STATUS_MILLIS = 4000;
 
 /**
+ * Issue #139, review round 2. How long the status paragraph waits, after a successful stream
+ * ends, for `tokenResultText` to arrive before it gives up on waiting and states "The explanation
+ * is ready." alone.
+ *
+ * A status region is read in full each time its text changes, so a first write of "ready" alone
+ * and a second write moments later that adds the token sentence make a screen reader speak the
+ * word "ready" twice. This wait exists so the paragraph is written once, with whichever sentence
+ * is true at that one moment — never twice for the one event. 1500ms is longer than the account
+ * read ordinarily takes (one small GET), so a learner using a screen reader hears the result
+ * together with "ready" in the ordinary case, and hears "ready" alone, a little late, only when
+ * the read is genuinely slow.
+ */
+const TOKEN_RESULT_WAIT_MILLIS = 1500;
+
+/**
  * The card the learner actually reads, and the only place a selection is turned into a span.
  *
  * ## Three rules about what may live inside `.focus__body`, all load-bearing
@@ -411,6 +426,24 @@ export class FocusCardComponent {
    * stream must not say "The explanation is ready.", because it is not. The learner already reads
    * why, from the reader page's own error banner, sign-in panel, or subscribe wall. */
   readonly explainFailed = input.required<boolean>();
+  /**
+   * The visible token-result sentence for the action that just finished, or `''` when there is
+   * none to report yet, or nothing to report at all. Issue #139: `ReaderPageComponent` binds this
+   * from `SessionStore.tokenResult()` — a text such as "1 token used. 35 tokens left." or "No
+   * token used. This text existed already." Left `''` on a failed stream, which already says
+   * nothing at all — see [explainFailed].
+   *
+   * `SessionStore` does not await the account read this comes from before `isStreaming` turns
+   * false — an earlier version did, so this value would always be settled by the time the
+   * constructor's effect below builds "The explanation is ready.", and a real run of this
+   * project's own layout suite caught what that delay cost the card's own height. So this value
+   * can still be `''` — not yet known — at that exact moment, and the constructor's effect below
+   * appends it in a second write of the same status paragraph, once it arrives, rather than
+   * waiting for it. On an ordinary connection that second write follows within one small GET's
+   * round trip; on a slow one, a screen reader can hear "ready" before it hears the token
+   * sentence, which is this design's one acknowledged imperfection over one joined utterance.
+   */
+  readonly tokenResultText = input<string>('');
   /** The step number and the verb of the node in focus, for the eyebrow. The reader page supplies
    * both from `NodeView`. */
   readonly step = input<number | null>(null);
@@ -456,6 +489,16 @@ export class FocusCardComponent {
   private wasStreaming = false;
   /** The pending clear of "The explanation is ready.", or `null` when none is pending. */
   private readyStatusTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The pending decision of what "ready" means — see [TOKEN_RESULT_WAIT_MILLIS] — or `null` when
+   * none is pending. */
+  private tokenResultWaitTimer: ReturnType<typeof setTimeout> | null = null;
+  /** True from the moment a successful stream ends until the one write of the status paragraph
+   * that follows — either immediate, because [tokenResultText] is already known, or once the
+   * second effect below sees it arrive, or once [tokenResultWaitTimer] runs out of patience. Set
+   * back to `false` the instant that one write happens, so a later change to [tokenResultText]
+   * — the ordinary case, once this has already run once for the current answer — writes nothing
+   * more. Never true after a failed stream: there is nothing to announce at all. */
+  private awaitingTokenResult = false;
 
   readonly canExplain = computed(
     () =>
@@ -524,8 +567,11 @@ export class FocusCardComponent {
 
       if (streaming && !wasStreaming) {
         // A new stream starts. Any "ready" text a previous stream left waiting to clear is now
-        // stale, so its timer goes too.
+        // stale, so its timer goes too — and so does any wait for a token result that stream was
+        // still deciding, so its late answer cannot write over this stream's own "on its way".
         this.clearReadyStatusTimer();
+        this.clearTokenResultWaitTimer();
+        this.awaitingTokenResult = false;
         this.streamAnnouncement.set('The explanation is on its way.');
         // Also the smallest correct place to guard against a missed animationend: if the last
         // answer's landed class never got its own end event — the card sat inside a
@@ -539,20 +585,66 @@ export class FocusCardComponent {
         if (this.explainFailed()) {
           // The stream ended, but it did not succeed. "Ready" would be false, so the element goes
           // quiet instead. See [explainFailed]'s own comment for where the learner reads why.
+          // Nothing is pending to wait for either — a failed stream never sets [awaitingTokenResult].
           this.streamAnnouncement.set('');
           return;
         }
-        this.streamAnnouncement.set('The explanation is ready.');
-        // See [READY_STATUS_MILLIS] for how long this text stays. Cleared on destroy below, so a
-        // card the learner has already left never writes to a signal nobody reads any more.
-        this.readyStatusTimer = setTimeout(() => {
-          this.readyStatusTimer = null;
-          this.streamAnnouncement.set('');
-        }, READY_STATUS_MILLIS);
+        // Issue #139, review round 2. `tokenResultText` may already hold the answer — write the
+        // one, true sentence now — or may still be `''` because the account read has not settled
+        // yet. In the second case this waits, rather than writing "ready" alone immediately: a
+        // status region is read in full on every change, so an immediate "ready" followed by a
+        // second write moments later, once the read settles, would have a screen reader speak
+        // "ready" twice for the one event. The second effect below finishes the wait early if the
+        // result arrives first; [tokenResultWaitTimer] finishes it anyway once patience runs out,
+        // so the paragraph is never silent forever over a read that never returns.
+        const tokenText = this.tokenResultText();
+        if (tokenText !== '') {
+          this.commitReadyStatus(tokenText);
+        } else {
+          this.awaitingTokenResult = true;
+          this.tokenResultWaitTimer = setTimeout(() => {
+            this.tokenResultWaitTimer = null;
+            this.commitReadyStatus('');
+          }, TOKEN_RESULT_WAIT_MILLIS);
+        }
       }
     });
 
-    inject(DestroyRef).onDestroy(() => this.clearReadyStatusTimer());
+    // Issue #139, review round 2. Finishes the wait the effect above starts, the one time
+    // [tokenResultText] arrives before [tokenResultWaitTimer] runs out of patience. Reads only
+    // [tokenResultText], so a change to it while [awaitingTokenResult] is false — the ordinary
+    // case, once the one write for the current answer has already happened — writes nothing.
+    effect(() => {
+      const tokenText = this.tokenResultText();
+      if (!this.awaitingTokenResult || tokenText === '') return;
+      this.clearTokenResultWaitTimer();
+      this.commitReadyStatus(tokenText);
+    });
+
+    inject(DestroyRef).onDestroy(() => {
+      this.clearReadyStatusTimer();
+      this.clearTokenResultWaitTimer();
+    });
+  }
+
+  /**
+   * Writes the status paragraph's one "ready" sentence for the stream that just ended — the only
+   * place either effect above writes it, so the sentence is written once, whichever branch
+   * decides it. [tokenText] is `''` when there is nothing to add, which happens either because
+   * there is genuinely nothing to report or because [TOKEN_RESULT_WAIT_MILLIS] ran out first.
+   */
+  private commitReadyStatus(tokenText: string): void {
+    this.awaitingTokenResult = false;
+    this.streamAnnouncement.set(
+      tokenText === '' ? 'The explanation is ready.' : `The explanation is ready. ${tokenText}`,
+    );
+    // See [READY_STATUS_MILLIS] for how long this text stays. Cleared on destroy, so a card the
+    // learner has already left never writes to a signal nobody reads any more.
+    this.clearReadyStatusTimer();
+    this.readyStatusTimer = setTimeout(() => {
+      this.readyStatusTimer = null;
+      this.streamAnnouncement.set('');
+    }, READY_STATUS_MILLIS);
   }
 
   /**
@@ -593,6 +685,12 @@ export class FocusCardComponent {
     if (this.readyStatusTimer === null) return;
     clearTimeout(this.readyStatusTimer);
     this.readyStatusTimer = null;
+  }
+
+  private clearTokenResultWaitTimer(): void {
+    if (this.tokenResultWaitTimer === null) return;
+    clearTimeout(this.tokenResultWaitTimer);
+    this.tokenResultWaitTimer = null;
   }
 
   /**

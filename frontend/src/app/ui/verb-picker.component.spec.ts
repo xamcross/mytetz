@@ -1,6 +1,20 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { provideHttpClient } from '@angular/common/http';
+import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { Verb } from '../core/models';
+import { AccountStore } from '../core/account.store';
+import { AccountView } from '../core/models';
 import { PickerDismissal, VerbPickerComponent } from './verb-picker.component';
+
+const trialing: AccountView = {
+  email: 'learner@example.com',
+  status: 'TRIALING',
+  trialEndsAtEpochMillis: null,
+  currentPeriodEndsAtEpochMillis: null,
+  allowance: 40,
+  remaining: 36,
+  resetsAtEpochMillis: null,
+};
 
 /**
  * The picker replaces a static row of four buttons. The row was always on screen and was disabled
@@ -18,7 +32,10 @@ describe('VerbPickerComponent', () => {
   let reasons: PickerDismissal[];
 
   beforeEach(async () => {
-    TestBed.configureTestingModule({ imports: [VerbPickerComponent] });
+    TestBed.configureTestingModule({
+      imports: [VerbPickerComponent],
+      providers: [provideHttpClient(), provideHttpClientTesting()],
+    });
     fixture = TestBed.createComponent(VerbPickerComponent);
     chosen = [];
     dismissed = 0;
@@ -209,5 +226,77 @@ describe('VerbPickerComponent', () => {
     fixture.detectChanges();
     expect(root().style.getPropertyValue('--picker-top')).toBe('120px');
     expect(root().style.getPropertyValue('--picker-left')).toBe('40px');
+  });
+
+  /**
+   * Issue #139. The owner asked for a price on every control that can start a generation, so a
+   * learner sees the cost before they press it. "1 token" is the maximum price: a cache hit
+   * spends nothing, but the button cannot know that before the click, so it states the price a
+   * learner might pay.
+   */
+  describe('the token price', () => {
+    it('shows "1 token" on every verb, for a signed-in learner with a live count', () => {
+      TestBed.inject(AccountStore).view.set(trialing);
+      fixture.detectChanges();
+
+      for (const v of [
+        'EXPLAIN',
+        'DIG_DEEPER',
+        'BROADER_PICTURE',
+        'SIDE_VIEW',
+        'VISUALIZE',
+      ] as const) {
+        expect(button(v).textContent).toContain('1' + ' ' + 'token');
+      }
+    });
+
+    it('shows no price for a visitor with no account', () => {
+      TestBed.inject(AccountStore).view.set(null);
+      fixture.detectChanges();
+
+      expect(button('EXPLAIN').textContent).not.toContain('1 token');
+    });
+
+    it('shows no price for a status with no live count', () => {
+      // EXPIRED and NONE carry no true count to spend against — see METERED_STATUSES.
+      TestBed.inject(AccountStore).view.set({ ...trialing, status: 'EXPIRED' });
+      fixture.detectChanges();
+
+      expect(button('EXPLAIN').textContent).not.toContain('1 token');
+    });
+
+    /**
+     * The price is part of the accessible description, and not the name — aria-describedby can
+     * name more than one element, space-separated, and a browser reads each one's text in
+     * order. This helper does the same lookup by hand, so the assertion below does not need a
+     * real browser's own accessible-description computation to prove the fact.
+     */
+    function describedText(el: HTMLElement): string {
+      const ids = (el.getAttribute('aria-describedby') ?? '').split(' ').filter(Boolean);
+      return ids
+        .map((id) => fixture.nativeElement.querySelector(`#${id}`)?.textContent ?? '')
+        .join(' ');
+    }
+
+    it('puts the price in the accessible description, after the caption', () => {
+      TestBed.inject(AccountStore).view.set(trialing);
+      fixture.detectChanges();
+
+      const explain = button('EXPLAIN');
+      expect(explain.getAttribute('aria-describedby')).toBeTruthy();
+      const description = describedText(explain);
+      expect(description).toContain('Plain words');
+      expect(description).toContain('1' + ' ' + 'token');
+    });
+
+    it('leaves the accessible description to the caption alone when there is no price', () => {
+      TestBed.inject(AccountStore).view.set(null);
+      fixture.detectChanges();
+
+      const explain = button('EXPLAIN');
+      const description = describedText(explain);
+      expect(description).toContain('Plain words');
+      expect(description).not.toContain('1 token');
+    });
   });
 });

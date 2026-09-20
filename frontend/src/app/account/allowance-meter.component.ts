@@ -4,8 +4,12 @@ import { AccountStore } from '../core/account.store';
 
 /** The statuses that carry a live count. Every other status — `NONE`, `EXPIRED`, or a status this
  * client does not yet know — shows a subscribe link and no count, because there is nothing true
- * to count for an account with no active allowance. */
-const METERED_STATUSES: ReadonlySet<string> = new Set([
+ * to count for an account with no active allowance.
+ *
+ * Exported so `VerbPickerComponent` and `ReaderPageComponent` read the same rule to decide whether
+ * a control shows its token price. Issue #139: a visitor with no live count has no token to spend,
+ * so it must see no price either — one set of statuses answers both questions. */
+export const METERED_STATUSES: ReadonlySet<string> = new Set([
   'TRIALING',
   'ACTIVE',
   'CANCELLED',
@@ -43,14 +47,24 @@ const METERED_STATUSES: ReadonlySet<string> = new Set([
               [class.allowance-meter__count--tick]="ticked()"
               (animationend)="onCountAnimationEnd($event)"
             >
-              <span aria-hidden="true"
-                >{{ account.remaining }} of {{ account.allowance }} left</span
+              <span aria-hidden="true" class="allowance-meter__count-full"
+                >{{ account.remaining }} of {{ account.allowance }} tokens left</span
+              >
+              <!--
+                Issue #139. "tokens" makes the short form of the header below 768px too wide for
+                a 360px phone: a real run measured the wordmark and the "Account" link overlapping
+                by about 3px. This shorter form carries the same two numbers and the same unit. A
+                screen reader never reads it: it reads the full sentence below. Only the narrow
+                header shows this form. See the CSS below.
+              -->
+              <span aria-hidden="true" class="allowance-meter__count-short"
+                >{{ account.remaining }} / {{ account.allowance }} tokens</span
               >
               <span aria-hidden="true" class="allowance-meter__period">{{
                 ' ' + periodWords(account.status)
               }}</span>
               <span class="mt-sr-only"
-                >{{ account.remaining }} of {{ account.allowance }} left
+                >{{ account.remaining }} of {{ account.allowance }} tokens left
                 {{ periodWords(account.status) }}</span
               >
             </span>
@@ -112,6 +126,12 @@ const METERED_STATUSES: ReadonlySet<string> = new Set([
       .allowance-meter__count {
         font-weight: 700;
         min-width: 0;
+      }
+      /* Issue #139. Hidden everywhere by default — the account page and a header at 768px and
+         above both keep the fuller "N of M tokens left" text. Only the header below 768px swaps
+         to this one; see the @media rule below for why. */
+      .allowance-meter__count-short {
+        display: none;
       }
       /* Animation I. A brief lift and a small scale-up when the count changes — never drawing
          more attention than the answer that just spent it. 160ms and 2px is the whole budget. */
@@ -214,6 +234,21 @@ const METERED_STATUSES: ReadonlySet<string> = new Set([
          */
         :host-context(.bar) .allowance-meter__period {
           display: none;
+        }
+        /*
+         * Issue #139. Naming the unit made even the short form wider — "12 of 40 tokens left" —
+         * and a real run measured the wordmark and the "Account" link overlapping by about 3px at
+         * exactly 360px, where the header shows the wordmark's full text (see the note on
+         * app-shell.component.ts's own 360px rule) at the same width this meter is at its
+         * widest. "12 / 40 tokens" carries the same two numbers and the same unit in less room.
+         * The full "N of M tokens left" text stays for the account page and for 768px and above,
+         * where the row measured with room to spare.
+         */
+        :host-context(.bar) .allowance-meter__count-full {
+          display: none;
+        }
+        :host-context(.bar) .allowance-meter__count-short {
+          display: inline;
         }
       }
     `,

@@ -66,14 +66,29 @@ describe('AllowanceMeterComponent', () => {
 
   const text = (): string => fixture.nativeElement.textContent as string;
 
-  it('the meter shows remaining of allowance', () => {
+  it('the meter shows remaining of allowance, and names the unit', () => {
     store.view.set(active);
     fixture.detectChanges();
 
     // Asserted as one relation, not as two separate `toContain` calls: two separate checks pass
     // just as well against `{{ allowance }} of {{ remaining }}` swapped, because both numbers are
     // still somewhere in the text. Only the joined string proves the order.
-    expect(text()).toContain('9 of 25');
+    //
+    // Issue #139. "9 of 25 left" names no unit — the owner's own words were "9 of 25 what,
+    // bananas?" — so the count now reads "9 of 25 tokens left".
+    expect(text()).toContain('9 of 25 tokens left');
+  });
+
+  /**
+   * Issue #139. `remaining` of 1 keeps the plural "tokens" after the total: the word follows
+   * `allowance`, the total pool, and not `remaining`, the count that is genuinely singular here.
+   * "1 of 40 token left" would misname the pool of 40 as one token.
+   */
+  it('keeps "tokens" after the total even when remaining is 1', () => {
+    store.view.set({ ...active, remaining: 1 });
+    fixture.detectChanges();
+
+    expect(text()).toContain('1 of 25 tokens left');
   });
 
   it('the meter names the trial end in a trial', () => {
@@ -97,7 +112,7 @@ describe('AllowanceMeterComponent', () => {
     const srOnly = fixture.nativeElement.querySelector(
       '.allowance-meter__count .mt-sr-only',
     ) as HTMLElement;
-    expect(srOnly.textContent).toContain('17 of 40 left in your trial');
+    expect(srOnly.textContent).toContain('17 of 40 tokens left in your trial');
   });
 
   it('the meter renders nothing when signed out', () => {

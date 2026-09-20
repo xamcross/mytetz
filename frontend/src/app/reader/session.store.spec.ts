@@ -792,4 +792,180 @@ describe('SessionStore', () => {
     expect(store.isCompleted()).toBe(true);
     expect(store.session()?.status).toBe('COMPLETED');
   });
+
+  /**
+   * Issue #139. The learner sees, after an explanation, whether it spent a token — from the true
+   * `remaining` before and after the account read, never a guess. `recordSpend` records nothing
+   * for a cache hit (`SessionRoutes.kt`), so the client cannot know the price before the answer;
+   * only the count before and after tells the truth.
+   *
+   * Every test here restores the real `AccountStore.load` the outer `beforeEach` spies over, and
+   * drives it through the real `HttpTestingController` instead — see this describe block's own
+   * name. A spy on `load` hid a real defect in this repository before (issue #106's own report),
+   * and it would hide one here too: it cannot prove the store reads the *true* `remaining` the
+   * network actually answers with.
+   */
+  describe('the token result, read from the real AccountStore', () => {
+    beforeEach(() => {
+      loadAccount.mockRestore();
+    });
+
+    /** Answers the pending `GET /api/account` with [remaining], keeping every other field fixed. */
+    function flushAccount(remaining: number): void {
+      http.expectOne('/api/account').flush({
+        email: 'learner@example.com',
+        status: 'TRIALING',
+        trialEndsAtEpochMillis: null,
+        currentPeriodEndsAtEpochMillis: null,
+        allowance: 40,
+        remaining,
+        resetsAtEpochMillis: null,
+      });
+    }
+
+    it('reports a used token when the real account read shows remaining went down by one', async () => {
+      TestBed.inject(AccountStore).view.set({
+        email: 'learner@example.com',
+        status: 'TRIALING',
+        trialEndsAtEpochMillis: null,
+        currentPeriodEndsAtEpochMillis: null,
+        allowance: 40,
+        remaining: 36,
+        resetsAtEpochMillis: null,
+      });
+      script = async function* () {
+        yield delta('The four pillars are…');
+        yield done('k4');
+      };
+
+      await loadSession();
+      const explaining = store.explain(span, 'EXPLAIN');
+      await tick();
+      http.expectOne('/api/sessions/s1').flush(viewAfterExplain);
+      await tick();
+      flushAccount(35);
+      await explaining;
+      // Issue #139: the account read is not awaited by `explain()` itself — see its own KDoc on
+      // why — so `explaining` can resolve before this fire-and-forget read has finished writing
+      // `tokenResult`. One more tick drains it.
+      await tick();
+
+      expect(store.tokenResult()).toEqual({ usedToken: true, remaining: 35 });
+    });
+
+    it('reports no token used when the real account read shows remaining unchanged — a cache hit', async () => {
+      // `recordSpend` returns at once for a cost of zero (`SessionRoutes.kt`), so a cache hit
+      // leaves `remaining` exactly where it was.
+      TestBed.inject(AccountStore).view.set({
+        email: 'learner@example.com',
+        status: 'TRIALING',
+        trialEndsAtEpochMillis: null,
+        currentPeriodEndsAtEpochMillis: null,
+        allowance: 40,
+        remaining: 36,
+        resetsAtEpochMillis: null,
+      });
+      script = async function* () {
+        yield delta('The four pillars are…');
+        yield done('k4');
+      };
+
+      await loadSession();
+      const explaining = store.explain(span, 'EXPLAIN');
+      await tick();
+      http.expectOne('/api/sessions/s1').flush(viewAfterExplain);
+      await tick();
+      flushAccount(36);
+      await explaining;
+      await tick();
+
+      expect(store.tokenResult()).toEqual({ usedToken: false, remaining: 36 });
+    });
+
+    it('shows no token text when the real account read fails', async () => {
+      TestBed.inject(AccountStore).view.set({
+        email: 'learner@example.com',
+        status: 'TRIALING',
+        trialEndsAtEpochMillis: null,
+        currentPeriodEndsAtEpochMillis: null,
+        allowance: 40,
+        remaining: 36,
+        resetsAtEpochMillis: null,
+      });
+      script = async function* () {
+        yield delta('The four pillars are…');
+        yield done('k4');
+      };
+
+      await loadSession();
+      const explaining = store.explain(span, 'EXPLAIN');
+      await tick();
+      http.expectOne('/api/sessions/s1').flush(viewAfterExplain);
+      await tick();
+      // A failed account read must not show a wrong number, and must not show any token text.
+      http.expectOne('/api/account').flush(null, { status: 500, statusText: 'Server Error' });
+      await explaining;
+
+      expect(store.tokenResult()).toBeNull();
+    });
+
+    it('never shows a token result for a failed or refused explanation', async () => {
+      script = async function* (): AsyncGenerator<ExplainEvent> {
+        throw new ExplainStreamError(
+          'TRIAL_EXHAUSTED',
+          "you have used today's allowance",
+          null,
+          false,
+        );
+      };
+
+      await loadSession();
+      const explaining = store.explain(span, 'EXPLAIN');
+      await explaining;
+      flushAccount(0);
+
+      // The refusal still refreshes the account's own count — see the tests above this block —
+      // but the sentence that names a token spent or not is for a successful explanation only.
+      // The present wall or banner already says what happened.
+      expect(store.tokenResult()).toBeNull();
+    });
+
+    it('clears a previous token result the instant the next explain starts', async () => {
+      TestBed.inject(AccountStore).view.set({
+        email: 'learner@example.com',
+        status: 'TRIALING',
+        trialEndsAtEpochMillis: null,
+        currentPeriodEndsAtEpochMillis: null,
+        allowance: 40,
+        remaining: 36,
+        resetsAtEpochMillis: null,
+      });
+      script = async function* () {
+        yield delta('The four pillars are…');
+        yield done('k4');
+      };
+
+      await loadSession();
+      const first = store.explain(span, 'EXPLAIN');
+      await tick();
+      http.expectOne('/api/sessions/s1').flush(viewAfterExplain);
+      await tick();
+      flushAccount(35);
+      await first;
+      await tick();
+      expect(store.tokenResult()).not.toBeNull();
+
+      script = async function* () {
+        yield delta('one more');
+      };
+      const second = store.explain({ text: 'modern', start: 15, end: 21 }, 'DIG_DEEPER');
+
+      // Set synchronously, at the very start of the call — well before this second generation
+      // could possibly have an outcome of its own to report.
+      expect(store.tokenResult()).toBeNull();
+
+      await second;
+      http.expectOne('/api/account').flush(null, { status: 500, statusText: 'Server Error' });
+    });
+  });
 });

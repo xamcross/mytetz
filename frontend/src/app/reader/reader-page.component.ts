@@ -3,9 +3,11 @@ import { toSignal } from '@angular/core/rxjs-interop';
 import { Title } from '@angular/platform-browser';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { map } from 'rxjs';
+import { METERED_STATUSES } from '../account/allowance-meter.component';
 import { WallCode, WallPanelComponent } from '../account/wall-panel.component';
 import { QuizPanelComponent } from '../assess/quiz-panel.component';
 import { SignInPanelComponent } from '../auth/sign-in-panel.component';
+import { AccountStore } from '../core/account.store';
 import { ApiService } from '../core/api.service';
 import { QuizKind, SpanPayload, Verb } from '../core/models';
 import { BreadcrumbComponent } from './breadcrumb.component';
@@ -193,6 +195,7 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
                 [streamingText]="store.streamingText()"
                 [isStreaming]="store.isStreaming()"
                 [explainFailed]="store.error() !== null"
+                [tokenResultText]="tokenResultAnnouncement()"
                 [step]="step()"
                 [verbLabel]="verbLabel()"
                 [topicLabel]="topicLabel()"
@@ -206,17 +209,36 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
                 check on the node in focus.
               -->
               <div class="focus__actions">
+                <!--
+                  Issue #139, review round 2. The price used to sit on a second line under the
+                  label, which gave this pill and the plain one-line pill next to it two
+                  different heights on the same row — a real screenshot found this. The price now
+                  sits after the label, on the pill's own one line, the way .mt-pill already lays
+                  out any two children: the pill's height is therefore the plain, one-line height
+                  it always was, price or no price. aria-label keeps the accessible name "Test me"
+                  fixed, so the price joins the description aria-describedby names and not the
+                  name itself — the same split the verb picker keeps.
+                -->
                 <button
                   type="button"
                   class="mt-pill mt-pill--ghost"
                   data-testid="test-me"
+                  aria-label="Test me"
+                  [attr.aria-describedby]="showTokenPrice() ? 'test-me-price' : null"
                   (click)="testMe()"
                 >
                   Test me
+                  @if (showTokenPrice()) {
+                    <!-- A non-breaking space, so "1" and "token" always wrap together. -->
+                    <span class="reader__action-price" id="test-me-price">1&nbsp;token</span>
+                  }
                 </button>
                 <!-- One control at a time: a completed session offers to start a new one, and an
                      active session offers to end itself. Never both — a learner who has just
-                     completed a session has nothing left here to complete again. -->
+                     completed a session has nothing left here to complete again. Neither carries a
+                     price: completing a session spends nothing, and starting a new session on a
+                     topic this learner already read spends nothing either — its seed is already
+                     stored (see SessionService.create's content-addressed seed lookup). -->
                 @if (store.isCompleted()) {
                   <button
                     type="button"
@@ -237,6 +259,12 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
                   </button>
                 }
               </div>
+              <!--
+                Issue #139. Reserves its own line at every moment, whether or not it holds text, so
+                its own arrival and departure move nothing below it — the focus card's own body
+                sits above this row and is never affected either way.
+              -->
+              <p class="focus__token-result" role="presentation">{{ tokenResultAnnouncement() }}</p>
             }
 
             @if (quizKind(); as kind) {
@@ -256,9 +284,14 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
               type="button"
               class="mt-pill mt-pill--ghost reader__exam"
               data-testid="exam"
+              aria-label="Exam"
+              [attr.aria-describedby]="showTokenPrice() ? 'exam-price' : null"
               (click)="exam()"
             >
               Exam
+              @if (showTokenPrice()) {
+                <span class="reader__action-price" id="exam-price">1&nbsp;token</span>
+              }
             </button>
             <app-trail-rail
               [nodes]="store.tree()"
@@ -326,9 +359,59 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
          clear of the shadow's own 5px, a margin above the 12px the criterion asks for. */
       .focus__actions {
         display: flex;
-        gap: 10px;
+        /* Issue #139, review round 2. 8px, not the 10px this row always had: at 390px, Test me's
+           new price left the row 2.4px over its own 350px width, one real run measured, which
+           wrapped "Mark this session complete" onto a second line — the very row this round
+           keeps to one line and one height. 8px recovers exactly the 2px this rule's own share
+           of the fix needs; the rest comes from the smaller gap the priced pill itself now
+           carries, below. */
+        gap: 8px;
         flex-wrap: wrap;
         margin-top: 20px;
+      }
+      /*
+       * Issue #139, review round 2. The price used to sit on a second line under the label,
+       * which gave Test me one height and the plain, one-line "Mark this session complete" pill
+       * next to it another — a real screenshot found the row with two heights and two centre
+       * lines. The price now sits after the label, on .mt-pill's own one line, so Test me is a
+       * plain one-line pill again, the same height as every pill beside it, price or no price.
+       *
+       * Inherits its colour from the pill it sits inside — --mt-teal on --mt-surface for a ghost
+       * pill (5.47:1), already above the 4.5:1 an AA small text needs, so this rule adds no new
+       * colour token.
+       */
+      .reader__action-price {
+        font-size: 11px;
+        font-weight: 800;
+      }
+      /*
+       * Issue #139, review round 2. .mt-pill's own 6px gap, between Test me's label and its new
+       * price, was measured pushing the row 2.4px past the 350px this row has at 390px — a real
+       * run then wrapped "Mark this session complete" onto a second line, the very defect this
+       * round fixes for the row's own height. :has() scopes a smaller gap to a pill that actually
+       * carries a price, so .mt-pill's own rule stays the same for every other pill in the app.
+       */
+      .focus__actions .mt-pill:has(.reader__action-price) {
+        gap: 4px;
+      }
+      /* Below 480px the two pills of this row need real spare room, and not 2px of it. A run on
+         the CI machine, where the fonts are a little wider, put "Mark this session complete" on
+         a second row at 390px. A side padding of 12px, and not the 16px of .mt-pill, gives the
+         row 16px of spare room. The height of a pill does not change. */
+      @media (max-width: 479px) {
+        .focus__actions .mt-pill {
+          padding-inline: 12px;
+        }
+      }
+      /* Issue #139. One line, reserved whether or not it holds text, so the sentence that names
+         the true result of an action moves nothing below it when it appears or clears. */
+      .focus__token-result {
+        margin: 8px 0 0;
+        min-height: 20px;
+        font-size: 14px;
+        font-weight: 700;
+        line-height: 20px;
+        color: var(--mt-muted);
       }
       .reader__centre {
         max-width: 620px;
@@ -441,7 +524,33 @@ export class ReaderPageComponent {
   private readonly router = inject(Router);
   private readonly titleService = inject(Title);
   private readonly api = inject(ApiService);
+  private readonly account = inject(AccountStore);
   readonly store = inject(SessionStore);
+
+  /** True for a signed-in learner with a live count — see [METERED_STATUSES]. Issue #139: Test me
+   * and Exam both spend a token, so their price shows only where a token could genuinely be
+   * spent. A visitor with no account, or an account with no live count, sees no price. */
+  protected readonly showTokenPrice = computed(() =>
+    METERED_STATUSES.has(this.account.view()?.status ?? ''),
+  );
+
+  /**
+   * The short, visible sentence for the control row: what the last finished explanation truly
+   * spent, from `SessionStore.tokenResult()` — the true `remaining` before and after the account
+   * read, never a guess. `''` shows nothing, and the row's own reserved height keeps that from
+   * moving anything.
+   *
+   * The same string also reaches `FocusCardComponent`, which joins it into the one message a
+   * screen reader hears alongside "The explanation is ready." — see that component's own
+   * `tokenResultText` input.
+   */
+  protected readonly tokenResultAnnouncement = computed<string>(() => {
+    const result = this.store.tokenResult();
+    if (result === null) return '';
+    if (!result.usedToken) return 'No token used. This text existed already.';
+    const word = result.remaining === 1 ? 'token' : 'tokens';
+    return `1 token used. ${result.remaining} ${word} left.`;
+  });
 
   /**
    * Read reactively rather than from `route.snapshot`. Angular reuses a component instance when only
