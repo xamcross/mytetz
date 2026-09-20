@@ -9,7 +9,7 @@ statement below names a file and a line.
 |---|---|---|---|---|
 | `special-relativity` | "how space and time behave for objects moving at constant speeds, especially near the speed of light" | "how space and time behave for objects moving at a constant velocity, especially near the speed of light" | 541 | 545 |
 | `microbiology` | "the scientific study of living things too small to see with the naked eye, such as bacteria, viruses, fungi, and single-celled organisms called protozoa" | "the scientific study of organisms and agents too small to see with the naked eye, such as bacteria, fungi, single-celled organisms called protozoa, and viruses" | 518 | 525 |
-| `historical-linguistics` | "Linguists compare related languages, like French, Spanish, and Italian, to reconstruct earlier "parent" languages, such as Latin, that are no longer spoken." | "Linguists compare related languages to reconstruct an earlier "parent" language that left no texts, such as Proto-Indo-European. French, Spanish and Italian let them test the method, because their parent, Latin, is known from texts." | 564 | 640 |
+| `historical-linguistics` | "Linguists compare related languages, like French, Spanish, and Italian, to reconstruct earlier "parent" languages, such as Latin, that are no longer spoken." | "Linguists compare related languages to reconstruct a lost "parent" language, such as Proto-Indo-European, and test the method on Latin, the known parent of French, Spanish, and Italian." | 564 | 593 |
 
 The old text and the char counts come from a read-only `GET` of the live page on 2026-09-20:
 `https://mytetz.com/topics/special-relativity`, `/topics/microbiology`,
