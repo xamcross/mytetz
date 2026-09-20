@@ -2562,3 +2562,74 @@ for (const { label, view } of HEADER_CENTRE_CASES) {
     });
   }
 }
+
+/**
+ * Issue #146. `.catalog__intro` and `.catalog__more` shared one rule with `max-width: 62ch`,
+ * and `.catalog__search` had its own `max-width: 520px`. Each rule stopped that block short of
+ * the tile grid. The owner asked for one width for every block of the column: the introduction,
+ * the search field, the pill row, the grid and the text below the grid.
+ */
+const DASHBOARD_WIDTH_TOPICS: TopicSummary[] = [
+  {
+    slug: 'quantum-physics',
+    title: 'Quantum Physics',
+    category: 'Physics',
+    summary: 'Small things.',
+  },
+  {
+    slug: 'cell-biology',
+    title: 'Cell Biology',
+    category: 'Biology',
+    summary: 'The unit of life.',
+  },
+  {
+    slug: 'ancient-rome',
+    title: 'Ancient Rome',
+    category: 'History',
+    summary: 'Republic to empire.',
+  },
+];
+
+test.describe('every block of the column has the width of the tile grid', () => {
+  for (const width of [390, 768, 1360]) {
+    test(`the introduction, the search field and the text below the grid match the grid at ${width}px`, async ({
+      page,
+    }) => {
+      await stubCatalogueAndSession(page);
+      // Registered after the shared stub above, so this handler wins: Playwright runs the most
+      // recently registered route first. Three topics give the grid its full column count.
+      await page.route('**/api/catalog/topics*', (route) =>
+        route.fulfill({ json: DASHBOARD_WIDTH_TOPICS }),
+      );
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto('/');
+      await page.locator('.topic__tile').first().waitFor();
+
+      const grid = (await page.locator('.topics').boundingBox())!;
+      const boxes = {
+        'the introduction': (await page.locator('.catalog__intro').boundingBox())!,
+        'the search field': (await page.locator('.catalog__search').boundingBox())!,
+        'the text below the grid': (await page.locator('.catalog__more').boundingBox())!,
+      };
+
+      for (const [name, box] of Object.entries(boxes)) {
+        expect(
+          Math.abs(box.x - grid.x),
+          `${name} shares the grid's left edge at ${width}px`,
+        ).toBeLessThanOrEqual(1);
+        expect(
+          Math.abs(box.x + box.width - (grid.x + grid.width)),
+          `${name} shares the grid's right edge at ${width}px`,
+        ).toBeLessThanOrEqual(1);
+      }
+
+      const doc = await page.evaluate(() => ({
+        scroll: document.documentElement.scrollWidth,
+        client: document.documentElement.clientWidth,
+      }));
+      expect(doc.scroll, `the page does not scroll sideways at ${width}px`).toBeLessThanOrEqual(
+        doc.client,
+      );
+    });
+  }
+});
