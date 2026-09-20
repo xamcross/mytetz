@@ -42,7 +42,10 @@ for (const route of ROUTES) {
 
   test(`${route} sets its own tab title`, async ({ page }) => {
     await page.goto(route);
-    expect(await page.title()).toBe(TITLES[route]);
+    // `toHaveTitle` polls until the title matches or the timeout ends. A one-time `page.title()`
+    // read can run before the lazy route finishes activating and sets the title, which is a race,
+    // not a flake to paper over with a retry or a sleep — see this file's own history.
+    await expect(page).toHaveTitle(TITLES[route]);
   });
 
   test(`${route} carries no owner-text marker`, async ({ page }) => {

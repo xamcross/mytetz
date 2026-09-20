@@ -12,9 +12,10 @@ import { Component } from '@angular/core';
  * forbids inventing anything more.
  *
  * The page does not carry a "Represented by", a "Register entry" or a "VAT identification number"
- * section. A section that only says "mytetz.com discloses none of this" tells a reader nothing;
- * the closing note below names the gap instead. `docs/legal/README.md`'s gap list still records
- * what the law of some countries asks for.
+ * section. A section that only says "mytetz.com discloses none of this" tells a reader nothing.
+ * `docs/legal/README.md`'s gap list records what the law of some countries asks for beyond this
+ * page; that note is for the next person who edits this file, and must never appear on the page
+ * itself — a visitor reads this page, not the gap list (review round 3, instruction R3).
  */
 @Component({
   selector: 'app-imprint-page',
@@ -43,11 +44,6 @@ import { Component } from '@angular/core';
           <a href="mailto:support@mytetz.com">support&#64;mytetz.com</a>.
         </p>
       </section>
-
-      <p class="legal-page__meta">
-        This page names no representative, no commercial register entry and no VAT identification
-        number. The owner decides whether to add this information later.
-      </p>
     </main>
   `,
   styles: [

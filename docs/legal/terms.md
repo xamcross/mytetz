@@ -8,9 +8,8 @@ means for you.
 
 mytetz.com ("mytetz") is a web app that explains a topic in short, plain text. You
 pick a topic and read it. A highlight on any phrase asks a language model to write
-more detail. A person reviews the seed text of every topic before mytetz publishes
-it. A model-written explanation can still hold an error. It is not professional,
-medical, legal or financial advice. Do not rely on it as one.
+more detail. A model-written explanation can still hold an error. It is not
+professional, medical, legal or financial advice. Do not rely on it as one.
 
 You must be at least 16 years old to use mytetz. A lower age may apply, if your own
 country's law sets one for a child's own consent, down to a floor of 13 years.
@@ -59,7 +58,7 @@ with other learners, and holds no personal data, so it can stay on the site afte
 your account is gone. In the same way, a phrase you highlight, and the
 explanation mytetz writes for it, can stay visible to other visitors after you
 delete your account, including a visitor who has never signed in. You get no
-exclusive right in an explanation or in a phrase you highlight; mytetz may show
+exclusive right in an explanation or in a phrase you highlight. mytetz may show
 each explanation to other learners and to the public.
 
 Deleting your account does not cancel a paid subscription. Cancel a subscription

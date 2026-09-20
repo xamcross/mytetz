@@ -88,8 +88,9 @@ import { RouterLink } from '@angular/router';
             charge or a duplicate grant.
           </li>
           <li>
-            A visitor with no account: only the <code>mytetz_pid</code> cookie value. mytetz stores
-            no further data under this id until you sign in.
+            A visitor with no account: the <code>mytetz_pid</code> cookie value, and, once that
+            visitor starts a session, a learning session and an allowance counter under that same
+            id. See "How long mytetz keeps data" below for how long each one lasts.
           </li>
         </ul>
       </section>
@@ -144,44 +145,24 @@ import { RouterLink } from '@angular/router';
 
       <section>
         <h2>Transfers outside the EU</h2>
-        <p>
-          Some of the companies above are established outside the European Economic Area. mytetz
-          read each one's own privacy page on 2026-09-20 to confirm this:
-        </p>
         <ul>
+          <li>mytetz's own server and database run in Frankfurt, in the EU.</li>
+          <li>A highlighted phrase reaches Anthropic, a company in the United States.</li>
           <li>
-            Anthropic: the United States. Anthropic Ireland Limited, in Ireland, serves an EU user
-            of Anthropic's own service.
+            Your email address reaches Resend (Plus Five Five, Inc., United States) for a magic-link
+            email, and Freemius (United States) for a checkout or the customer portal.
           </li>
+          <li>Every request passes Cloudflare, a company in the United States.</li>
           <li>
-            Google: Google Ireland Limited, in Ireland, is the controller for a user in the EEA or
-            in Switzerland.
-          </li>
-          <li>
-            Cloudflare: the United States (Cloudflare, Inc.). Cloudflare's own policy names the
-            EU-U.S. Data Privacy Framework and standard contractual clauses as its transfer
-            safeguards.
-          </li>
-          <li>Freemius: the United States (Freemius Inc.).</li>
-          <li>
-            Resend: mytetz could not confirm Resend's own country of establishment from its privacy
-            policy. That policy states that data may reach the United States.
-          </li>
-          <li>
-            fly.io: mytetz could not confirm fly.io's own country of establishment from its privacy
-            policy. Your own data, in mytetz's own deployment, is processed on a machine in
-            Frankfurt, in the EU.
-          </li>
-          <li>
-            MongoDB Atlas: mytetz could not confirm the country where MongoDB, Inc. is established,
-            from its own privacy policy. Your own data, in mytetz's own deployment, is stored on a
-            database in Frankfurt, in the EU.
+            fly.io and MongoDB are companies of the United States that run mytetz's own server and
+            database, in Frankfurt.
           </li>
         </ul>
         <p>
-          mytetz has not independently confirmed that the safeguard each company states on its own
-          page applies to mytetz's own agreement with that company. Write to
-          <a href="mailto:support@mytetz.com">support@mytetz.com</a> for the details of a specific
+          The GDPR asks for a safeguard for a transfer like this, for example the EU-U.S. Data
+          Privacy Framework or standard contractual clauses. Cloudflare's own policy names both of
+          these as its own safeguards. Write to
+          <a href="mailto:support@mytetz.com">support@mytetz.com</a> for the safeguard of a specific
           transfer.
         </p>
       </section>
@@ -237,8 +218,8 @@ import { RouterLink } from '@angular/router';
           </li>
         </ul>
         <p>
-          Your IP address can also appear once in a technical log line,
-          <code>TRIAL_CAP_REACHED</code>, when your address reaches the trial cap.
+          Your IP address can also appear once in a technical log line, when your address reaches
+          the trial cap.
         </p>
       </section>
 
@@ -246,10 +227,13 @@ import { RouterLink } from '@angular/router';
         <h2>How long mytetz keeps data</h2>
         <p>
           A sign-in session lasts 30 days and slides forward each time you use the site. A billing
-          event lasts 90 days. mytetz may remove an old, unread explanation after 90 days or more;
-          this does not affect your own data, because an explanation holds no personal data. mytetz
-          keeps your account until you delete it. The code holds no rule that deletes an account by
-          itself.
+          event lasts 90 days. mytetz may remove an old, unread explanation after 90 days or more.
+          This does not affect your own data, because an explanation holds no personal data. A
+          learning session started with no account lasts 90 days from its last activity, then mytetz
+          removes it automatically. A learning session moves to your account when you sign in, and
+          it then lasts until you delete your account. An allowance counter resets automatically
+          each day, whether or not you have an account. mytetz keeps your account until you delete
+          it. mytetz has no rule that deletes an inactive account.
         </p>
       </section>
 

@@ -62,8 +62,20 @@ frontend and the backend for "analytics", "gtag", "pixel", "doubleclick", "hotja
 
 ## 4. Retention
 
+**Round 3 correction.** An earlier draft of this file, and of the privacy text, stated that
+"a visitor with no account" has only the `mytetz_pid` cookie stored, and "no further data ...
+until you sign in." That was false. The two rows below name what the code actually does. This was
+also a gap in this fact table: every collection keyed by a `principalId` — `sessions` and
+`principals` — needed its own row, and only `sessions` (for a signed-in learner) had one before
+this correction.
+
 | Store | Rule | Source |
 | --- | --- | --- |
+| A learning session for a visitor with no account (an `anon:` principal) | Gets an expiry 90 days ahead of its creation (`ANONYMOUS_TTL_MILLIS`), removed by the `session_ttl` TTL index the instant that time passes. A signed-in learner's own session carries no such field. | `backend/api/src/main/kotlin/com/mytetz/api/SessionRoutes.kt:480-486` (`sessions.create(..., anonymous = user == null)`); `backend/session/src/main/kotlin/com/mytetz/session/SessionService.kt:287-336,918`; `backend/session/src/main/kotlin/com/mytetz/session/SessionRepository.kt:42-53` |
+| A learning session that a sign-in claims | `reassignPrincipal` moves the session onto the new `user:` principal and removes its `expiresAt` field on every session moved, so from that moment it is kept until the account itself is deleted, not reaped at 90 days. | `backend/session/src/main/kotlin/com/mytetz/session/SessionRepository.kt:143-163` |
+| An allowance counter (the `principals` collection), for a visitor with no account or a signed-in learner alike | Carries a `window_ttl` index that expires it the instant its stored window ends — one day (`86_400_000` ms), by default. It is not a 90-day store; it resets on this short cycle whether or not the caller has signed in. | `backend/quota/src/main/kotlin/com/mytetz/quota/QuotaRepository.kt:19-42`; `backend/quota/src/main/kotlin/com/mytetz/quota/QuotaConfig.kt:8` |
+| A quiz attempt | Requires a sign-in; there is no anonymous quiz attempt to name here. `POST /api/quizzes` and the answer route both refuse an anonymous caller with `SIGN_IN_REQUIRED`. | `backend/api/src/main/kotlin/com/mytetz/api/QuizRoutes.kt:121,196` |
+| A topic request (`POST /api/topic-requests`) | Not a personal-data store: the document holds only the requested text and a count, keyed by the normalised text itself, never by a principal or an IP address. Not named in the privacy text for this reason. | `backend/catalog/src/main/kotlin/com/mytetz/catalog/TopicRequestRepository.kt:22-29` |
 | Sign-in session | The server treats a session as expired 30 days after its last use, and slides that time forward on use, at most once an hour. | `backend/account/src/main/kotlin/com/mytetz/account/AccountService.kt:118-130,178-182` |
 | Magic-link token | Expires 15 minutes after it is sent, and is deleted the instant it is used. | `backend/account/src/main/kotlin/com/mytetz/account/MagicLinkService.kt:72`; `backend/account/src/main/kotlin/com/mytetz/account/AccountRepository.kt:97-117` |
 | Billing event record | Expires 90 days after it is received. | `backend/billing/src/main/kotlin/com/mytetz/billing/BillingRepository.kt:37,50-53` |
@@ -124,9 +136,16 @@ the gap list below.
 | Google | Google Ireland Limited, Gordon House, Barrow Street, Dublin 4, Ireland, is the controller for a user in the EEA or Switzerland. | `https://policies.google.com/privacy` |
 | Cloudflare | Cloudflare, Inc., 101 Townsend St, San Francisco, CA 94107 (United States), with subsidiaries elsewhere. States it relies on the EU-U.S. Data Privacy Framework, the Swiss-U.S. DPF, the UK Extension, and standard contractual clauses for a transfer from the EU, UK or Switzerland. | `https://www.cloudflare.com/privacypolicy/` |
 | Freemius | Freemius Inc., 4023 Kennett Pike, Wilmington, 19807 DE (United States). | `https://freemius.com/privacy/` |
-| Resend | Operated by Plus Five Five, Inc. The policy names transfers to the United States but does not state the company's own country of establishment. Not confirmed. | `https://resend.com/legal/privacy-policy` |
-| fly.io | Not confirmed. The privacy statement names no operating entity and no country of incorporation; it states only that "information that we collect will be stored and processed in the United States," which is a statement about fly.io's own data about its own customers, not about where mytetz's own machine runs (Frankfurt — see `docs/deploy.md:16-26`). | `https://fly.io/legal/privacy-policy/` |
-| MongoDB Atlas | The policy names "MongoDB, Inc." as the controller, with a U.S. phone number and reference to U.S. arbitration rules, but does not explicitly state a country of establishment on this page. Not fully confirmed. | `https://www.mongodb.com/legal/privacy/privacy-policy` |
+| Resend | Privacy page: operated by Plus Five Five, Inc.; that page did not state a country. Terms page, read by the main session on 2026-09-20: "Plus Five Five, Inc.," under the law of the State of California — confirms the United States. | `https://resend.com/legal/privacy-policy`; `https://resend.com/legal/terms-of-service` |
+| fly.io | Privacy page: named no operating entity and no country. Terms page, read by the main session on 2026-09-20: "Fly.io, Inc.," with an address in San Francisco and the law of the State of California — confirms the United States. | `https://fly.io/legal/privacy-policy/`; `https://fly.io/legal/terms-of-service/` |
+| MongoDB Atlas | Privacy page: names "MongoDB, Inc." as controller, with no country stated explicitly. Terms page, read by the main session on 2026-09-20: for a customer outside the Americas, Brazil and Japan, the counterparty is "MongoDB Limited"; the same page gives "MongoDB, Inc." an address in New York. mytetz simplifies this in the public text to "a company of the United States," since MongoDB, Inc. (New York) is the entity the page names most prominently, though the actual EU counterparty may be MongoDB Limited, whose own country this project has not confirmed. | `https://www.mongodb.com/legal/privacy/privacy-policy`; `https://www.mongodb.com/legal/terms-and-conditions/cloud` |
+
+The public privacy text (`docs/legal/privacy.md`, "Transfers outside the EU") states
+only the data flow and each recipient's country, in a form a learner can read.
+Round 2's longer, per-company "could not confirm" wording moved out of the public
+text in round 3 (instruction R2) — that wording, and the fact that mytetz has not
+independently confirmed which safeguard governs its own agreement with each
+recipient, now live only here and in the gap list below.
 
 ## Official sources read for this work
 
@@ -148,6 +167,9 @@ the gap list below.
 | `https://resend.com/legal/privacy-policy` | 2026-09-20 | Names the operating entity, Plus Five Five, Inc.; does not state its country. See section 6a. |
 | `https://fly.io/legal/privacy-policy/` | 2026-09-20 | Names no operating entity and no country. See section 6a. |
 | `https://www.mongodb.com/legal/privacy/privacy-policy` | 2026-09-20 | Names "MongoDB, Inc." as controller; does not explicitly state a country on this page. See section 6a. |
+| `https://fly.io/legal/terms-of-service/` | 2026-09-20, read by the main session | Names "Fly.io, Inc.," an address in San Francisco, and the law of the State of California. See section 6a. |
+| `https://resend.com/legal/terms-of-service` | 2026-09-20, read by the main session | Names "Plus Five Five, Inc." and the law of the State of California. See section 6a. |
+| `https://www.mongodb.com/legal/terms-and-conditions/cloud` | 2026-09-20, read by the main session | States that "MongoDB Limited" is the counterparty for a customer outside the Americas, Brazil and Japan, and gives "MongoDB, Inc." an address in New York. See section 6a. |
 
 ### A source this work could not read in full
 

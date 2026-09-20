@@ -15,10 +15,3 @@ Email: support@mytetz.com
 
 mytetz.com is responsible for the content of this website. Contact:
 support@mytetz.com.
-
----
-
-This page names no representative, no commercial register entry and no VAT
-identification number. See the gap list in `docs/legal/README.md` for what the
-law of some countries asks for beyond this. The owner decides whether to add
-this information later.

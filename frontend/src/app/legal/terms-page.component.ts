@@ -25,9 +25,8 @@ import { RouterLink } from '@angular/router';
         <p>
           mytetz.com ("mytetz") is a web app that explains a topic in short, plain text. You pick a
           topic and read it. A highlight on any phrase asks a language model to write more detail. A
-          person reviews the seed text of every topic before mytetz publishes it. A model-written
-          explanation can still hold an error. It is not professional, medical, legal or financial
-          advice. Do not rely on it as one.
+          model-written explanation can still hold an error. It is not professional, medical, legal
+          or financial advice. Do not rely on it as one.
         </p>
         <p>
           You must be at least 16 years old to use mytetz. A lower age may apply, if your own
@@ -86,7 +85,7 @@ import { RouterLink } from '@angular/router';
           gone. In the same way, a phrase you highlight, and the explanation mytetz writes for it,
           can stay visible to other visitors after you delete your account, including a visitor who
           has never signed in. You get no exclusive right in an explanation or in a phrase you
-          highlight; mytetz may show each explanation to other learners and to the public.
+          highlight. mytetz may show each explanation to other learners and to the public.
         </p>
         <p>
           Deleting your account does not cancel a paid subscription. Cancel a subscription first,
