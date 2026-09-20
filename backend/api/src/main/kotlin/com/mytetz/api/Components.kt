@@ -58,14 +58,14 @@ private const val COMMONS_TIMEOUT_MILLIS = 3_000L
 /** `ExplanationGraph`'s own no-op default for [CommonsLookup], named here so [Components] can hand
  * it back explicitly when [Components.commonsImagesOn] is false, rather than leaving a reader to
  * check `ExplanationGraph`'s constructor to know what a switched-off deployment does. */
-private val NO_COMMONS_LOOKUP: CommonsLookup = { _, _ -> null }
+private val NO_COMMONS_LOOKUP: CommonsLookup = { _, _, _ -> null }
 
 /** Adapts [client] to the [CommonsLookup] port with a lambda, on the model of
  * `Reconciliation.reconcile`'s own `fetchState` parameter. A named top-level function, not an
  * inline lambda, because the Kotlin compiler cannot always infer a suspend function type across an
  * `if`/`?:` branch with no other type hint — see the call site in [Components.commonsLookup]. */
 private fun realCommonsLookup(client: CommonsClient): CommonsLookup =
-    { span, ancestors -> client.findImage(span, ancestors) }
+    { span, ancestors, imageSearchTerms -> client.findImage(span, ancestors, imageSearchTerms) }
 
 /**
  * The ERROR token a failed eviction run is logged under. [Components.bootstrap]'s own guard
