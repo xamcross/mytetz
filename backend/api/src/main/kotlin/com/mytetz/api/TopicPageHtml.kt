@@ -165,13 +165,17 @@ internal fun BODY.siteHeaderBar() {
     header(classes = "bar") {
         div(classes = "bar__left") {
             a(href = "/", classes = "bar__mark") {
+                attributes["aria-label"] = "mytetz"
                 svg(classes = "bar__mark-icon") {
                     attributes["viewBox"] = "0 0 32 32"
                     attributes["aria-hidden"] = "true"
                     attributes["focusable"] = "false"
                     unsafe { +LOGO_MARK_INNER_SVG }
                 }
-                +"mytetz"
+                // Issue #133's own rule on the application mark: the text goes out of view below
+                // 360px, and the link's own aria-label keeps its name for a screen reader at
+                // every width. See guides.css's own `.bar__mark-text` rule.
+                span(classes = "bar__mark-text") { +"mytetz" }
             }
             nav(classes = "bar__nav") {
                 attributes["aria-label"] = "Main"
