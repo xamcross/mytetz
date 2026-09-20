@@ -84,8 +84,17 @@ internal const val SITE_URL = "https://mytetz.com"
  * stylesheet for that reason. A new version is a new URL, so no cache holds it.
  * `StylesheetVersionTest` fails, and prints the new value, when the file changes and this value
  * does not. */
-internal const val GUIDES_STYLESHEET_VERSION = "e3b8aca600"
+internal const val GUIDES_STYLESHEET_VERSION = "7800143224"
 internal const val GUIDES_STYLESHEET = "/guides/guides.css?v=$GUIDES_STYLESHEET_VERSION"
+
+/** The two external scripts of this layout, each with the version of its file in the URL, for the
+ * same reason as [GUIDES_STYLESHEET]: each file is cached for a day. The start button ships
+ * disabled and `topic-start.js` enables it, so new markup with an old cached script would leave
+ * the button disabled. `StylesheetVersionTest` guards the two values too. */
+internal const val SITE_HEADER_SCRIPT_VERSION = "ae21c569de"
+internal const val SITE_HEADER_SCRIPT = "/site-header.js?v=$SITE_HEADER_SCRIPT_VERSION"
+internal const val TOPIC_START_SCRIPT_VERSION = "539de9d1e8"
+internal const val TOPIC_START_SCRIPT = "/topic-start.js?v=$TOPIC_START_SCRIPT_VERSION"
 
 /**
  * The head tags every page of this layout shares: the character set, the viewport, the page
@@ -134,7 +143,7 @@ internal fun HEAD.commonHeadTags(
     // of this layout. External and deferred, never inline: see site-header.js's own header
     // comment for the full rule set. Placed in commonHeadTags, and not in siteHeaderBar() itself,
     // so it loads once per page and not once per call of the header function.
-    script(src = "/site-header.js") { attributes["defer"] = "defer" }
+    script(src = SITE_HEADER_SCRIPT) { attributes["defer"] = "defer" }
 }
 
 /**
@@ -279,7 +288,7 @@ fun HTML.topicPageHtml(view: TopicPageView) {
         // The one script this page loads for real behaviour, and the only one that is not the
         // JSON-LD block above. External and deferred: no inline script, so no second `unsafe { }`
         // use anywhere on this page.
-        script(src = "/topic-start.js") { attributes["defer"] = "defer" }
+        script(src = TOPIC_START_SCRIPT) { attributes["defer"] = "defer" }
     }
     body {
         siteHeaderBar()

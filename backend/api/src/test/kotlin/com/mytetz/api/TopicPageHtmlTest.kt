@@ -335,7 +335,8 @@ class TopicPageHtmlTest {
     fun `the page loads exactly one external script, and exactly one other script, the JSON-LD one`() {
         val html = render(view())
 
-        val scriptSrcCount = Regex("""<script src="/topic-start\.js" defer[^>]*></script>""").findAll(html).count()
+        val scriptSrcCount =
+            Regex("<script src=\"" + Regex.escape(TOPIC_START_SCRIPT) + "\" defer[^>]*></script>").findAll(html).count()
         assertEquals(1, scriptSrcCount, "expected exactly one topic-start.js script tag: $html")
 
         val totalScriptTags = Regex("<script[ >]").findAll(html).count()
