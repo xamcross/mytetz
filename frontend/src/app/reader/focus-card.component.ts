@@ -20,7 +20,7 @@ import {
   VerbPickerComponent,
 } from '../ui/verb-picker.component';
 import { MediaRendererComponent } from './media-renderer.component';
-import { rootTextMatchesBody, selectionToSpan } from './selection';
+import { offsetsOfRange, rootTextMatchesBody, selectionToSpan } from './selection';
 
 /**
  * Takes an element out of flow, at the exact place it already occupies, without moving it.
@@ -45,6 +45,35 @@ export function freezeOutOfFlow(el: HTMLElement): void {
   el.style.top = `${top}px`;
   el.style.left = `${left}px`;
   el.style.width = `${width}px`;
+}
+
+/**
+ * The DOM point — a `Text` node and an offset inside it — that holds character `offset` of
+ * `root.textContent`. The inverse of `selection.ts`'s own `offsetOf`, which goes the other way.
+ *
+ * `offsetOf` has a Range-based shortcut for its own direction; the way back has none, since a
+ * character offset alone names no node. Only a `Text` node actually holds characters, so this
+ * walks every `Text` node in tree order and adds up their lengths until `offset` falls inside
+ * one. An offset that lands exactly on the boundary between two `Text` nodes resolves to the end
+ * of the first one — an ordinary `Range`, and visually identical to the other of the two equal
+ * boundary points a real browser would also accept there.
+ *
+ * Returns `null` only when `root` holds no `Text` node at all, so no point exists to return. A
+ * span `snapToWholeWords` produced never asks for such a point, since a real word run always sits
+ * inside a real character; the check is here so this function's own type stays honest.
+ */
+function pointAtOffset(root: HTMLElement, offset: number): { node: Text; offset: number } | null {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let remaining = offset;
+  for (
+    let node = walker.nextNode() as Text | null;
+    node !== null;
+    node = walker.nextNode() as Text | null
+  ) {
+    if (remaining <= node.data.length) return { node, offset: remaining };
+    remaining -= node.data.length;
+  }
+  return null;
 }
 
 /**
@@ -700,6 +729,20 @@ export class FocusCardComponent {
    * ends a click rather than a drag — so the count is checked rather than the range assumed.
    * `selectionToSpan` returns `null` for a collapsed, whitespace-only, or escaping selection, and
    * all of those land in the same place: no span, picker closed.
+   *
+   * Issue #169. `selectionToSpan` may return a span wider than what the learner actually dragged
+   * over — a drag that starts or ends inside a word now grows to that word's own edge. The
+   * learner must see the same phrase the picker and the request are about, so this also moves the
+   * browser's own selection out to the grown span, through [snapVisibleSelection]. That call is
+   * safe from a loop: this method runs only from the `mouseup`/`touchend` bindings on the
+   * template above, never from a `selectionchange` listener, so a selection change this method
+   * itself makes can never call this method again.
+   *
+   * Review correction 3. [snapVisibleSelection] only runs when the span's own offsets differ from
+   * the learner's own drag — a drag already on word edges is left untouched. A touch screen draws
+   * its own selection handles on the native selection, and `removeAllRanges`/`addRange` would
+   * replace them with a fresh pair even when nothing about the selection actually changes, which
+   * reads as the handles jumping under the learner's finger for no reason.
    */
   onSelectionChanged(): void {
     const root = this.bodyRef().nativeElement;
@@ -729,7 +772,49 @@ export class FocusCardComponent {
     const range = selection.getRangeAt(0);
     const span = selectionToSpan(root, range);
     this.selectedSpan.set(span);
-    this.anchor.set(span === null ? null : this.anchorFor(range));
+    if (span === null) {
+      this.anchor.set(null);
+      return;
+    }
+
+    const dragOffsets = offsetsOfRange(root, range);
+    const alreadyGrown = dragOffsets.start === span.start && dragOffsets.end === span.end;
+    const grownRange = alreadyGrown ? range : this.snapVisibleSelection(root, selection, span);
+    // The anchor is measured against the grown range, not the learner's own drag, so the picker
+    // opens under the phrase now on screen — the same phrase, whole words, that the lead line and
+    // the request both hold. `grownRange` is only `null` when `root` holds no text node at all, a
+    // state a real span never actually reaches; `range` is the harmless fallback for that case.
+    this.anchor.set(this.anchorFor(grownRange ?? range));
+  }
+
+  /**
+   * Moves the browser's own selection to cover exactly `span`, so the highlight on screen shows
+   * the whole words the picker and the request are about, and not the learner's own, possibly
+   * short or long, drag.
+   *
+   * The caller only reaches this when `span`'s own offsets differ from the learner's own drag —
+   * see [onSelectionChanged]'s own comment on why an unchanged drag skips this call entirely.
+   *
+   * [pointAtOffset] is the one way back from a character offset to a DOM point: it is the inverse
+   * of `selection.ts`'s own `offsetOf`, which goes the other way. Returns the new `Range` so the
+   * caller can measure the picker's anchor against it, or `null` when `root` holds no text node —
+   * see [pointAtOffset]'s own comment for when that happens.
+   */
+  private snapVisibleSelection(
+    root: HTMLElement,
+    selection: Selection,
+    span: SpanPayload,
+  ): Range | null {
+    const start = pointAtOffset(root, span.start);
+    const end = pointAtOffset(root, span.end);
+    if (start === null || end === null) return null;
+
+    const range = document.createRange();
+    range.setStart(start.node, start.offset);
+    range.setEnd(end.node, end.offset);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    return range;
   }
 
   /**
