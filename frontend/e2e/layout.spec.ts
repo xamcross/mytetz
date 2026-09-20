@@ -1,5 +1,6 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Locator, type Page } from '@playwright/test';
 import type {
+  AccountView,
   QuizResultView,
   QuizTemplateView,
   SessionView,
@@ -1621,49 +1622,87 @@ test('the header fits on one line for a signed-in learner at 390px and 400px, wi
  * issue #106 added `flex-wrap: wrap` to `.allowance-meter` so the account card's own meter could
  * wrap at a phone width. That rule reached the header too, because it carried no
  * `:host-context(.bar)` guard: at 768px, 772px, 776px, 780px and 800px, the header's own meter
- * wrapped onto two lines, 34px tall, with the detail text below the count. `.bar
- * .allowance-meter__detail` only hides below 768px, so a tablet at exactly 768px is the first
- * width where the detail shows again, right next to the count, and the header must keep that
- * pair on one line the same way it always did.
+ * wrapped onto two lines, 34px tall, with the detail text below the count.
  *
- * The count and the detail sharing one `y` position is the proof of one line: two elements laid
- * out on a wrapped, second row would each report a different, lower `y`.
+ * Updated by a review of issue #133: the detail now hides inside the header below 1024px, not
+ * only below 768px (see the CSS comment in `allowance-meter.component.ts` for the real cause
+ * this review found). The old assertion — `countBox.y` equal to `detailBox.y` — no longer applies
+ * at 768px and 800px, because the detail is hidden there and has no box a real browser reports.
+ * This test now asserts, at those two widths, that the detail stays hidden and the meter itself
+ * stays one line tall, well under the 34px a wrapped, two-line meter once measured; at 1024px it
+ * keeps the original assertion, because the detail shows again there and the two must still
+ * share one line — two elements on a wrapped, second row would each report a different, lower
+ * `y`.
  */
-test('the header meter stays on one line at 768px, 800px and 1024px, and does not wrap', async ({
+test('the header meter stays one line high at 768px and 800px, and shares one line with the detail at 1024px', async ({
   page,
 }) => {
   await stubCatalogueAndSession(page);
   await stubAccount(page, accountView());
 
-  for (const width of [768, 800, 1024]) {
+  for (const width of [768, 800]) {
     await page.setViewportSize({ width, height: 900 });
     await page.goto('/');
     await page.locator('.topic__tile').first().waitFor();
 
     const count = page.locator('header.bar .allowance-meter__count');
     const detail = page.locator('header.bar .allowance-meter__detail');
-    await expect(count).toBeVisible();
-    await expect(detail).toBeVisible();
+    const meter = page.locator('header.bar app-allowance-meter');
+    await expect(count, `the count is visible at ${width}px`).toBeVisible();
+    await expect(
+      detail,
+      `the detail stays hidden at ${width}px, below the 1024px this review sets`,
+    ).toBeHidden();
 
     const bar = (await page.locator('.bar').boundingBox())!;
-    const countBox = (await count.boundingBox())!;
-    const detailBox = (await detail.boundingBox())!;
+    const meterBox = (await meter.boundingBox())!;
     const doc = await page.evaluate(() => ({
       scroll: document.documentElement.scrollWidth,
       client: document.documentElement.clientWidth,
     }));
 
     console.log(
-      `[issue-106] width=${width} barHeight=${bar.height} countY=${countBox.y} detailY=${detailBox.y} ` +
+      `[issue-106] width=${width} barHeight=${bar.height} meterHeight=${meterBox.height} ` +
         `scrollWidth=${doc.scroll} clientWidth=${doc.client}`,
     );
 
     expect(bar.height, `the bar stays 64px tall at ${width}px`).toBe(64);
-    expect(countBox.y, `the count and the detail share one line at ${width}px`).toBe(detailBox.y);
+    expect(meterBox.height, `the meter is one line high at ${width}px, not wrapped`).toBeLessThan(
+      20,
+    );
     expect(doc.scroll, `the page does not scroll sideways at ${width}px`).toBeLessThanOrEqual(
       doc.client,
     );
   }
+
+  await page.setViewportSize({ width: 1024, height: 900 });
+  await page.goto('/');
+  await page.locator('.topic__tile').first().waitFor();
+
+  const count = page.locator('header.bar .allowance-meter__count');
+  const detail = page.locator('header.bar .allowance-meter__detail');
+  await expect(count).toBeVisible();
+  await expect(
+    detail,
+    'the detail shows again at 1024px, this review’s own new threshold',
+  ).toBeVisible();
+
+  const bar = (await page.locator('.bar').boundingBox())!;
+  const countBox = (await count.boundingBox())!;
+  const detailBox = (await detail.boundingBox())!;
+  const doc = await page.evaluate(() => ({
+    scroll: document.documentElement.scrollWidth,
+    client: document.documentElement.clientWidth,
+  }));
+
+  console.log(
+    `[issue-106] width=1024 barHeight=${bar.height} countY=${countBox.y} detailY=${detailBox.y} ` +
+      `scrollWidth=${doc.scroll} clientWidth=${doc.client}`,
+  );
+
+  expect(bar.height, 'the bar stays 64px tall at 1024px').toBe(64);
+  expect(countBox.y, 'the count and the detail share one line at 1024px').toBe(detailBox.y);
+  expect(doc.scroll, 'the page does not scroll sideways at 1024px').toBeLessThanOrEqual(doc.client);
 });
 
 /**
@@ -2118,4 +2157,293 @@ test.describe('the footer keeps every link on one line at a phone width', () => 
     // this fix. A second row at this width would add at least a row gap plus a line.
     expect(foot.height, 'the footer stays one row tall at 1360px').toBeLessThanOrEqual(70);
   });
+});
+
+/**
+ * Issue #133. A screenshot on 2026-09-19 found a defect that issue #100's own header tests do not
+ * catch: for a learner in trial, at 390px, the "Account" link starts on top of the last letter of
+ * the wordmark "mytetz". The count reads "12 of 40 left in your trial", longer than the "12 of 40
+ * left today" an active learner sees, so the same layout that fits an active learner overflows a
+ * learner in trial.
+ *
+ * #100's tests read only the bar's own height and the page's own scroll width. Both stay correct
+ * even when one child of the bar overflows on top of another child, because the bar has a fixed
+ * height and `overflow: visible`: an overlap changes neither number. This block instead reads the
+ * box of every visible piece of the bar — the wordmark, each nav link, the "Account" link (or the
+ * "Sign in" link), the meter and the status dot — and proves the boxes stay apart from each other.
+ */
+type BarElementBox = {
+  label: string;
+  box: { x: number; y: number; width: number; height: number };
+};
+
+/** The named pieces of the bar this block reads a box for. `bar__nav` holds two links, so this
+ * list expands to one entry per link at run time, and only for a link that is actually visible. */
+async function namedBarLocators(page: Page): Promise<Array<{ label: string; locator: Locator }>> {
+  const navLinks = await page.locator('.bar__nav .bar__link').all();
+  return [
+    { label: 'wordmark', locator: page.locator('a.bar__mark') },
+    ...navLinks.map((locator, index) => ({ label: `nav-link-${index}`, locator })),
+    { label: 'account-link', locator: page.locator('a.bar__account') },
+    { label: 'meter', locator: page.locator('.bar app-allowance-meter') },
+    { label: 'status-dot', locator: page.locator('.bar app-status-dot') },
+  ];
+}
+
+/** Reads the box of every visible named piece of the bar. A hidden piece — the nav links below
+ * 768px, or whichever of "Sign in" and "Account" the account view does not select — contributes
+ * no box, the same way a hidden element contributes nothing to the page a learner sees. */
+async function visibleBarBoxes(page: Page): Promise<BarElementBox[]> {
+  const boxes: BarElementBox[] = [];
+  for (const { label, locator } of await namedBarLocators(page)) {
+    if (!(await locator.isVisible())) continue;
+    const box = await locator.boundingBox();
+    if (box) boxes.push({ label, box });
+  }
+  return boxes;
+}
+
+/** True when box `a` and box `b` share a `y` range — the test's own definition of "on the same
+ * row", so it compares a horizontal gap only between boxes a learner actually reads side by
+ * side, and not between, say, the wordmark and a status dot sitting on a wrapped second row. */
+function sameRow(a: { y: number; height: number }, b: { y: number; height: number }): boolean {
+  return a.y < b.y + b.height && b.y < a.y + a.height;
+}
+
+/**
+ * The four checks step 1 of issue #133 asks for: every box stays inside the viewport, no two
+ * boxes overlap, a gap of 8px or more stays between neighbours on the same row, and the page
+ * does not scroll sideways. Shared by the phone-width block below and by the tablet-width block
+ * a review of issue #133 added, so both read the same rule from one place.
+ */
+function assertHeaderGapInvariants(
+  boxes: BarElementBox[],
+  doc: { scroll: number; client: number },
+  width: number,
+): void {
+  for (const { label: elementLabel, box } of boxes) {
+    expect(
+      box.x,
+      `${elementLabel} starts inside the viewport at ${width}px`,
+    ).toBeGreaterThanOrEqual(0);
+    expect(
+      box.x + box.width,
+      `${elementLabel} ends inside the viewport at ${width}px`,
+    ).toBeLessThanOrEqual(doc.client);
+  }
+
+  for (let i = 0; i < boxes.length; i++) {
+    for (let j = i + 1; j < boxes.length; j++) {
+      expect(
+        overlaps(boxes[i].box, boxes[j].box),
+        `${boxes[i].label} does not overlap ${boxes[j].label} at ${width}px`,
+      ).toBe(false);
+    }
+  }
+
+  const sortedByX = [...boxes].sort((a, b) => a.box.x - b.box.x);
+  for (let i = 0; i + 1 < sortedByX.length; i++) {
+    const current = sortedByX[i];
+    const next = sortedByX[i + 1];
+    if (!sameRow(current.box, next.box)) continue;
+    const gap = next.box.x - (current.box.x + current.box.width);
+    expect(
+      gap,
+      `${current.label} and ${next.label} keep an 8px gap at ${width}px`,
+    ).toBeGreaterThanOrEqual(8);
+  }
+
+  expect(doc.scroll, `the page does not scroll sideways at ${width}px`).toBeLessThanOrEqual(
+    doc.client,
+  );
+}
+
+/**
+ * Issue #133, review round 2. At a phone width the page's own content starts 20px from the
+ * left edge, and the header must line up with it: the owner saw the header's wordmark sit 12px
+ * further in than the page title below it, once a narrower padding closed the phone-width
+ * overlap. This checks the header's own left and right margins directly, in pixels, so a future
+ * change to that padding cannot silently drift away from the page's own 20px margin again.
+ * `boxes` is sorted by `x` first, so "the first element" and "the last element" are read off the
+ * sorted order, not off the order `namedBarLocators` happens to list them in.
+ */
+function assertHeaderEdgeMargins(
+  boxes: BarElementBox[],
+  doc: { client: number },
+  width: number,
+): void {
+  const sortedByX = [...boxes].sort((a, b) => a.box.x - b.box.x);
+  const first = sortedByX[0];
+  const last = sortedByX[sortedByX.length - 1];
+  // Within 1px, and not an exact match: a real browser's own subpixel rounding on font metrics
+  // moves a box by a fraction of a pixel between runs, on the same code, with nothing wrong.
+  expect(
+    first.box.x,
+    `${first.label} starts 20px from the left edge at ${width}px`,
+  ).toBeGreaterThanOrEqual(19);
+  expect(
+    first.box.x,
+    `${first.label} starts 20px from the left edge at ${width}px`,
+  ).toBeLessThanOrEqual(21);
+  const rightMargin = doc.client - (last.box.x + last.box.width);
+  expect(
+    rightMargin,
+    `${last.label} ends 20px from the right edge at ${width}px`,
+  ).toBeGreaterThanOrEqual(19);
+  expect(
+    rightMargin,
+    `${last.label} ends 20px from the right edge at ${width}px`,
+  ).toBeLessThanOrEqual(21);
+}
+
+const HEADER_GAP_WIDTHS = [320, 360, 390, 412, 768];
+
+/** The widths of `HEADER_GAP_WIDTHS` that use the phone padding of 20px, for
+ * `assertHeaderEdgeMargins`. 768px is in `HEADER_GAP_WIDTHS` too, but it already uses the
+ * desktop padding of 32px, not 20px. */
+const PHONE_EDGE_WIDTHS = [320, 360, 390, 412];
+
+/** One case per status the header renders differently for. TRIALING carries the longest count
+ * text ("left in your trial"), EXPIRED carries no count and a "Subscribe" button instead, and
+ * ACTIVE is the baseline #100 already measured. */
+const HEADER_GAP_CASES: Array<{ label: string; overrides: Partial<AccountView> }> = [
+  {
+    label: 'a learner in trial',
+    overrides: {
+      status: 'TRIALING',
+      trialEndsAtEpochMillis: Date.UTC(2026, 8, 20),
+      resetsAtEpochMillis: null,
+    },
+  },
+  { label: 'an active learner', overrides: {} },
+  { label: 'an expired learner', overrides: { status: 'EXPIRED', remaining: 0 } },
+];
+
+for (const { label, overrides } of HEADER_GAP_CASES) {
+  for (const width of HEADER_GAP_WIDTHS) {
+    test(`no two header elements overlap or sit closer than 8px, for ${label}, at ${width}px`, async ({
+      page,
+    }) => {
+      await stubCatalogueAndSession(page);
+      await stubAccount(page, accountView(overrides));
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto('/');
+      await page.locator('.topic__tile').first().waitFor();
+
+      const boxes = await visibleBarBoxes(page);
+      const doc = await page.evaluate(() => ({
+        scroll: document.documentElement.scrollWidth,
+        client: document.documentElement.clientWidth,
+      }));
+
+      // Printed so a report of this issue quotes a real run, and not an estimate.
+      console.log(
+        `[issue-133] label=${label} width=${width} boxes=${JSON.stringify(boxes)} doc=${JSON.stringify(doc)}`,
+      );
+
+      assertHeaderGapInvariants(boxes, doc, width);
+      // Only at a plain phone width: 768px already uses the desktop side padding of 32px, not
+      // the phone's 20px, so a 20px margin is not the right claim to check there.
+      if (PHONE_EDGE_WIDTHS.includes(width)) assertHeaderEdgeMargins(boxes, doc, width);
+    });
+  }
+}
+
+/**
+ * Issue #133, review round 2. Moving the nav's own breakpoint from 767px to 768px only ever hid
+ * the overlap at exactly 768px — the one width the block above tests. From 769px up to about
+ * 790px, with the nav shown again, "Glossary" still ran into "Account": a real run measured a
+ * gap of -15.6px at 769px and -4.6px at 780px for an active learner. The root cause was not the
+ * breakpoint: it was the detail text ("Trial ends …" or "Resets …") still showing from 768px up
+ * and leaving the row no room for the nav. This block proves the real fix — hiding the detail
+ * below 1024px — closes the gap across the whole tablet range, with the nav's own breakpoint
+ * back at its plain 767px.
+ *
+ * EXPIRED carries no detail text and was never part of this defect, so this block covers only
+ * TRIALING and ACTIVE, the two statuses the coordinator's own re-measurement named.
+ */
+const TABLET_GAP_WIDTHS = [768, 769, 780, 800, 1023, 1024, 1360];
+const TABLET_GAP_CASES = HEADER_GAP_CASES.filter((c) => c.label !== 'an expired learner');
+
+for (const { label, overrides } of TABLET_GAP_CASES) {
+  for (const width of TABLET_GAP_WIDTHS) {
+    test(`no two header elements overlap or sit closer than 8px on a tablet, for ${label}, at ${width}px`, async ({
+      page,
+    }) => {
+      await stubCatalogueAndSession(page);
+      await stubAccount(page, accountView(overrides));
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto('/');
+      await page.locator('.topic__tile').first().waitFor();
+
+      // The nav must actually be visible for this test to prove what it claims: a hidden nav
+      // would trivially pass the gap checks below without saying anything about this defect.
+      await expect(page.locator('.bar__nav'), `the nav is visible at ${width}px`).toBeVisible();
+
+      const boxes = await visibleBarBoxes(page);
+      const doc = await page.evaluate(() => ({
+        scroll: document.documentElement.scrollWidth,
+        client: document.documentElement.clientWidth,
+      }));
+
+      console.log(
+        `[issue-133] tablet label=${label} width=${width} boxes=${JSON.stringify(boxes)} doc=${JSON.stringify(doc)}`,
+      );
+
+      assertHeaderGapInvariants(boxes, doc, width);
+    });
+  }
+}
+
+/**
+ * Issue #142. The owner decided the header states no trial end date, at any width — the
+ * "Trial ends …" text stayed only for the account page's own card. This asserts the header
+ * shows no visible "Trial ends" text at 768px and 1024px, the two widths where issue #100's
+ * original rule and this review's own extension change from hidden to shown, and at 1360px,
+ * a plain desktop width. It must fail on the code before this round of review, because that
+ * code shows the detail text at 768px and above.
+ */
+for (const width of [768, 1024, 1360]) {
+  test(`the header shows no "Trial ends" text for a learner in trial at ${width}px`, async ({
+    page,
+  }) => {
+    await stubCatalogueAndSession(page);
+    await stubAccount(
+      page,
+      accountView({
+        status: 'TRIALING',
+        trialEndsAtEpochMillis: Date.UTC(2026, 8, 20),
+        resetsAtEpochMillis: null,
+      }),
+    );
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto('/');
+    await page.locator('.topic__tile').first().waitFor();
+
+    const headerDetail = page.locator('header.bar .allowance-meter__detail');
+    await expect(headerDetail, `the header hides the trial detail at ${width}px`).toBeHidden();
+  });
+}
+
+/**
+ * Issue #142. The account page is the one place left that gives the end of a trial, so its own
+ * card must still show it, at the same width issue #100's own account-card test already uses.
+ */
+test('the account card still shows "Trial ends" for a learner in trial at 390px', async ({
+  page,
+}) => {
+  await stubAccount(
+    page,
+    accountView({
+      status: 'TRIALING',
+      trialEndsAtEpochMillis: Date.UTC(2026, 8, 20),
+      resetsAtEpochMillis: null,
+    }),
+  );
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.goto('/account');
+
+  const cardDetail = page.locator('.account-page__card .allowance-meter__detail');
+  await expect(cardDetail, 'the account card shows the trial detail').toBeVisible();
+  await expect(cardDetail).toContainText('Trial ends September 20, 2026.');
 });

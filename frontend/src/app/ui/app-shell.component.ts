@@ -32,9 +32,9 @@ import { BackendState, StatusDotComponent } from './status-dot.component';
   template: `
     <header class="bar">
       <div class="bar__left">
-        <a class="bar__mark" routerLink="/">
+        <a class="bar__mark" routerLink="/" aria-label="mytetz">
           <app-logo-mark />
-          mytetz
+          <span class="bar__mark-text">mytetz</span>
         </a>
         <nav class="bar__nav" aria-label="Sections">
           <a
@@ -145,6 +145,32 @@ import { BackendState, StatusDotComponent } from './status-dot.component';
           padding: 0 20px;
         }
         .bar__nav {
+          display: none;
+        }
+      }
+      /*
+       * Issue #133, review round 2. A padding of 8px below 480px (an earlier version of this
+       * rule) moved the page content 12px away from the header's own left edge at 390px and
+       * 412px, the two most common phone widths — the header no longer lined up with the page
+       * title below it. The page content itself starts 20px from the left at a phone width, so
+       * the bar's own side padding stays 20px at every phone width. Only the gap inside the
+       * right-hand group narrows, for the two rare widths, 320px and 360px, where the wordmark,
+       * the "Account" link, the meter and the status dot still crowd each other.
+       */
+      @media (max-width: 479px) {
+        .bar__right {
+          gap: 12px;
+        }
+      }
+      /*
+       * Issue #133. Below 360px the text of the wordmark takes about 87px that the row does not
+       * have. The text then goes out of view, and the logo mark alone shows the link. The link
+       * has aria-label="mytetz", so it keeps its name for a screen reader at each width. The
+       * text is visible by default, and only this media query hides it. styles.spec.ts permits
+       * no component copy of .mt-sr-only, so this rule uses display: none.
+       */
+      @media (max-width: 359px) {
+        .bar__mark-text {
           display: none;
         }
       }
