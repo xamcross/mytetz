@@ -2,18 +2,23 @@ package com.mytetz.llm
 
 import com.anthropic.client.AnthropicClient
 import com.anthropic.client.okhttp.AnthropicOkHttpClient
+import com.anthropic.errors.AnthropicIoException
 import com.sun.net.httpserver.HttpServer
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import java.io.InterruptedIOException
 import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.cancellation.CancellationException
+import kotlin.coroutines.coroutineContext
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -296,6 +301,104 @@ class AnthropicLlmClientTest {
             release.countDown()
             server.stop(0)
         }
+    }
+
+    // ------------------------------------------------------------------ readInterruptible
+    //
+    // Issue #131. On CI, a cancelling collector sometimes saw `com.anthropic.errors.
+    // AnthropicIoException` instead of a `CancellationException`: the interrupt from
+    // `runInterruptible` landed inside the SDK's own blocking read, and the SDK wrapped the
+    // resulting `InterruptedIOException` in its own exception class before `runInterruptible`
+    // could recognise it. See [AnthropicLlmClient]'s KDoc, section "Cancellation", and
+    // [readInterruptible]'s own KDoc, for the confirmed order of events and the fix.
+    //
+    // These four tests drive [readInterruptible] directly, and not through a real socket: the real
+    // failure needs the interrupt to land at one exact instant during a live read, so a test built
+    // on real timing can only show the defect sometimes (see the test above, and the reproduction
+    // count in the pull request for this issue). Cancelling this coroutine from inside the fake
+    // read reproduces the same interleaving every time, with no dependency on timing at all.
+
+    /**
+     * The exact shape the vendor SDK produces when an interrupt lands inside its own blocking
+     * read: not a bare [InterruptedException], so [kotlinx.coroutines.runInterruptible] does not
+     * convert it on its own. Confirmed by reading `StreamHandler.kt` and `OkHttpClient.kt` in the
+     * SDK's own source (both wrap `java.io.IOException` in `AnthropicIoException`) and Okio's
+     * `Timeout.throwIfReached`, which throws `InterruptedIOException` once it sees the thread's
+     * interrupt flag set.
+     */
+    private fun wrappedInterrupt(): AnthropicIoException =
+        AnthropicIoException("Stream failed", InterruptedIOException("interrupted"))
+
+    @Test
+    fun `readInterruptible turns a read failure into a cancellation once this coroutine is cancelled`() = runBlocking {
+        var observed: Throwable? = null
+
+        val job = launch {
+            val ownJob = coroutineContext[Job]!!
+            try {
+                readInterruptible {
+                    // Cancels this coroutine first, and only then fails: the read failing because
+                    // the coroutine is already cancelled is exactly the case this function exists
+                    // to correct.
+                    ownJob.cancel()
+                    throw wrappedInterrupt()
+                }
+            } catch (e: Throwable) {
+                observed = e
+            }
+        }
+        job.join()
+
+        assertTrue(
+            observed is CancellationException,
+            "a read that fails after this coroutine is cancelled must surface as a cancellation, " +
+                "not as ${observed?.let { it::class.simpleName }}",
+        )
+    }
+
+    // Not `assertSame` on the thrown object below. `readInterruptible` crosses a real dispatch
+    // (its own `runInterruptible(Dispatchers.IO, ...)`), and kotlinx.coroutines' own stack-trace
+    // recovery copies some exception classes across a dispatch boundary -- confirmed by reading
+    // `ExceptionsConstructor.kt` in kotlinx.coroutines. The copy keeps the class and the message
+    // and chains the original as its cause, so the checks below use those instead of identity.
+    // This copying is a normal side effect of crossing `withContext`, present with or without
+    // this function's own correction, and it is not what these tests exist to check.
+
+    @Test
+    fun `readInterruptible leaves a real read failure unchanged while this coroutine is still active`() = runBlocking {
+        val boom = wrappedInterrupt()
+
+        val failure = assertFailsWith<AnthropicIoException> {
+            readInterruptible { throw boom }
+        }
+
+        assertEquals("Stream failed", failure.message)
+        assertTrue(
+            generateSequence(failure as Throwable) { it.cause }.any { it is InterruptedIOException },
+            "a real read fault, with no cancellation behind it, must reach the caller unchanged, so " +
+                "a genuine network fault never looks like a cancellation: $failure",
+        )
+    }
+
+    @Test
+    fun `a bare InterruptedIOException stays an error while this coroutine is still active`() = runBlocking {
+        // The correction reads the state of the coroutine, and not the class of the exception. An
+        // InterruptedIOException on its own must not become a cancellation only because its name
+        // suggests one.
+        val failure = assertFailsWith<InterruptedIOException> {
+            readInterruptible { throw InterruptedIOException("interrupted") }
+        }
+
+        assertEquals("interrupted", failure.message)
+    }
+
+    @Test
+    fun `a cancellation the read raises directly passes through readInterruptible unchanged`() = runBlocking {
+        val failure = assertFailsWith<CancellationException> {
+            readInterruptible { throw CancellationException("stopped") }
+        }
+
+        assertEquals("stopped", failure.message, "a CancellationException from the read must never be replaced")
     }
 
     // ------------------------------------------------------------------ the model default

@@ -985,3 +985,73 @@ The page still answers, at the same URL, now with `X-Robots-Tag: noindex` again.
 The review path refuses to publish past 100 pages in total, a hard limit in the code (spec section
 7.4). Issue #49 asks the owner to stop at 50 for the first month — a stricter limit the owner
 enforces by choice, not a limit the code enforces.
+
+## Topic review date (issue #47)
+
+This section is for the owner. It sets or clears the review date of a topic. **The owner runs this
+command. An agent never runs it.** It writes to the production database.
+
+**What the date means.** The page `/how-it-works` states the rule: "Each topic page shows the date
+a person last reviewed its text, when mytetz has that date." Set this date only after a person
+reads the topic's seed text and finds it correct on that day.
+
+### Step 1: list the present state
+
+This step writes nothing.
+
+```
+MONGODB_URI="$(grep '^MONGODB_URI=' .env | cut -d= -f2- | tr -d '[:cntrl:]')" ./gradlew :backend:graph:runReviewDate
+```
+
+This lists every published topic: its slug, its title, its present review date or "none", and its
+public path. Add `--args="--slugs <a,b,c>"` to see only the named topics.
+
+### Step 2: read the topic's text
+
+Open the topic's public page, or read its seed text a different way. Judge its accuracy. Decide
+the date of your review.
+
+### Step 3: set the date
+
+```
+MONGODB_URI="$(grep '^MONGODB_URI=' .env | cut -d= -f2- | tr -d '[:cntrl:]')" ./gradlew :backend:graph:runReviewDate --args="--set-reviewed --slugs special-relativity --date 2026-09-20"
+```
+
+For a longer list, put one slug on each line of a file, and use `--slugs-file` in place of
+`--slugs`:
+
+```
+MONGODB_URI="$(grep '^MONGODB_URI=' .env | cut -d= -f2- | tr -d '[:cntrl:]')" ./gradlew :backend:graph:runReviewDate --args="--set-reviewed --slugs-file reviewed-slugs.txt --date 2026-09-20"
+```
+
+`--date` takes a plain calendar date, `YYYY-MM-DD`, read as UTC.
+
+This step is all or nothing. If one slug is unknown, if one slug names a topic that is not
+published, or if the date fails a check, the command writes nothing. It names every bad value and
+stops. The command refuses a date in the future. It refuses a date before the topic's own seed text
+was written, when it can read that date for the topic.
+
+### Step 4: check the result
+
+```
+curl -sS https://mytetz.com/topics/special-relativity
+```
+
+The page now shows "Last reviewed 2026-09-20". Its `LearningResource` JSON-LD carries the same
+date as `dateModified`. The sitemap route (`GET /sitemap.xml`) carries the same date as `lastmod`
+for this topic, or a later date, if the topic's seed text is newer.
+
+### Taking a date back
+
+```
+MONGODB_URI="$(grep '^MONGODB_URI=' .env | cut -d= -f2- | tr -d '[:cntrl:]')" ./gradlew :backend:graph:runReviewDate --args="--clear-reviewed --slugs special-relativity"
+```
+
+The page then shows no review line, until a later run sets a new date. This step is also all or
+nothing: an unknown slug among the named slugs stops the whole command, with nothing written.
+
+### What this command cannot check
+
+The command checks a chosen date against the topic's own seed text, when a seed is already stored
+for that topic. A topic with no stored seed skips this one check. Every other check still applies
+to it: an unknown slug, an unpublished topic, a badly formed date, and a date in the future.

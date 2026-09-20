@@ -10,11 +10,14 @@ import com.anthropic.models.messages.TextBlockParam
 import com.anthropic.models.messages.Tool
 import com.fasterxml.jackson.databind.JsonNode
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.runInterruptible
 import java.time.Duration
+import kotlin.coroutines.cancellation.CancellationException
+import kotlin.coroutines.coroutineContext
 
 /**
  * Kotlin uses the Anthropic Java SDK, which is blocking/OkHttp. The blocking stream is consumed
@@ -33,8 +36,17 @@ import java.time.Duration
  *
  * ## Cancellation
  *
- * Each event is read inside [runInterruptible], which gives the loop a suspension point per event,
- * so a collector that cancels while events are arriving stops the stream promptly.
+ * Each event is read inside [readInterruptible], which gives the loop a suspension point per
+ * event, so a collector that cancels while events are arriving stops the stream promptly.
+ *
+ * [readInterruptible] exists because [runInterruptible] alone is not enough. [runInterruptible]
+ * converts only a bare [InterruptedException] into a [CancellationException]. This SDK never
+ * throws that class. It reads the socket through OkHttp and Okio, and Okio's own timeout checks
+ * the thread's interrupt flag and throws [java.io.InterruptedIOException] instead; the SDK then
+ * wraps that exception in its own [com.anthropic.errors.AnthropicIoException]. [runInterruptible]
+ * does not recognise this wrapped exception, so it lets it pass through as an ordinary error,
+ * and [issue #131](https://github.com/xamcross/mytetz/issues/131) is that error reaching a caller
+ * in place of the cancellation. [readInterruptible] closes this gap: see its own KDoc.
  *
  * A collector that cancels while a read is blocked on a *stalled* connection is a different case,
  * and this SDK cannot abort one: `Thread.interrupt()` does not abort a classic blocking socket
@@ -78,12 +90,12 @@ class AnthropicLlmClient(
         var stopReason: String? = null
         var deltaCount = 0
 
-        runInterruptible(Dispatchers.IO) { client.messages().createStreaming(params) }.use { response ->
+        readInterruptible { client.messages().createStreaming(params) }.use { response ->
             val events = response.stream().iterator()
             while (true) {
-                // One event per iteration inside runInterruptible: its block is not suspending, so
+                // One event per iteration inside readInterruptible: its block is not suspending, so
                 // `emit` cannot live in there. This is also the loop's cancellation check.
-                val event = runInterruptible(Dispatchers.IO) {
+                val event = readInterruptible {
                     if (events.hasNext()) events.next() else null
                 } ?: break
 
@@ -177,7 +189,7 @@ class AnthropicLlmClient(
             .addUserMessage(request.userPrompt)
             .build()
 
-        val message = runInterruptible(Dispatchers.IO) { client.messages().create(params) }
+        val message = readInterruptible { client.messages().create(params) }
 
         val toolUse = message.content().firstOrNull { it.isToolUse() }?.asToolUse()
             ?: throw LlmStructuredOutputMissingException(
@@ -288,3 +300,39 @@ class AnthropicLlmClient(
             .build()
     }
 }
+
+/**
+ * Runs [block] on [Dispatchers.IO]. It gives the loop one suspension point, the same as
+ * [runInterruptible]: a cancellation of this coroutine interrupts the thread that runs [block].
+ *
+ * [runInterruptible] converts only a bare [InterruptedException] into a [CancellationException].
+ * See [AnthropicLlmClient]'s own KDoc, section "Cancellation", for why the vendor SDK instead
+ * throws [com.anthropic.errors.AnthropicIoException] for the same event, and why
+ * [runInterruptible] does not recognise that exception on its own.
+ *
+ * This function closes that gap. It reads the state of this coroutine, and not the class of the
+ * exception:
+ *
+ * - A failure of [block] while this coroutine is no longer active becomes a
+ *   [CancellationException]. The interrupt reached the read through a wrapped exception instead
+ *   of a bare [InterruptedException], but the coroutine is still cancelled, so the read's own
+ *   failure is part of that cancellation and not a separate fault.
+ * - A failure of [block] while this coroutine is still active stays exactly as [block] threw it.
+ *   Nothing here may turn a real read fault — a genuine network error, with no cancellation
+ *   behind it — into a cancellation.
+ * - A [CancellationException] that [block] throws directly always passes through unchanged. It
+ *   is never caught, wrapped or replaced.
+ */
+internal suspend fun <T> readInterruptible(block: () -> T): T =
+    try {
+        runInterruptible(Dispatchers.IO, block = block)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        // ensureActive() does nothing while this coroutine is still active, so the real fault
+        // below reaches the caller unchanged. It throws this coroutine's own
+        // CancellationException once the coroutine is no longer active, which is the correct
+        // exception for a caller that only expects a CancellationException on a cancellation.
+        coroutineContext.ensureActive()
+        throw e
+    }

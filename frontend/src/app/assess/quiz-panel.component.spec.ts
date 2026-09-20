@@ -1,9 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
-import { provideHttpClientTesting } from '@angular/common/http/testing';
+import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
+import { AccountStore } from '../core/account.store';
 import { ApiService } from '../core/api.service';
-import { QuizResultView, QuizTemplateView } from '../core/models';
+import { AccountView, QuizResultView, QuizTemplateView } from '../core/models';
 import { QuizPanelComponent } from './quiz-panel.component';
 
 describe('QuizPanelComponent', () => {
@@ -439,5 +440,109 @@ describe('QuizPanelComponent', () => {
       );
       expect(block).toMatch(/\.review--in\s*\{\s*animation-delay:\s*0ms/);
     });
+  });
+});
+
+/**
+ * Issue #139. `QuizRoutes.kt` spends the token at the start of a quiz — `POST
+ * /api/sessions/{id}/quizzes` calls `recordSpend` while it builds the template, and the answers
+ * route never does — so the account is re-read right after `startQuiz` answers, the same moment
+ * `SessionStore.explain` re-reads it after `done`.
+ *
+ * A top-level describe, sibling to `QuizPanelComponent`'s own above and not nested inside it: that
+ * one's `beforeEach` already builds and renders its own panel, which starts its own quiz and its
+ * own `GET /api/account`, and a nested block would inherit it — one more request this block would
+ * have to tell apart from its own, for no reason this block's own name needs. A sibling
+ * `describe` runs its own `beforeEach` only.
+ *
+ * Every test here drives `AccountStore` through the real `HttpTestingController`, and not a spy on
+ * `load` — the rule this repository holds since issue #106's own report: a spy on `load` proved
+ * nothing about whether the true count from the network ever reached the signal.
+ */
+describe('QuizPanelComponent, the token result', () => {
+  let fixture: ComponentFixture<QuizPanelComponent>;
+  let http: HttpTestingController;
+  let account: AccountStore;
+
+  const template: QuizTemplateView = {
+    attemptId: 'a1',
+    kind: 'TEST_ME',
+    questions: [{ questionId: 'q1', stem: 'Stem one', options: ['a', 'b', 'c', 'd'] }],
+  };
+
+  const accountView = (remaining: number): AccountView => ({
+    email: 'learner@example.com',
+    status: 'TRIALING',
+    trialEndsAtEpochMillis: null,
+    currentPeriodEndsAtEpochMillis: null,
+    allowance: 40,
+    remaining,
+    resetsAtEpochMillis: null,
+  });
+
+  beforeEach(() => {
+    TestBed.configureTestingModule({
+      imports: [QuizPanelComponent],
+      providers: [provideHttpClient(), provideHttpClientTesting()],
+    });
+    vi.spyOn(TestBed.inject(ApiService), 'startQuiz').mockResolvedValue(template);
+    http = TestBed.inject(HttpTestingController);
+    account = TestBed.inject(AccountStore);
+  });
+
+  afterEach(() => http.verify());
+
+  function create(): ComponentFixture<QuizPanelComponent> {
+    const created = TestBed.createComponent(QuizPanelComponent);
+    created.componentRef.setInput('sessionId', 's1');
+    created.componentRef.setInput('kind', 'TEST_ME');
+    created.componentRef.setInput('nodeId', 'n1');
+    created.detectChanges();
+    return created;
+  }
+
+  it('reports a used token when the real account read shows remaining went down by one', async () => {
+    account.view.set(accountView(36));
+    fixture = create();
+    await fixture.whenStable();
+
+    http.expectOne('/api/account').flush(accountView(35));
+    await fixture.whenStable();
+
+    expect(fixture.componentInstance.tokenResult()).toEqual({ usedToken: true, remaining: 35 });
+  });
+
+  it('reports no token used when the real account read shows remaining unchanged — a cache hit', async () => {
+    account.view.set(accountView(36));
+    fixture = create();
+    await fixture.whenStable();
+
+    http.expectOne('/api/account').flush(accountView(36));
+    await fixture.whenStable();
+
+    expect(fixture.componentInstance.tokenResult()).toEqual({ usedToken: false, remaining: 36 });
+  });
+
+  it('shows no token text when the real account read fails', async () => {
+    account.view.set(accountView(36));
+    fixture = create();
+    await fixture.whenStable();
+
+    http.expectOne('/api/account').flush(null, { status: 500, statusText: 'Server Error' });
+    await fixture.whenStable();
+
+    expect(fixture.componentInstance.tokenResult()).toBeNull();
+  });
+
+  it('shows the sighted result text once the account read settles', async () => {
+    account.view.set(accountView(36));
+    fixture = create();
+    await fixture.whenStable();
+
+    http.expectOne('/api/account').flush(accountView(35));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.textContent).toContain('1 token used. 35 tokens left.');
   });
 });
