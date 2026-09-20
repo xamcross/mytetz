@@ -262,7 +262,10 @@ describe('the guide page buttons', () => {
   const css = readFileSync('public/guides/guides.css', 'utf8');
   const tokens = readRootTokens(css);
 
-  const ctas: ReadonlyArray<string> = ['.bar__cta', '.start__cta'];
+  // Issue #143 removes .bar__cta from guides.css: the header's "Start a topic" button goes, and
+  // the owner's 2026-09-20 decision replaces it with the same account control every page shares.
+  // .start__cta stays: a topic page's own "Start with this topic" button still uses it.
+  const ctas: ReadonlyArray<string> = ['.start__cta'];
 
   for (const selector of ctas) {
     it(`gives ${selector} a text contrast of 4.5:1 or more against its fill`, () => {

@@ -13,6 +13,7 @@
     <link rel="icon" type="image/x-icon" href="/favicon.ico" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="stylesheet" href="/guides/guides.css" />
+    <script src="/site-header.js" defer></script>
 
     <meta property="og:type" content="article" />
     <meta property="og:site_name" content="mytetz" />
@@ -76,12 +77,25 @@
   </head>
   <body>
     <header class="bar">
-      <a class="bar__mark" href="/">mytetz</a>
-      <nav class="bar__nav" aria-label="Main">
-        <a href="/">Catalogue</a>
-        <a href="/guides">Guides</a>
-        <a class="bar__cta" href="/">Start a topic</a>
-      </nav>
+      <div class="bar__left">
+        <a class="bar__mark" href="/">
+          <svg class="bar__mark-icon" viewBox="0 0 32 32" aria-hidden="true" focusable="false">
+            <rect x="0" y="0" width="32" height="32" rx="10" fill="var(--mt-chip)" />
+            <rect x="5" y="7" width="17" height="6" rx="3" fill="var(--mt-coral)" />
+            <path d="M9 15V22H13" fill="none" stroke="var(--mt-teal)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+            <rect x="13" y="19" width="14" height="6" rx="3" fill="var(--mt-teal)" />
+          </svg>
+          mytetz
+        </a>
+        <nav class="bar__nav" aria-label="Main">
+          <a class="bar__link" href="/glossary">Glossary</a>
+          <a class="bar__link" href="/guides">Guides</a>
+        </nav>
+      </div>
+      <div class="bar__right">
+        <a class="bar__link bar__account" id="site-header-account" href="/auth">Sign in</a>
+        <span class="bar__count" id="site-header-count"></span>
+      </div>
     </header>
 
     <main class="wrap">
@@ -385,21 +399,16 @@
         </ul>
         <a class="start__cta" href="/">Open the catalogue</a>
       </section>
+      <p class="foot__meta">Last reviewed 2026-09-18. Published by mytetz.</p>
     </main>
 
-    <footer class="foot">
-      <div class="foot__inner">
-        <p class="foot__meta">Last reviewed 2026-09-18. Published by mytetz.</p>
-        <nav class="foot__links" aria-label="Footer">
-          <a href="/">Catalogue</a>
-          <a href="/guides">Guides</a>
-          <a href="/how-it-works">How it works</a>
-          <a href="/faq">FAQ</a>
-          <a href="/privacy">Privacy</a>
-          <a href="/terms">Terms</a>
-          <a href="/imprint">Imprint</a>
-        </nav>
-      </div>
+    <footer class="foot" aria-label="Footer">
+      <a class="foot__link" href="/guides">Guides</a>
+      <a class="foot__link" href="/how-it-works">How it works</a>
+      <a class="foot__link" href="/faq">FAQ</a>
+      <a class="foot__link" href="/privacy">Privacy</a>
+      <a class="foot__link" href="/terms">Terms</a>
+      <a class="foot__link" href="/imprint">Imprint</a>
     </footer>
   </body>
 </html>
