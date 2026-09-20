@@ -80,10 +80,25 @@ function presentationForStatus(status: string): StatusPresentation {
  * carries the request, and [redirect] carries the leave-this-page step, the same split
  * `WallPanelComponent.subscribe` and `WallPanelComponent.redirect` use for the checkout link.
  *
- * "Delete account" opens a confirmation panel first — see [confirmingDelete]. The backend needs a
- * fresh sign-in to complete a deletion. A stale session answers `403 CONFIRMATION_REQUIRED`, and
- * [confirmDelete] shows a message that tells the learner to sign in again, rather than a generic
- * failure.
+ * "Delete account" opens a confirmation panel first — see [confirmingDelete]. This button, and the
+ * top action row, look the same for every status: a paying subscriber must be able to find and
+ * open this panel, the same as any other learner. The backend needs a fresh sign-in to complete a
+ * deletion. A stale session answers `403 CONFIRMATION_REQUIRED`, and [confirmDelete] shows a
+ * message that tells the learner to sign in again, rather than a generic failure.
+ *
+ * Issue #177: a subscription that can still renew — `ACTIVE` or `PAST_DUE` — blocks a deletion.
+ * [deletionBlocked] reads that same rule from the account view. The open panel reads it too: for
+ * either status the panel shows "Cancel your subscription first." next to its own "Manage
+ * subscription" control (`data-action="manage-subscription-from-delete"`, distinct from the top
+ * row's own `data-action="manage-subscription"`, since both controls can be on the page at once)
+ * and the existing "Cancel" control, and no confirm button. Every other status keeps the ordinary
+ * confirm dialog, and [showsPaidAccessEndsWarning] adds one more sentence there for a learner
+ * about to give up paid days still owed: a `CANCELLED` row whose current period end is still
+ * ahead of now.
+ *
+ * The backend can still answer `409 SUBSCRIPTION_ACTIVE` for a stale page, when a webhook changes
+ * the status after this page loaded. [confirmDelete] reads the account again on that status and
+ * leaves the panel open, so it re-renders as the blocked form above.
  */
 @Component({
   selector: 'app-account-page',
@@ -211,14 +226,44 @@ function presentationForStatus(status: string): StatusPresentation {
               >
                 Delete account
               </button>
-            }
-
-            @if (confirmingDelete()) {
+            } @else if (deletionBlocked()) {
+              <div class="mt-card mt-card--dashed account-page__confirm" role="alertdialog">
+                <div class="account-page__danger-row">
+                  <p class="account-page__danger-text">Cancel your subscription first.</p>
+                  <button
+                    type="button"
+                    class="mt-pill mt-pill--ghost"
+                    data-action="manage-subscription-from-delete"
+                    [disabled]="openingPortal()"
+                    [attr.aria-busy]="openingPortal() ? 'true' : null"
+                    (click)="manageSubscription()"
+                  >
+                    {{ openingPortal() ? 'Opening the portal…' : 'Manage subscription' }}
+                  </button>
+                </div>
+                <div class="account-page__actions">
+                  <!-- "Close", and not "Cancel": next to the sentence "Cancel your subscription
+                       first.", a control with the label "Cancel" reads as "cancel the
+                       subscription". This control only closes the panel. -->
+                  <button
+                    type="button"
+                    class="mt-pill mt-pill--ghost"
+                    data-action="delete-account-cancel"
+                    (click)="cancelDelete()"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            } @else {
               <div class="mt-card mt-card--dashed account-page__confirm" role="alertdialog">
                 <p class="account-page__confirm-text">
                   This permanently deletes your account, every reading session and the allowance
                   meter. It does not delete any explanation — those stay on the site for other
                   learners. This cannot be undone.
+                  @if (showsPaidAccessEndsWarning()) {
+                    Your paid access also ends now.
+                  }
                 </p>
                 <div class="account-page__actions">
                   <button
@@ -359,6 +404,22 @@ function presentationForStatus(status: string): StatusPresentation {
         align-items: flex-start;
         gap: 12px;
       }
+      /* Issue #177. Inside the open panel, for a subscription that can still renew: the sentence
+         and "Manage subscription" centre on the same cross-axis line when they share a row, and
+         wrap onto their own lines on a narrow viewport. */
+      .account-page__danger-row {
+        width: 100%;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 12px;
+      }
+      .account-page__danger-text {
+        margin: 0;
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--mt-muted);
+      }
       .account-page__confirm {
         width: 100%;
         padding: 20px 24px;
@@ -407,6 +468,29 @@ export class AccountPageComponent implements OnInit {
   readonly manageVisible = computed(() => {
     const status = this.view()?.status;
     return status === 'ACTIVE' || status === 'PAST_DUE' || status === 'CANCELLED';
+  });
+
+  /** True when `POST /api/account/delete` would answer `409 SUBSCRIPTION_ACTIVE` right now: the
+   * status is `ACTIVE` or `PAST_DUE`, the two statuses that can still renew. See
+   * `AuthRoutes.kt`'s own KDoc on that route for the full rule. The open delete panel reads this
+   * to show "Cancel your subscription first." in place of the confirm dialog. This never hides
+   * "Delete account" or "Manage subscription" in the top row — only the open panel's own content
+   * changes. */
+  readonly deletionBlocked = computed(() => {
+    const status = this.view()?.status;
+    return status === 'ACTIVE' || status === 'PAST_DUE';
+  });
+
+  /** True when a learner about to confirm a deletion still has paid days left: the status is
+   * `CANCELLED` — it does not renew, so it never reaches [deletionBlocked] — and its own current
+   * period end is a real date still ahead of now. The confirm dialog adds one sentence for this
+   * case, so the learner knows the deletion also gives up those days, and not only the future
+   * ones a live subscription would have billed for. */
+  readonly showsPaidAccessEndsWarning = computed(() => {
+    const account = this.view();
+    if (account?.status !== 'CANCELLED') return false;
+    const periodEnd = account.currentPeriodEndsAtEpochMillis;
+    return periodEnd != null && periodEnd > Date.now();
   });
 
   /** True for every status [manageVisible] does not cover: `TRIALING`, `NONE`, `EXPIRED`, and a
@@ -594,6 +678,12 @@ export class AccountPageComponent implements OnInit {
    * message that tells the learner to sign in again, rather than the generic failure text every
    * other status gets.
    *
+   * A `409 SUBSCRIPTION_ACTIVE` means a subscription that can still renew now blocks the
+   * deletion — the status changed after this page loaded. This method reads the account again for
+   * that status, the same way a success does, and it leaves [confirmingDelete] alone: the panel
+   * stays open, the fresh status moves [deletionBlocked] to true, and the open panel re-renders as
+   * the blocked form — "Cancel your subscription first." in place of the confirm dialog.
+   *
    * A success reads the account again, the same pattern [signOut] uses. The cleared cookie makes
    * that read answer `401`, and `AccountStore.load` clears the view on a `401` — so the page ends
    * on the signed-out state with no separate message to keep in step with the server.
@@ -610,6 +700,12 @@ export class AccountPageComponent implements OnInit {
         this.actionError.set(
           'Sign in again through a fresh magic link, then delete your account right away.',
         );
+      } else if (err instanceof HttpErrorResponse && err.status === 409) {
+        // The status changed after this page loaded — a webhook moved it to ACTIVE or PAST_DUE
+        // between the load and this click. `account.load()` reads the new status, which moves
+        // `deletionBlocked` to true, and the panel itself then shows "Cancel your subscription
+        // first." in place of the confirm dialog — no separate error message needed here.
+        await this.account.load();
       } else {
         this.actionError.set('Could not delete your account. Check your connection and try again.');
       }

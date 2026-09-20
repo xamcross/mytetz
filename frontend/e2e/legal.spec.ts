@@ -179,6 +179,8 @@ test('the terms page states the price, the trial and the daily allowance', async
 });
 
 test('the account page links to the terms next to the subscribe control', async ({ page }) => {
+  // ACTIVE: issue #177 changes nothing about this row. "Manage subscription" stays here for
+  // every status that already showed it.
   await stubActiveAccount(page);
   await page.goto('/account');
   await page.getByText('learner@example.com').waitFor();

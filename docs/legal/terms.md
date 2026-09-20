@@ -61,10 +61,9 @@ delete your account, including a visitor who has never signed in. You get no
 exclusive right in an explanation or in a phrase you highlight. mytetz may show
 each explanation to other learners and to the public.
 
-Deleting your account does not cancel a paid subscription. Cancel a subscription
-first, with "Manage subscription," before you delete your account. Your
-subscription record can stay in the database after your account is gone, because
-account deletion does not remove it today.
+The account page refuses a deletion while your subscription can still renew.
+Cancel a subscription first, with "Manage subscription," before you delete your
+account. A deletion then also removes your subscription record.
 
 mytetz can suspend or close an account that breaks these terms. mytetz gives no
 guarantee that the service runs without a break.

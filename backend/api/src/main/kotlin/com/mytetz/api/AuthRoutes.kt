@@ -8,6 +8,7 @@ import com.mytetz.account.User
 import com.mytetz.assess.QuizService
 import com.mytetz.billing.BillingService
 import com.mytetz.billing.EntitlementDecision
+import com.mytetz.billing.SubscriptionStatus
 import com.mytetz.quota.PrincipalId
 import com.mytetz.quota.QuotaRepository
 import com.mytetz.session.SessionService
@@ -396,6 +397,9 @@ fun Route.authRoutes(
      * - Every quiz attempt the deleted principal owns — [QuizService.deleteForPrincipal]. A quiz
      *   template stays: it is content-addressed and shared between learners, and it holds no
      *   `principalId` and no answer of any one learner — see `QuizRepository`'s own KDoc.
+     * - The learner's own billing record — [BillingService.deleteSubscriptionFor]. Issue #177: an
+     *   account deletion must not leave a subscription document with no owner, and it must not
+     *   leave a paid subscriber able to renew with no account left to manage it from.
      * - **No explanation is ever removed.** An explanation is user-independent and holds nothing
      *   personal; two learners who reach the same span by the same path share one document, so
      *   deleting it here would destroy content every other learner reads. This is the one line the
@@ -416,6 +420,20 @@ fun Route.authRoutes(
      *
      * A stale session answers `403 CONFIRMATION_REQUIRED` and changes nothing — not the account, not
      * the cookie. The caller is still signed in, exactly as they were before asking.
+     *
+     * ## Issue #177: a subscription that can still renew blocks the deletion
+     *
+     * [SubscriptionStatus.ACTIVE] and [SubscriptionStatus.PAST_DUE] are the two statuses Freemius
+     * still bills against — see [Subscription]'s own KDoc. A deletion here removes the sign-in, so
+     * a learner behind either status could no longer open "Manage subscription" to stop the charge.
+     * This route answers `409 SUBSCRIPTION_ACTIVE` for those two statuses and changes nothing: not
+     * the account, not a session, not the subscription row. The learner cancels through "Manage
+     * subscription" first, which moves the row to [SubscriptionStatus.CANCELLED], and the deletion
+     * then proceeds.
+     *
+     * [SubscriptionStatus.CANCELLED] does not renew — it only keeps the paid allowance until
+     * [Subscription.currentPeriodEndsAtEpochMillis] — so it does not block a deletion, and neither
+     * does [SubscriptionStatus.TRIALING], [SubscriptionStatus.EXPIRED], or no row at all.
      */
     post("/api/account/delete") {
         val sessionId = Principals.readSessionId(call, cookies)
@@ -439,10 +457,23 @@ fun Route.authRoutes(
             return@post
         }
 
+        val subscriptionStatus = billing.subscriptionFor(user.id)?.status
+        if (subscriptionStatus == SubscriptionStatus.ACTIVE || subscriptionStatus == SubscriptionStatus.PAST_DUE) {
+            call.respond(
+                HttpStatusCode.Conflict,
+                ApiError(
+                    "SUBSCRIPTION_ACTIVE",
+                    "cancel your subscription before you delete your account",
+                ),
+            )
+            return@post
+        }
+
         val principalId = PrincipalId.user(user.id).value
         sessions().deleteForPrincipal(principalId)
         quizzes().deleteForPrincipal(principalId)
         quotaRepository.resetCounter(principalId)
+        billing.deleteSubscriptionFor(user.id)
         account.deleteAccount(user.id)
 
         Principals.clearSessionCookie(call, cookies)

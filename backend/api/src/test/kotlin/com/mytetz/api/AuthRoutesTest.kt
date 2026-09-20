@@ -17,6 +17,7 @@ import com.mytetz.assess.QuizTemplate
 import com.mytetz.billing.BillingConfig
 import com.mytetz.billing.BillingRepository
 import com.mytetz.billing.BillingService
+import com.mytetz.billing.Subscription
 import com.mytetz.billing.SubscriptionStatus
 import com.mytetz.quota.PrincipalId
 import com.mytetz.quota.QuotaConfig
@@ -760,24 +761,133 @@ class AuthRoutesTest {
     // ------------------------------------------------------------------ account deletion
 
     @Test
-    fun `deleting an account removes the user and every session`() = authApp {
+    fun `deleting an account removes the user, every session, and the subscription document`() = authApp {
         // Created before the sign-in, the same order `signing in carries an anonymous trail to the
         // user` uses, so this learning session is reassigned onto the user and is really the
         // deleted account's own session — not an orphaned anonymous one the delete could never
         // have touched either way.
         val created = createSession()
         val email = signIn()
+        // Every real sign-in starts a TRIALING row through `completeSignIn`. This is the exact row
+        // a deletion for a fresh learner, with no paid subscription, must remove.
+        val userId = requireNotNull(account.findByEmail(email)).id
+        assertEquals(SubscriptionStatus.TRIALING, billingRepository.find(userId)?.status)
 
         val response = client.post("/api/account/delete")
 
         assertEquals(HttpStatusCode.NoContent, response.status, response.bodyAsText())
         assertNull(account.findByEmail(email), "the user row must be gone")
         assertNull(stack.sessions.load(created.sessionId), "the learning session must be gone")
+        assertNull(billingRepository.find(userId), "the subscription document must be gone")
         assertEquals(
             HttpStatusCode.Unauthorized,
             client.get("/api/account").status,
             "the session cookie must no longer resolve to anyone",
         )
+    }
+
+    @Test
+    fun `deleting an account is refused while a subscription is ACTIVE`() = authApp {
+        val created = createSession()
+        val email = signIn()
+        val userId = requireNotNull(account.findByEmail(email)).id
+        billingRepository.upsert(
+            Subscription(
+                userId = userId,
+                status = SubscriptionStatus.ACTIVE,
+                currentPeriodEndsAtEpochMillis = System.currentTimeMillis() + 1_000_000,
+                createdAtEpochMillis = System.currentTimeMillis(),
+                updatedAtEpochMillis = System.currentTimeMillis(),
+            ),
+        )
+
+        val response = client.post("/api/account/delete")
+
+        assertEquals(HttpStatusCode.Conflict, response.status, response.bodyAsText())
+        assertEquals("SUBSCRIPTION_ACTIVE", wireJson.decodeFromString<ApiError>(response.bodyAsText()).code)
+        assertNotNull(account.findByEmail(email), "a refused deletion must leave the account in place")
+        assertNotNull(stack.sessions.load(created.sessionId), "a refused deletion must not touch the learning session")
+        assertNotNull(billingRepository.find(userId), "a refused deletion must not touch the subscription document")
+        assertEquals(
+            HttpStatusCode.OK,
+            client.get("/api/account").status,
+            "the session cookie must still resolve after a refused deletion",
+        )
+    }
+
+    @Test
+    fun `deleting an account is refused while a subscription is PAST_DUE`() = authApp {
+        val email = signIn()
+        val userId = requireNotNull(account.findByEmail(email)).id
+        billingRepository.upsert(
+            Subscription(
+                userId = userId,
+                status = SubscriptionStatus.PAST_DUE,
+                graceEndsAtEpochMillis = System.currentTimeMillis() + 1_000_000,
+                createdAtEpochMillis = System.currentTimeMillis(),
+                updatedAtEpochMillis = System.currentTimeMillis(),
+            ),
+        )
+
+        val response = client.post("/api/account/delete")
+
+        assertEquals(HttpStatusCode.Conflict, response.status, response.bodyAsText())
+        assertEquals("SUBSCRIPTION_ACTIVE", wireJson.decodeFromString<ApiError>(response.bodyAsText()).code)
+        assertNotNull(account.findByEmail(email), "a refused deletion must leave the account in place")
+    }
+
+    @Test
+    fun `deleting an account proceeds and removes the document for a CANCELLED subscription`() = authApp {
+        val email = signIn()
+        val userId = requireNotNull(account.findByEmail(email)).id
+        billingRepository.upsert(
+            Subscription(
+                userId = userId,
+                status = SubscriptionStatus.CANCELLED,
+                currentPeriodEndsAtEpochMillis = System.currentTimeMillis() + 1_000_000,
+                createdAtEpochMillis = System.currentTimeMillis(),
+                updatedAtEpochMillis = System.currentTimeMillis(),
+            ),
+        )
+
+        val response = client.post("/api/account/delete")
+
+        assertEquals(HttpStatusCode.NoContent, response.status, response.bodyAsText())
+        assertNull(account.findByEmail(email), "a CANCELLED subscription does not renew, and must not block a deletion")
+        assertNull(billingRepository.find(userId), "the subscription document must be gone")
+    }
+
+    @Test
+    fun `deleting an account proceeds and removes the document for an EXPIRED subscription`() = authApp {
+        val email = signIn()
+        val userId = requireNotNull(account.findByEmail(email)).id
+        billingRepository.upsert(
+            Subscription(
+                userId = userId,
+                status = SubscriptionStatus.EXPIRED,
+                createdAtEpochMillis = System.currentTimeMillis(),
+                updatedAtEpochMillis = System.currentTimeMillis(),
+            ),
+        )
+
+        val response = client.post("/api/account/delete")
+
+        assertEquals(HttpStatusCode.NoContent, response.status, response.bodyAsText())
+        assertNull(billingRepository.find(userId), "the subscription document must be gone")
+    }
+
+    @Test
+    fun `deleting an account proceeds when the learner has no subscription row at all`() = authApp {
+        val email = signIn()
+        val userId = requireNotNull(account.findByEmail(email)).id
+        // Reaching past `BillingRepository` puts this learner back into the state a real account
+        // created before the trial existed is in: a live session cookie and no subscription row.
+        stack.database.getCollection<Document>("subscriptions").deleteOne(Filters.eq("_id", userId))
+        assertNull(billingRepository.find(userId), "fixture error: the subscription row must be gone first")
+
+        val response = client.post("/api/account/delete")
+
+        assertEquals(HttpStatusCode.NoContent, response.status, response.bodyAsText())
     }
 
     @Test

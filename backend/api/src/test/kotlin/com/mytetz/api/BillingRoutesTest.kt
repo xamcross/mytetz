@@ -704,6 +704,37 @@ class BillingRoutesTest {
         assertEquals(SubscriptionStatus.ACTIVE, stored.status)
     }
 
+    // ------------------------------------------------------------------ a late webhook for a deleted user
+
+    @Test
+    fun `a webhook for a deleted user changes nothing and creates no new subscription document`() = app {
+        // Issue #177. `POST /api/account/delete` deletes the subscription document with the
+        // account, through `BillingService.deleteSubscriptionFor` — see `AuthRoutesTest.kt` for
+        // that route's own end-to-end coverage of the full deletion. This test reaches for
+        // `billingRepository.deleteForUser` directly, the exact effect that call has on this
+        // collection, so it stays scoped to what a late webhook does next, with no dependency on
+        // the session and quiz stacks that route also touches and this suite does not wire.
+        val email = signIn()
+        val userId = requireNotNull(account.findByEmail(email)).id
+        val created = webhook(subscriptionCreatedBody(id = "evt-before-delete", email = email))
+        assertEquals(HttpStatusCode.NoContent, created.status)
+        val freemiusUserId = requireNotNull(billingRepository.find(userId)?.freemiusUserId)
+
+        billingRepository.deleteForUser(userId)
+        assertNull(billingRepository.find(userId), "fixture error: the subscription document must be gone before the late webhook")
+
+        val late = webhook(
+            licenseExtendedBody(id = "evt-late-after-delete", to = "2026-01-31 23:59:59", freemiusUserId = freemiusUserId),
+        )
+
+        assertEquals(HttpStatusCode.NoContent, late.status, "the webhook route always answers 204 once the signature verifies")
+        assertNull(
+            billingRepository.findByFreemiusUserId(freemiusUserId),
+            "a late webhook for a deleted user must create no new document",
+        )
+        assertNull(billingRepository.find(userId), "a late webhook must not bring the deleted document back")
+    }
+
     // ------------------------------------------------------------------ license.extended, the renewal event
 
     @Test

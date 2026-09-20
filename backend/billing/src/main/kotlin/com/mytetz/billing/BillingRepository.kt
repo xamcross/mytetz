@@ -88,6 +88,18 @@ open class BillingRepository(database: MongoDatabase) {
     }
 
     /**
+     * Deletes [userId]'s subscription row, if one exists.
+     *
+     * `POST /api/account/delete` calls this once it has confirmed the subscription cannot renew
+     * — see [BillingService.deleteSubscriptionFor]'s own KDoc. A user with no row is not an error:
+     * the call changes nothing and does not throw, the same forgiving shape `deleteOne` already
+     * has for a filter that matches nothing.
+     */
+    suspend fun deleteForUser(userId: String) {
+        subscriptions.deleteOne(Filters.eq("_id", userId))
+    }
+
+    /**
      * Inserts [subscription], and reports whether this call was the one that created the row.
      *
      * Returns `true` on a fresh insert and `false` on a duplicate `_id`, using the same
