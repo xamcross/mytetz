@@ -82,6 +82,33 @@ describe('CatalogPageComponent', () => {
     ).toBeGreaterThanOrEqual(60);
   });
 
+  // Issue #145. The page at `/` is the "dashboard" in every text a learner reads, and never the
+  // "catalogue".
+  it('names the page the dashboard in the long text, not the catalogue', async () => {
+    const fixture = TestBed.createComponent(CatalogPageComponent);
+    fixture.detectChanges();
+    http.expectOne('/api/catalog/topics').flush([quantumPhysics]);
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const more = fixture.nativeElement.querySelector('.catalog__more') as HTMLElement;
+    expect(more.textContent).toContain('The dashboard holds twelve subject areas');
+    expect(fixture.nativeElement.textContent as string).not.toContain('catalogue');
+  });
+
+  it('names the page the dashboard when no topic matches at all', async () => {
+    const fixture = TestBed.createComponent(CatalogPageComponent);
+    fixture.detectChanges();
+    http.expectOne('/api/catalog/topics').flush([]);
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const text = fixture.nativeElement.textContent as string;
+    expect(text).toContain('No topics yet.');
+    expect(text).toContain('The dashboard is empty. Please come back later.');
+    expect(text).not.toContain('catalogue');
+  });
+
   it('lists topics returned by the API', async () => {
     const fixture = TestBed.createComponent(CatalogPageComponent);
     fixture.detectChanges();
@@ -169,8 +196,11 @@ describe('CatalogPageComponent', () => {
     fixture.detectChanges();
 
     // The old copy read `No topics match "{{ query() }}"`. The new copy states how large the
-    // catalogue is, so the check moves to that wording rather than the old one.
-    expect(fixture.nativeElement.textContent as string).toContain('Nothing under that name yet.');
+    // dashboard is, so the check moves to that wording rather than the old one.
+    const text = fixture.nativeElement.textContent as string;
+    expect(text).toContain('Nothing under that name yet.');
+    expect(text).toContain('The dashboard is');
+    expect(text).not.toContain('catalogue');
   });
 
   // Finding F18 of the design review. Firefox draws no native clear control for `type="search"`,

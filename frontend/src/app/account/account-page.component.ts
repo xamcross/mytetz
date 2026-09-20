@@ -180,7 +180,7 @@ function sentenceForStatus(status: string): string {
               <div class="mt-card mt-card--dashed account-page__confirm" role="alertdialog">
                 <p class="account-page__confirm-text">
                   This permanently deletes your account, every reading session and the allowance
-                  meter. It does not delete any explanation — those stay in the catalogue for other
+                  meter. It does not delete any explanation — those stay in the dashboard for other
                   learners. This cannot be undone.
                 </p>
                 <div class="account-page__actions">

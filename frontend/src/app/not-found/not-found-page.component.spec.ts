@@ -18,7 +18,9 @@ describe('NotFoundPageComponent', () => {
     expect(fixture.nativeElement.querySelector('h1').textContent).toContain('Page not found');
   });
 
-  it('links back to the catalog', () => {
-    expect(fixture.nativeElement.querySelector('a[href="/"]')).toBeTruthy();
+  it('links back to the dashboard', () => {
+    const link = fixture.nativeElement.querySelector('a[href="/"]');
+    expect(link).toBeTruthy();
+    expect(link.textContent).toContain('Back to the dashboard');
   });
 });

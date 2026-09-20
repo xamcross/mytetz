@@ -388,6 +388,20 @@ describe('AccountPageComponent', () => {
     expect(text()).toContain('This cannot be undone');
   });
 
+  // Issue #145. The page at `/` is the "dashboard" in every text a learner reads, and never the
+  // "catalogue".
+  it('the confirmation panel names the dashboard, not the catalogue', async () => {
+    await mount((req) => req.flush(active));
+
+    (
+      fixture.nativeElement.querySelector('[data-action="delete-account"]') as HTMLButtonElement
+    ).click();
+    fixture.detectChanges();
+
+    expect(text()).toContain('those stay in the dashboard for other learners');
+    expect(text()).not.toContain('catalogue');
+  });
+
   it('cancelling the confirmation panel sends no request and closes it', async () => {
     await mount((req) => req.flush(active));
 
