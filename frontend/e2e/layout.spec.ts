@@ -1589,10 +1589,11 @@ test('the header fits on one line for a signed-in learner at 390px and 400px, wi
 
     const meter = page.locator('app-allowance-meter');
     await expect(meter, `the meter is visible at ${width}px`).toBeVisible();
+    // Issue #139 named the allowance unit a token, so the count reads "tokens" now.
     await expect(
       meter,
       `the meter states the count and the reset date at ${width}px`,
-    ).toContainText('12 of 40 left today');
+    ).toContainText('12 of 40 tokens left today');
     await expect(meter).toContainText('Resets September 20, 2026 at 3:00 PM.');
 
     const bar = await page.locator('.bar').boundingBox();
@@ -1727,7 +1728,8 @@ test('the header fits on one line for a learner in trial at 390px, with a long t
   await page.locator('.topic__tile').first().waitFor();
 
   const meter = page.locator('app-allowance-meter');
-  await expect(meter).toContainText('12 of 40 left in your trial');
+  // Issue #139 named the allowance unit a token, so the count reads "tokens" now.
+  await expect(meter).toContainText('12 of 40 tokens left in your trial');
   await expect(meter).toContainText('Trial ends September 20, 2026.');
 
   const bar = await page.locator('.bar').boundingBox();
@@ -1998,13 +2000,14 @@ test('under reduced motion, the header meter tick carries no animation', async (
   );
 
   await page.goto('/');
+  // Issue #139 named the allowance unit a token, so the count reads "tokens" now.
   const count = page.locator('header.bar .allowance-meter__count');
   await page.locator('a.bar__account').click();
-  await expect(count).toContainText('12 of 40 left today');
+  await expect(count).toContainText('12 of 40 tokens left today');
 
   await page.locator('a.bar__mark').click();
   await page.locator('a.bar__account').click();
-  await expect(count).toContainText('11 of 40 left today');
+  await expect(count).toContainText('11 of 40 tokens left today');
 
   await expect(count).toHaveClass(/allowance-meter__count--tick/);
   const animationName = await count.evaluate((el) => getComputedStyle(el).animationName);
