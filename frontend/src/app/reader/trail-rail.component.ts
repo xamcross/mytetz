@@ -31,7 +31,9 @@ const VERB_LABELS: Readonly<Record<string, string>> = {
   imports: [],
   template: `
     <nav class="trail" aria-label="Session trail">
-      <p class="mt-eyebrow trail__head">Your trail · {{ nodes().length }} steps</p>
+      <p class="mt-eyebrow trail__head">
+        Your trail · {{ nodes().length }} {{ nodes().length === 1 ? 'step' : 'steps' }}
+      </p>
       <button
         type="button"
         class="mt-pill mt-pill--ghost trail__toggle"
