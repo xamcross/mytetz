@@ -394,6 +394,15 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
       .focus__actions .mt-pill:has(.reader__action-price) {
         gap: 4px;
       }
+      /* Below 480px the two pills of this row need real spare room, and not 2px of it. A run on
+         the CI machine, where the fonts are a little wider, put "Mark this session complete" on
+         a second row at 390px. A side padding of 12px, and not the 16px of .mt-pill, gives the
+         row 16px of spare room. The height of a pill does not change. */
+      @media (max-width: 479px) {
+        .focus__actions .mt-pill {
+          padding-inline: 12px;
+        }
+      }
       /* Issue #139. One line, reserved whether or not it holds text, so the sentence that names
          the true result of an action moves nothing below it when it appears or clears. */
       .focus__token-result {
