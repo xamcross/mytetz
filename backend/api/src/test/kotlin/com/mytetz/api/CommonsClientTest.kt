@@ -189,6 +189,83 @@ class CommonsClientTest {
         assertTrue(query.length <= 120, "the search query must be bounded: ${query.length} characters")
     }
 
+    // ------------------------------------------------------------------ Issue 115: the model's own image search terms
+
+    private suspend fun captureQuery(span: String, imageSearchTerms: String): String {
+        var captured: HttpRequestData? = null
+        val engine = MockEngine { request ->
+            captured = request
+            respond(bodyWithNoPages(), HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+        }
+        val client = CommonsClient(HttpClient(engine))
+        client.findImage(span, emptyList(), imageSearchTerms)
+        return requireNotNull(captured).url.parameters["gsrsearch"].orEmpty()
+    }
+
+    @Test
+    fun `the model's own image search terms reach gsrsearch when every word validates`() = runTest {
+        val query = captureQuery(span = "wave", imageSearchTerms = "sound wave diagram")
+        assertEquals("sound wave diagram", query, "a valid set of terms must replace the span, not add to it")
+    }
+
+    @Test
+    fun `an empty image search terms value falls back to the span alone`() = runTest {
+        val query = captureQuery(span = "wave", imageSearchTerms = "")
+        assertEquals("wave", query, "the model gave no term, so the present behaviour must run")
+    }
+
+    @Test
+    fun `a term with a control character is dropped, and the other terms survive`() = runTest {
+        val query = captureQuery(span = "wave", imageSearchTerms = "sound\u0007wave diagram")
+        assertEquals("diagram", query, "only the term carrying the control character may be dropped")
+    }
+
+    @Test
+    fun `a term with a colon is dropped entirely, not just the colon`() = runTest {
+        val query = captureQuery(span = "wave", imageSearchTerms = "filetype:bitmap diagram")
+        assertEquals("diagram", query, "a CirrusSearch field prefix must never reach the query")
+    }
+
+    @Test
+    fun `a term with a double quote is dropped entirely`() = runTest {
+        val query = captureQuery(span = "wave", imageSearchTerms = "\"wave\" diagram")
+        assertEquals("diagram", query, "a CirrusSearch phrase-match quote must never reach the query")
+    }
+
+    @Test
+    fun `a term starting with a hyphen is dropped`() = runTest {
+        val query = captureQuery(span = "wave", imageSearchTerms = "-exclude diagram")
+        assertEquals("diagram", query, "a CirrusSearch exclusion prefix must never reach the query")
+    }
+
+    @Test
+    fun `a full sentence from the model is bounded to five words, not sent whole`() = runTest {
+        val sentence = "This is a full sentence with far more than five plain words in it"
+        val query = captureQuery(span = "wave", imageSearchTerms = sentence)
+        assertEquals("This is a full sentence", query, "no full sentence may reach Wikimedia")
+    }
+
+    @Test
+    fun `a single term longer than the per-word bound is dropped, not truncated`() = runTest {
+        val overlong = "x".repeat(40)
+        val query = captureQuery(span = "wave", imageSearchTerms = "diagram $overlong wave")
+        assertEquals("diagram wave", query, "an over-long word must be dropped whole, never shortened")
+    }
+
+    @Test
+    fun `the raw field is bounded to 80 characters before it is even split into words`() = runTest {
+        val rawTerms = listOf("a", "b", "c", "d", "e").joinToString(" ") { it.repeat(20) }
+        val query = captureQuery(span = "wave", imageSearchTerms = rawTerms)
+        assertTrue(query.length <= 80, "the field must be bounded before the words are even counted")
+        assertFalse(query.contains("e".repeat(20)), "the fifth 20-character word must not survive the 80-character bound")
+    }
+
+    @Test
+    fun `when every term is dropped, the query falls back to the span`() = runTest {
+        val query = captureQuery(span = "wave", imageSearchTerms = "-a \"b\" c:d")
+        assertEquals("wave", query, "no term survived, so the present behaviour must run")
+    }
+
     // ------------------------------------------------------------------ the happy path
 
     @Test
@@ -462,5 +539,25 @@ class CommonsClientTest {
         assertTrue(appender.list.none { it.formattedMessage.contains(secretLookingSpan) })
         assertTrue(appender.list.none { it.formattedMessage.contains("gsrsearch") })
         assertTrue(appender.list.all { it.throwableProxy == null })
+    }
+
+    /** The model's own [imageSearchTerms] is model output, the same rule as the span itself: a
+     * failure may log a status or an exception's class name, and never the terms themselves. */
+    @Test
+    fun `a failure never logs the model's own image search terms`() = runTest {
+        val appender = ListAppender<ILoggingEvent>().apply { start() }
+        val logger = LoggerFactory.getLogger("com.mytetz.api.CommonsClient") as ch.qos.logback.classic.Logger
+        logger.addAppender(appender)
+
+        val secretLookingTerms = "confidential terms 42"
+        try {
+            clientReturning("""{"secret": "$secretLookingTerms", this is not valid json""")
+                .findImage("escape velocity", emptyList(), secretLookingTerms)
+        } finally {
+            logger.detachAppender(appender)
+        }
+
+        assertTrue(appender.list.isNotEmpty(), "the failure must still be logged")
+        assertTrue(appender.list.none { it.formattedMessage.contains(secretLookingTerms) })
     }
 }
