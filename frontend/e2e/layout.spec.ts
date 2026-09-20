@@ -2379,3 +2379,118 @@ test('the account card still shows "Trial ends" for a learner in trial at 390px'
   await expect(cardDetail, 'the account card shows the trial detail').toBeVisible();
   await expect(cardDetail).toContainText('Trial ends September 20, 2026.');
 });
+
+/**
+ * Issue #141. The owner saw the "Account" link sit higher than the count text next to it, and the
+ * left side sit out of line with the right side. This block reads the true vertical centre of
+ * every text and every control of the header — the text of a link, by `Range.getBoundingClientRect()`
+ * on its own text node, so a link's own padding and border never count as part of its text — and
+ * compares that centre against the centre of the bar. `.bar` sets `box-sizing: border-box` and a
+ * `border-bottom` with no matching `border-top`, so even a correctly centred element sits 1px
+ * above the bar's own outer centre; every reading below allows for that with a 1px tolerance (2px
+ * for the wordmark, whose display font carries different metrics from the body font every other
+ * text in the bar uses).
+ */
+type HeaderCentreReading = { label: string; centre: number; tolerance: number };
+
+async function headerCentreReadings(
+  page: Page,
+): Promise<{ barCentre: number; readings: HeaderCentreReading[] }> {
+  return page.evaluate(() => {
+    function textCentre(el: Element | null): number | null {
+      if (!el) return null;
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      const rect = range.getBoundingClientRect();
+      return (rect.top + rect.bottom) / 2;
+    }
+    function elementCentre(el: Element | null): number | null {
+      if (!el) return null;
+      const rect = el.getBoundingClientRect();
+      return (rect.top + rect.bottom) / 2;
+    }
+    function visible(el: Element | null): boolean {
+      if (!el) return false;
+      const rect = el.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    }
+
+    const bar = document.querySelector('.bar')!.getBoundingClientRect();
+    const barCentre = (bar.top + bar.bottom) / 2;
+    const readings: HeaderCentreReading[] = [];
+    const add = (label: string, centre: number | null, tolerance: number) => {
+      if (centre !== null) readings.push({ label, centre, tolerance });
+    };
+
+    const mark = document.querySelector('.bar__mark-text');
+    if (visible(mark)) add('wordmark', textCentre(mark), 2);
+
+    const logo = document.querySelector('.bar app-logo-mark');
+    if (visible(logo)) add('logo', elementCentre(logo), 1);
+
+    document.querySelectorAll('.bar__nav .bar__link').forEach((el, i) => {
+      if (visible(el)) add(`nav-link-${i}`, textCentre(el), 1);
+    });
+
+    const account = document.querySelector('a.bar__account');
+    if (visible(account)) add('account-link', textCentre(account), 1);
+
+    const count = document.querySelector('.allowance-meter__count [aria-hidden="true"]');
+    if (visible(count)) add('meter-count', textCentre(count), 1);
+
+    const subscribe = document.querySelector('.allowance-meter__subscribe');
+    if (visible(subscribe)) add('subscribe-button', elementCentre(subscribe), 1);
+
+    const dot = document.querySelector('.bar app-status-dot .dot');
+    if (visible(dot)) add('status-dot', elementCentre(dot), 1);
+
+    return { barCentre, readings };
+  });
+}
+
+const HEADER_CENTRE_WIDTHS = [1360, 768, 390];
+const HEADER_CENTRE_CASES: Array<{ label: string; view: Partial<AccountView> | null }> = [
+  { label: 'no account', view: null },
+  {
+    label: 'a learner in trial',
+    view: {
+      status: 'TRIALING',
+      trialEndsAtEpochMillis: Date.UTC(2026, 8, 20),
+      resetsAtEpochMillis: null,
+    },
+  },
+  { label: 'an active learner', view: {} },
+  { label: 'an expired learner', view: { status: 'EXPIRED', remaining: 0 } },
+];
+
+for (const { label, view } of HEADER_CENTRE_CASES) {
+  for (const width of HEADER_CENTRE_WIDTHS) {
+    test(`each text and each control of the header sits on the bar's centre line, for ${label}, at ${width}px`, async ({
+      page,
+    }) => {
+      await stubCatalogueAndSession(page);
+      if (view) await stubAccount(page, accountView(view));
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto('/');
+      await page.locator('.topic__tile').first().waitFor();
+
+      const { barCentre, readings } = await headerCentreReadings(page);
+
+      // Printed so a report of this issue quotes a real run, and not an estimate.
+      console.log(
+        `[issue-141] label=${label} width=${width} barCentre=${barCentre} ` +
+          `readings=${JSON.stringify(readings)}`,
+      );
+
+      expect(readings.length, `at least one header element was read, for ${label}`).toBeGreaterThan(
+        0,
+      );
+      for (const { label: elementLabel, centre, tolerance } of readings) {
+        expect(
+          Math.abs(centre - barCentre),
+          `${elementLabel} sits within ${tolerance}px of the bar's centre line, for ${label}, at ${width}px`,
+        ).toBeLessThanOrEqual(tolerance);
+      }
+    });
+  }
+}
