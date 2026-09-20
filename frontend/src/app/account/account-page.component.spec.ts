@@ -33,6 +33,12 @@ const trialing: AccountView = {
   currentPeriodEndsAtEpochMillis: null,
 };
 
+// Issue #177. `ACTIVE` and `PAST_DUE` block a deletion — see `deletionBlocked` — so every spec
+// below that exercises the confirm-and-delete flow needs a status the backend actually lets
+// through. `CANCELLED` still shows "Manage subscription" (see the status-badge spec below), and
+// it does not renew, so it is the one status that proves both things stay true together.
+const deletable: AccountView = { ...active, status: 'CANCELLED' };
+
 const signedOut = {
   code: 'SIGN_IN_REQUIRED',
   message: 'sign in to continue',
@@ -380,7 +386,10 @@ describe('AccountPageComponent', () => {
   });
 
   it('links to the terms next to the subscribe control', async () => {
-    await mount((req) => req.flush(active));
+    // CANCELLED, and not ACTIVE: issue #177 moves "Manage subscription" out of this row and into
+    // the delete panel for a status that blocks a deletion. CANCELLED shows the control here,
+    // same as before.
+    await mount((req) => req.flush(deletable));
 
     const actions = fixture.nativeElement.querySelector('.account-page__actions');
     const manage = actions.querySelector('[data-action="manage-subscription"]');
@@ -401,12 +410,56 @@ describe('AccountPageComponent', () => {
     expect(terms.classList).not.toContain('mt-pill--ghost');
   });
 
+  // Issue #177. `POST /api/account/delete` answers `409 SUBSCRIPTION_ACTIVE` for ACTIVE and
+  // PAST_DUE. The delete panel shows the same rule up front, before a learner ever asks.
+  it.each(['ACTIVE', 'PAST_DUE'])(
+    'the delete panel shows "Cancel your subscription first." with Manage subscription, and no confirm button, for %s',
+    async (status) => {
+      await mount((req) => req.flush({ ...active, status }));
+
+      expect(text()).toContain('Cancel your subscription first.');
+      expect(fixture.nativeElement.querySelector('[data-action="delete-account"]')).toBeNull();
+      const manage = fixture.nativeElement.querySelector(
+        '[data-action="manage-subscription"]',
+      ) as HTMLButtonElement;
+      expect(manage).not.toBeNull();
+      expect(manage.textContent).toContain('Manage subscription');
+    },
+  );
+
+  it.each(['TRIALING', 'CANCELLED', 'EXPIRED', 'NONE'])(
+    'the delete panel shows the confirm button, and not the subscription sentence, for %s',
+    async (status) => {
+      await mount((req) => req.flush({ ...active, status }));
+
+      expect(text()).not.toContain('Cancel your subscription first.');
+      expect(fixture.nativeElement.querySelector('[data-action="delete-account"]')).not.toBeNull();
+    },
+  );
+
+  it('a click on Manage subscription in the blocked delete panel opens the vendor portal', async () => {
+    await mount((req) => req.flush({ ...active, status: 'ACTIVE' }));
+    const redirect = vi.spyOn(fixture.componentInstance, 'redirect').mockImplementation(() => {});
+
+    const manage = fixture.nativeElement.querySelector(
+      '[data-action="manage-subscription"]',
+    ) as HTMLButtonElement;
+    manage.click();
+
+    http
+      .expectOne('/api/billing/portal')
+      .flush({ url: 'https://example.freemius.com/portal?token=abc' });
+    await fixture.whenStable();
+
+    expect(redirect).toHaveBeenCalledWith('https://example.freemius.com/portal?token=abc');
+  });
+
   it('puts delete account in its own block, below a divider, with no heading', async () => {
     // Finding F15 put "Delete account" in its own block, below a divider, under the heading
     // "Close your account". Issue #140 removes the heading: the button already names the action,
     // so a heading above it repeats the same words. The DOM order still proves the block comes
     // after the primary row and not before it.
-    await mount((req) => req.flush(active));
+    await mount((req) => req.flush(deletable));
 
     const actions = fixture.nativeElement.querySelector('.account-page__actions');
     const signOut = fixture.nativeElement.querySelector('[data-action="sign-out"]');
@@ -423,7 +476,7 @@ describe('AccountPageComponent', () => {
   });
 
   it('delete account opens a confirmation panel instead of sending a request at once', async () => {
-    await mount((req) => req.flush(active));
+    await mount((req) => req.flush(deletable));
 
     const del = fixture.nativeElement.querySelector(
       '[data-action="delete-account"]',
@@ -441,7 +494,7 @@ describe('AccountPageComponent', () => {
   // Issue #145. The page at `/` is the "dashboard" in every text a learner reads, and never the
   // "catalogue".
   it('the confirmation panel names the dashboard, not the catalogue', async () => {
-    await mount((req) => req.flush(active));
+    await mount((req) => req.flush(deletable));
 
     (
       fixture.nativeElement.querySelector('[data-action="delete-account"]') as HTMLButtonElement
@@ -453,7 +506,7 @@ describe('AccountPageComponent', () => {
   });
 
   it('cancelling the confirmation panel sends no request and closes it', async () => {
-    await mount((req) => req.flush(active));
+    await mount((req) => req.flush(deletable));
 
     (
       fixture.nativeElement.querySelector('[data-action="delete-account"]') as HTMLButtonElement
@@ -475,7 +528,7 @@ describe('AccountPageComponent', () => {
 
   it('marks the delete confirm button busy, with a label that names the work, while its request runs', async () => {
     // Finding F7, animation J. Same rule as "Manage subscription" above.
-    await mount((req) => req.flush(active));
+    await mount((req) => req.flush(deletable));
 
     (
       fixture.nativeElement.querySelector('[data-action="delete-account"]') as HTMLButtonElement
@@ -498,7 +551,7 @@ describe('AccountPageComponent', () => {
   });
 
   it('confirming deletion posts to the delete route and ends signed out', async () => {
-    await mount((req) => req.flush(active));
+    await mount((req) => req.flush(deletable));
 
     (
       fixture.nativeElement.querySelector('[data-action="delete-account"]') as HTMLButtonElement
@@ -524,7 +577,7 @@ describe('AccountPageComponent', () => {
   });
 
   it('a stale-session refusal tells the learner to sign in again', async () => {
-    await mount((req) => req.flush(active));
+    await mount((req) => req.flush(deletable));
 
     (
       fixture.nativeElement.querySelector('[data-action="delete-account"]') as HTMLButtonElement
@@ -547,11 +600,11 @@ describe('AccountPageComponent', () => {
 
     expect(text()).toContain('Sign in again');
     // The account view must survive a refused deletion — nothing was deleted.
-    expect(store.view()).toEqual(active);
+    expect(store.view()).toEqual(deletable);
   });
 
   it('a failed delete request reports a generic error and leaves the account in place', async () => {
-    await mount((req) => req.flush(active));
+    await mount((req) => req.flush(deletable));
 
     (
       fixture.nativeElement.querySelector('[data-action="delete-account"]') as HTMLButtonElement
@@ -568,7 +621,40 @@ describe('AccountPageComponent', () => {
     fixture.detectChanges();
 
     expect(text()).toContain('Could not delete your account');
-    expect(store.view()).toEqual(active);
+    expect(store.view()).toEqual(deletable);
+  });
+
+  // Issue #177. `POST /api/account/delete` answers `409 SUBSCRIPTION_ACTIVE` when a webhook moves
+  // the status to ACTIVE or PAST_DUE after this page loaded, but before the learner confirms.
+  it('a 409 refusal shows the same sentence the blocked panel shows, and reloads the account', async () => {
+    await mount((req) => req.flush(deletable));
+
+    (
+      fixture.nativeElement.querySelector('[data-action="delete-account"]') as HTMLButtonElement
+    ).click();
+    fixture.detectChanges();
+    (
+      fixture.nativeElement.querySelector(
+        '[data-action="delete-account-confirm"]',
+      ) as HTMLButtonElement
+    ).click();
+
+    http.expectOne('/api/account/delete').flush(
+      {
+        code: 'SUBSCRIPTION_ACTIVE',
+        message: 'cancel your subscription before you delete your account',
+      },
+      { status: 409, statusText: 'Conflict' },
+    );
+    await fixture.whenStable();
+    http.expectOne('/api/account').flush({ ...active, status: 'ACTIVE' });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(text()).toContain('Cancel your subscription first.');
+    expect(
+      fixture.nativeElement.querySelector('[data-action="delete-account-confirm"]'),
+    ).toBeNull();
   });
 
   it('a visit with no action parameter makes one request and starts no poll', async () => {

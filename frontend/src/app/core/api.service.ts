@@ -149,8 +149,9 @@ export class ApiService {
   /**
    * Deletes the signed-in learner's account.
    *
-   * The route needs a fresh sign-in. An old session gets `403 CONFIRMATION_REQUIRED`.
-   * `AccountPageComponent` shows a specific message for that status.
+   * The route needs a fresh sign-in. An old session gets `403 CONFIRMATION_REQUIRED`. A
+   * subscription that can still renew gets `409 SUBSCRIPTION_ACTIVE`. `AccountPageComponent`
+   * shows a specific message for each of those two statuses.
    */
   deleteAccount(): Promise<void> {
     return firstValueFrom(this.http.post<void>('/api/account/delete', null));

@@ -84,6 +84,14 @@ function presentationForStatus(status: string): StatusPresentation {
  * fresh sign-in to complete a deletion. A stale session answers `403 CONFIRMATION_REQUIRED`, and
  * [confirmDelete] shows a message that tells the learner to sign in again, rather than a generic
  * failure.
+ *
+ * Issue #177: a subscription that can still renew — `ACTIVE` or `PAST_DUE` — blocks a deletion.
+ * [deletionBlocked] reads that same rule from the account view, so the delete panel never opens
+ * the confirm flow for either status. It shows one short sentence instead, "Cancel your
+ * subscription first.", next to the "Manage subscription" control — the one path that unblocks
+ * a deletion. The backend can still answer `409 SUBSCRIPTION_ACTIVE` for a stale page, when a
+ * webhook changes the status after this page loaded; [confirmDelete] reads the account again on
+ * that status, and the panel then shows the same sentence.
  */
 @Component({
   selector: 'app-account-page',
@@ -173,7 +181,7 @@ function presentationForStatus(status: string): StatusPresentation {
                 >Subscribe</a
               >
             }
-            @if (manageVisible()) {
+            @if (manageVisible() && !deletionBlocked()) {
               <button
                 type="button"
                 class="mt-pill mt-pill--ghost"
@@ -202,7 +210,21 @@ function presentationForStatus(status: string): StatusPresentation {
                above it only repeats that name. -->
           <hr class="account-page__divider" />
           <div class="account-page__danger">
-            @if (!confirmingDelete()) {
+            @if (deletionBlocked()) {
+              <div class="account-page__danger-row">
+                <p class="account-page__danger-text">Cancel your subscription first.</p>
+                <button
+                  type="button"
+                  class="mt-pill mt-pill--ghost"
+                  data-action="manage-subscription"
+                  [disabled]="openingPortal()"
+                  [attr.aria-busy]="openingPortal() ? 'true' : null"
+                  (click)="manageSubscription()"
+                >
+                  {{ openingPortal() ? 'Opening the portal…' : 'Manage subscription' }}
+                </button>
+              </div>
+            } @else if (!confirmingDelete()) {
               <button
                 type="button"
                 class="mt-pill mt-pill--ghost"
@@ -211,9 +233,7 @@ function presentationForStatus(status: string): StatusPresentation {
               >
                 Delete account
               </button>
-            }
-
-            @if (confirmingDelete()) {
+            } @else {
               <div class="mt-card mt-card--dashed account-page__confirm" role="alertdialog">
                 <p class="account-page__confirm-text">
                   This permanently deletes your account, every reading session and the allowance
@@ -359,6 +379,22 @@ function presentationForStatus(status: string): StatusPresentation {
         align-items: flex-start;
         gap: 12px;
       }
+      /* Issue #177. The row that replaces the confirm button while a subscription can still
+         renew: the sentence and "Manage subscription" centre on the same cross-axis line when
+         they share a row, and wrap onto their own lines on a narrow viewport. */
+      .account-page__danger-row {
+        width: 100%;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 12px;
+      }
+      .account-page__danger-text {
+        margin: 0;
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--mt-muted);
+      }
       .account-page__confirm {
         width: 100%;
         padding: 20px 24px;
@@ -407,6 +443,15 @@ export class AccountPageComponent implements OnInit {
   readonly manageVisible = computed(() => {
     const status = this.view()?.status;
     return status === 'ACTIVE' || status === 'PAST_DUE' || status === 'CANCELLED';
+  });
+
+  /** True when `POST /api/account/delete` would answer `409 SUBSCRIPTION_ACTIVE` right now: the
+   * status is `ACTIVE` or `PAST_DUE`, the two statuses that can still renew. See
+   * `AuthRoutes.kt`'s own KDoc on that route for the full rule. The delete panel reads this to
+   * show "Cancel your subscription first." in place of the confirm flow. */
+  readonly deletionBlocked = computed(() => {
+    const status = this.view()?.status;
+    return status === 'ACTIVE' || status === 'PAST_DUE';
   });
 
   /** True for every status [manageVisible] does not cover: `TRIALING`, `NONE`, `EXPIRED`, and a
@@ -594,6 +639,11 @@ export class AccountPageComponent implements OnInit {
    * message that tells the learner to sign in again, rather than the generic failure text every
    * other status gets.
    *
+   * A `409 SUBSCRIPTION_ACTIVE` means a subscription that can still renew now blocks the
+   * deletion — the status changed after this page loaded. This method reads the account again for
+   * that status, the same way a success does; the fresh status moves [deletionBlocked] to true,
+   * and the panel then shows "Cancel your subscription first." in place of the confirm dialog.
+   *
    * A success reads the account again, the same pattern [signOut] uses. The cleared cookie makes
    * that read answer `401`, and `AccountStore.load` clears the view on a `401` — so the page ends
    * on the signed-out state with no separate message to keep in step with the server.
@@ -610,6 +660,12 @@ export class AccountPageComponent implements OnInit {
         this.actionError.set(
           'Sign in again through a fresh magic link, then delete your account right away.',
         );
+      } else if (err instanceof HttpErrorResponse && err.status === 409) {
+        // The status changed after this page loaded — a webhook moved it to ACTIVE or PAST_DUE
+        // between the load and this click. `account.load()` reads the new status, which moves
+        // `deletionBlocked` to true, and the panel itself then shows "Cancel your subscription
+        // first." in place of the confirm dialog — no separate error message needed here.
+        await this.account.load();
       } else {
         this.actionError.set('Could not delete your account. Check your connection and try again.');
       }
