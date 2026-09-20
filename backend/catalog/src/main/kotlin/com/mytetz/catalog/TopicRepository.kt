@@ -72,6 +72,14 @@ class TopicRepository(database: MongoDatabase) {
         collection.updateOne(Filters.eq("_id", slug), Updates.set("reviewedAt", epochMillis))
     }
 
+    /**
+     * Clears [Topic.reviewedAt] back to null. This is the way back for [setReviewedAt]. Issue
+     * #47's owner command calls this method for its `--clear-reviewed` flag.
+     */
+    suspend fun clearReviewedAt(slug: String) {
+        collection.updateOne(Filters.eq("_id", slug), Updates.unset("reviewedAt"))
+    }
+
     suspend fun findBySlug(slug: String): Topic? =
         collection.find(Filters.eq("_id", slug)).firstOrNull()
 
