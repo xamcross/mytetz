@@ -159,22 +159,9 @@ test('the privacy page states the technical facts the spec requires', async ({ p
 });
 
 test('the account page links to the terms next to the subscribe control', async ({ page }) => {
-  // CANCELLED, and not ACTIVE: issue #177 moves "Manage subscription" out of this row and into
-  // the delete panel for a status that blocks a deletion (`ACTIVE`, `PAST_DUE`). CANCELLED still
-  // shows the control in the primary row, and it does not block a deletion.
-  await page.route('**/api/account', (route) =>
-    route.fulfill({
-      json: {
-        email: 'learner@example.com',
-        status: 'CANCELLED',
-        trialEndsAtEpochMillis: null,
-        currentPeriodEndsAtEpochMillis: null,
-        allowance: 25,
-        remaining: 20,
-        resetsAtEpochMillis: null,
-      },
-    }),
-  );
+  // ACTIVE: issue #177 changes nothing about this row. "Manage subscription" stays here for
+  // every status that already showed it.
+  await stubActiveAccount(page);
   await page.goto('/account');
   await page.getByText('learner@example.com').waitFor();
 
