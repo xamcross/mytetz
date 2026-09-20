@@ -84,14 +84,14 @@ internal const val SITE_URL = "https://mytetz.com"
  * stylesheet for that reason. A new version is a new URL, so no cache holds it.
  * `StylesheetVersionTest` fails, and prints the new value, when the file changes and this value
  * does not. */
-internal const val GUIDES_STYLESHEET_VERSION = "ab5993fb8e"
+internal const val GUIDES_STYLESHEET_VERSION = "0eff4d84f0"
 internal const val GUIDES_STYLESHEET = "/guides/guides.css?v=$GUIDES_STYLESHEET_VERSION"
 
 /** The two external scripts of this layout, each with the version of its file in the URL, for the
  * same reason as [GUIDES_STYLESHEET]: each file is cached for a day. The start button ships
  * disabled and `topic-start.js` enables it, so new markup with an old cached script would leave
  * the button disabled. `StylesheetVersionTest` guards the two values too. */
-internal const val SITE_HEADER_SCRIPT_VERSION = "ae21c569de"
+internal const val SITE_HEADER_SCRIPT_VERSION = "1cc4193b57"
 internal const val SITE_HEADER_SCRIPT = "/site-header.js?v=$SITE_HEADER_SCRIPT_VERSION"
 internal const val TOPIC_START_SCRIPT_VERSION = "539de9d1e8"
 internal const val TOPIC_START_SCRIPT = "/topic-start.js?v=$TOPIC_START_SCRIPT_VERSION"
@@ -184,6 +184,13 @@ private const val LOGO_MARK_INNER_SVG = """<rect x="0" y="0" width="32" height="
  * `title` from the answer, with the same four states and the same four labels
  * `status-dot.component.ts` uses. A page with no JavaScript keeps the "checking" ring: an honest
  * state for a page that never asked the question, and not a claim of health it cannot back up.
+ *
+ * Issue #173: a signed-in learner reads the same "Subscribe" path here as in the application
+ * header. The link to `/subscribe` ships `hidden`, because a Ktor page cannot know the learner's
+ * own account status before it ships (the same reason the account control ships "Sign in"). Once
+ * `GET /api/account` answers, `frontend/public/site-header.js` shows the link — at every width for
+ * a status with no live count, and at 768px and above only for a learner in trial, next to the
+ * count — the same two rules `allowance-meter.component.ts` states for the application header.
  */
 internal fun BODY.siteHeaderBar() {
     header(classes = "bar") {
@@ -213,6 +220,11 @@ internal fun BODY.siteHeaderBar() {
                 +"Sign in"
             }
             span(classes = "bar__count") { attributes["id"] = "site-header-count" }
+            a(href = "/subscribe", classes = "bar__subscribe") {
+                attributes["id"] = "site-header-subscribe"
+                attributes["hidden"] = "hidden"
+                +"Subscribe"
+            }
             span(classes = "dot dot--checking") {
                 attributes["id"] = "site-header-dot"
                 attributes["role"] = "img"

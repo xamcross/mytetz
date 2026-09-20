@@ -204,11 +204,15 @@ a:hover {
 }
 /* The allowance count site-header.js fills in next to the account link, in the same words
    allowance-meter.component.ts renders. This span stays in the row even while it is empty — a
-   visitor with no account, or before the script's own answer arrives — because
-   AppShellComponent's own empty meter host does the same: it is an inline-flex element with no
-   content, and it still takes up one gap of .bar__right on each side. Hiding this span with
-   `display: none` would close that gap and move the account link and the dot out of line with
-   the application header (issue #143's own review). */
+   visitor with no account, before the script's own answer arrives, or a signed-in learner with a
+   live count still to come — because AppShellComponent's own empty meter host does the same: it
+   is an inline-flex element with no content, and it still takes up one gap of .bar__right on each
+   side. Hiding this span with `display: none` in one of those cases would close that gap and move
+   the account link and the dot out of line with the application header (issue #143's own review).
+   Issue #173: once the account answer names a status with no live count at all (NONE, EXPIRED, or
+   an unknown status), no reflow risk is left, and `site-header.js` sets `hidden` on this span —
+   `allowance-meter.component.ts`'s own template renders no count element at all for that case, so
+   this rule matches it, and not the AppShellComponent shape this comment first described. */
 .bar__count {
   font-size: 13px;
   font-weight: 700;
@@ -217,11 +221,69 @@ a:hover {
 }
 /* Issue #143's own review: the period word ("today", "in your trial") follows
    allowance-meter.component.ts's own rule — hidden below 768px, because the full sentence ran
-   into the account link at a phone width, the same overlap issue #133 already fixed once. The
-   digits stay visible at every width. */
+   into the account link at a phone width, the same overlap issue #133 already fixed once. */
 @media (max-width: 767px) {
   .bar__count-period {
     display: none;
+  }
+}
+/* Issue #173: the short form below 768px, the same rule allowance-meter.component.ts's own
+   `.allowance-meter__count-short` follows. "N of M tokens left" is too wide for a 360px phone
+   with the word "tokens" in it (issue #139's own finding); "N / M tokens" carries the same two
+   numbers and the same unit in less room. Hidden by default, so the full form shows at 768px
+   and above. */
+.bar__count-short {
+  display: none;
+}
+@media (max-width: 767px) {
+  .bar__count-full {
+    display: none;
+  }
+  .bar__count-short {
+    display: inline;
+  }
+}
+/* Issue #173: the header's own "Subscribe" link, the same look as `.mt-pill--coral` in
+   `frontend/src/styles.css` — this plain stylesheet carries its own copy, because it imports
+   nothing from that file (see this file's own header comment). The fill is `--mt-coral-press`,
+   and not `--mt-coral`: white text on `--mt-coral` measures 3.01:1 and fails the 4.5:1 contrast
+   a 14px label needs. `site-header.js` shows this link with `hidden = false` for a signed-in
+   learner whose account carries no live count, and, at 768px and above, for a learner in trial
+   too — see that file's own header comment for the full rule per status. */
+.bar__subscribe {
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 16px;
+  border: var(--mt-border-w) solid var(--mt-coral-press);
+  border-radius: 999px;
+  background: var(--mt-coral-press);
+  color: var(--mt-surface);
+  font-size: 14px;
+  font-weight: 800;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.bar__subscribe:hover {
+  color: var(--mt-surface);
+}
+/* This rule must stay: the link's own `display: inline-flex` above is an author style, and an
+   author style wins over the browser's own `[hidden] { display: none }` default regardless of
+   which one is more specific — origin decides first, and specificity only breaks a tie inside one
+   origin. Without this rule the link would show through the `hidden` attribute the server ships
+   it with, before `site-header.js` ever runs. */
+.bar__subscribe[hidden] {
+  display: none;
+}
+/* Issue #173: the trial variant of the Subscribe link sits next to the count, and the row has no
+   room for both below 768px — the same width `allowance-meter.component.ts`'s own
+   `.allowance-meter__subscribe--trial` rule uses. The status-only variant (no live count: NONE,
+   EXPIRED, or an unknown status) carries no `--trial` class, and shows at every width instead. */
+.bar__subscribe--trial {
+  display: none;
+}
+@media (min-width: 768px) {
+  .bar__subscribe--trial {
+    display: inline-flex;
   }
 }
 /* The one true sentence a screen reader announces, at every width — the same role
