@@ -25,8 +25,9 @@ interface StatusPresentation {
 /**
  * Issue #138. The row once printed a sentence, for example "Your payment is overdue." A status
  * is a short label, and not a sentence: the owner asks for "TRIAL" or "PREMIUM". The owner named
- * these two labels on 2026-09-20. The three other rows are a proposal, not yet confirmed by the
- * owner.
+ * these two labels on 2026-09-20, and "FREE" for an account with no paid access. `CANCELLED` and
+ * `PAST_DUE` keep "PREMIUM": `Entitlement.resolve` gives them the subscriber allowance until the
+ * period end or the grace end, so "FREE" would contradict the count that the page shows.
  *
  * The five keys mirror the backend's own `SubscriptionStatus` enum
  * (`backend/billing/src/main/kotlin/com/mytetz/billing/Subscription.kt`).
