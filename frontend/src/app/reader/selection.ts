@@ -43,21 +43,133 @@ export function selectionToSpan(root: HTMLElement, range: Range): SpanPayload | 
   // invariant `setStart`/`setEnd` both maintain), so `start <= end` always holds here. The one case
   // where they'd come out numerically *equal* despite `range` being non-collapsed — boundary points
   // that differ in container/offset but have no text between them, e.g. either side of an empty
-  // element — falls out of the `text.length === 0` check below instead, since `raw` is then `''`.
+  // element — falls out of the `text.length === 0` check below instead, since the trimmed slice is
+  // then `''`.
   const full = root.textContent ?? '';
-  const raw = full.slice(start, end);
 
-  // A double-click on a word routinely grabs a leading or trailing space along with it; an
-  // untrimmed span would carry that space into `text` and fail the server's exact-match gate the
-  // moment the rendered whitespace doesn't collapse identically to the stored body's. Trimming and
-  // re-anchoring both ends keeps `text` and `[start, end)` in agreement with each other — and with
-  // `full`, since `raw`'s own indices came from `full` in the first place.
-  const leading = raw.length - raw.trimStart().length;
-  const trailing = raw.length - raw.trimEnd().length;
-  const text = raw.trim();
+  // Issue #169. A learner's drag rarely lands on a word's own edge: a double-click grabs a
+  // leading or trailing space, and a drag that stops a little short or a little long lands inside
+  // a word instead of at its edge. `snapToWholeWords` gives both problems one fix: it trims
+  // whitespace and punctuation from the two ends, then grows each end outward to the edge of the
+  // word it now stands inside, if it stands inside one at all. See that function's own comment for
+  // the two ways it can decide where a word ends.
+  const snapped = snapToWholeWords(full, start, end);
+  const text = full.slice(snapped.start, snapped.end);
   if (text.length === 0) return null;
 
-  return { text, start: start + leading, end: end - trailing };
+  return { text, start: snapped.start, end: snapped.end };
+}
+
+/**
+ * A run of word characters inside a string, as a half-open range: `[start, end)`.
+ *
+ * `wordRunsBySegmenter` and `wordRunsByPattern` below build this list two different ways, one
+ * per browser, but `snapToWholeWords` reads only this shape — so the two producers stay
+ * interchangeable, and a test can force either one.
+ */
+interface WordRun {
+  readonly start: number;
+  readonly end: number;
+}
+
+/**
+ * A character the phrase must never start or end on: Unicode whitespace, or Unicode punctuation
+ * (`\p{P}`, every script's own comma, full stop, quote mark and dash). A phrase that keeps a
+ * stray full stop reads as two words joined, not as the one word the learner meant — the
+ * issue's own "electrons." example. A symbol such as an emoji is not punctuation, so this leaves
+ * it alone; a learner who selects one on purpose keeps it, the same as before this issue.
+ */
+const EDGE_TRIM_PATTERN = /[\s\p{P}]/u;
+
+/**
+ * One word: a run of letters and digits (`\p{L}` and `\p{N}` — every script's own letters and
+ * digits, not only Latin ones), with a single apostrophe or hyphen allowed between two such runs.
+ * That one rule covers "don't" and "well-known" alike, and it also covers a chain of them, such
+ * as "well-known-enough".
+ */
+const WORD_PATTERN = /[\p{L}\p{N}]+(?:['’-][\p{L}\p{N}]+)*/gu;
+
+/**
+ * The regex fallback's word runs, for a browser with no `Intl.Segmenter`.
+ *
+ * This finds every match of [WORD_PATTERN] in `text`, in order. It has one real limit next to
+ * `wordRunsBySegmenter`: a script written with no space between words, such as Chinese or
+ * Japanese, has no gap for the pattern to stop at, so a whole run of that script's own letters
+ * comes back as a single "word" — correct for the tests this issue asks for (Latin script, and
+ * Cyrillic or Greek letters, all space-separated), but not the true word boundary for a script
+ * that carries none.
+ */
+function wordRunsByPattern(text: string): WordRun[] {
+  const runs: WordRun[] = [];
+  for (const match of text.matchAll(WORD_PATTERN)) {
+    runs.push({ start: match.index, end: match.index + match[0].length });
+  }
+  return runs;
+}
+
+/**
+ * `Intl.Segmenter`'s own word runs — `isWordLike` segments only, since a space or a punctuation
+ * mark is its own segment too and is never a word.
+ *
+ * `Intl.Segmenter` knows the true word rule of every script it supports, including a script
+ * written with no space between words. The MDN compatibility table
+ * (https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Intl/Segmenter)
+ * lists it for Chrome 87+, Edge 87+ and Safari 14.1+, and for Firefox only from version 125
+ * (April 2024) — read from MDN's own browser-compat-data for this page, not guessed. A learner on
+ * an older Firefox, or on another browser with no `Intl.Segmenter` at all, gets [wordRunsByPattern]
+ * instead; [chooseWordRuns] below is the one place that decides between them, checked fresh on
+ * every call so a test can force either path.
+ */
+function wordRunsBySegmenter(text: string): WordRun[] {
+  const segmenter = new Intl.Segmenter(undefined, { granularity: 'word' });
+  const runs: WordRun[] = [];
+  for (const { segment, index, isWordLike } of segmenter.segment(text)) {
+    if (isWordLike) runs.push({ start: index, end: index + segment.length });
+  }
+  return runs;
+}
+
+function chooseWordRuns(text: string): WordRun[] {
+  return typeof Intl.Segmenter === 'function' ? wordRunsBySegmenter(text) : wordRunsByPattern(text);
+}
+
+/**
+ * Trims whitespace and punctuation from the two ends of `[start, end)`, then grows each end
+ * outward to the edge of the word it stands inside, if it stands inside one.
+ *
+ * The two steps run in that order on purpose. Trimming first means a trailing full stop is gone
+ * before the growth step ever looks at that end, so growth never has to tell "the learner's drag
+ * ended on this word" apart from "the learner's drag ended on the punctuation after this word" —
+ * by the time growth runs, only the second case is still possible, since trimming already
+ * removed the first.
+ *
+ * Growth touches only a boundary that lands strictly inside a word. A boundary already on a
+ * word's own edge is left exactly where it is, and a boundary that lands on a character that is
+ * no word at all (a symbol, or a script `Intl.Segmenter` does not treat as word-like) is left
+ * alone too — this only ever moves a boundary outward, never inward, and never invents a word
+ * where there is none.
+ *
+ * Returns `start === end` when nothing is left after trimming — a selection that held only
+ * whitespace, only punctuation, or both, the same "no span" outcome an all-whitespace selection
+ * already gave before this issue.
+ */
+function snapToWholeWords(
+  full: string,
+  rawStart: number,
+  rawEnd: number,
+): { start: number; end: number } {
+  let start = rawStart;
+  let end = rawEnd;
+  while (start < end && EDGE_TRIM_PATTERN.test(full[start])) start++;
+  while (end > start && EDGE_TRIM_PATTERN.test(full[end - 1])) end--;
+  if (start === end) return { start, end };
+
+  const runs = chooseWordRuns(full);
+  const startRun = runs.find((run) => run.start <= start && start < run.end);
+  if (startRun) start = startRun.start;
+  const endRun = runs.find((run) => run.start < end && end <= run.end);
+  if (endRun) end = endRun.end;
+  return { start, end };
 }
 
 /**
