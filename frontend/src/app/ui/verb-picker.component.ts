@@ -2,12 +2,15 @@ import {
   Component,
   ElementRef,
   afterNextRender,
+  computed,
   inject,
   input,
   output,
   viewChild,
   viewChildren,
 } from '@angular/core';
+import { METERED_STATUSES } from '../account/allowance-meter.component';
+import { AccountStore } from '../core/account.store';
 import { SpanPayload, Verb } from '../core/models';
 
 /** Where the picker sits, in the coordinates of the element that hosts it. */
@@ -92,7 +95,20 @@ const VERBS: ReadonlyArray<{ verb: Verb; name: string; caption: string }> = [
             (click)="onVerbClick(v.verb)"
           >
             <span class="picker__name">{{ v.name }}</span>
-            <span class="picker__caption" [id]="'cap-' + v.verb">{{ v.caption }}</span>
+            <!--
+              Issue #139. The price sits inside the same element aria-describedby already names,
+              so a screen reader reads one description — the caption, then the price — and not
+              two. "1 token" is the maximum price: a cache hit spends nothing, but the button
+              cannot know that before the click.
+            -->
+            <span class="picker__caption" [id]="'cap-' + v.verb"
+              >{{ v.caption }}
+              @if (showPrice()) {
+                <!-- A non-breaking space between "1" and "token": a narrow card once wrapped the
+                     phrase across two lines, splitting the number from its own unit. -->
+                <span class="picker__price">· 1&nbsp;token</span>
+              }
+            </span>
           </button>
         }
       </div>
@@ -237,6 +253,13 @@ const VERBS: ReadonlyArray<{ verb: Verb; name: string; caption: string }> = [
       .picker__verb--primary .picker__caption {
         color: var(--mt-surface);
       }
+      /* Issue #139. The price inherits the caption's own colour — --mt-muted on --mt-surface
+         (5.84:1), --mt-surface on --mt-coral-press for the primary verb (5.42:1) — both already
+         above the 4.5:1 an AA small text needs, so this rule adds no new colour token, only the
+         weight that marks it as a distinct fact from the caption's own words. */
+      .picker__price {
+        font-weight: 800;
+      }
       /* F13. Hidden above 768px on purpose: a wide screen already closes the picker on Escape and
          on a press outside, so a second, always-on close control would only add noise there.
          \`.mt-pill mt-pill--ghost\` on the tag above already supplies every colour and border this
@@ -311,9 +334,17 @@ const VERBS: ReadonlyArray<{ verb: Verb; name: string; caption: string }> = [
 })
 export class VerbPickerComponent {
   private readonly host = inject(ElementRef<HTMLElement>);
+  private readonly account = inject(AccountStore);
 
   readonly span = input.required<SpanPayload>();
   readonly anchor = input.required<PickerAnchor>();
+
+  /** True for a signed-in learner with a live count — see [METERED_STATUSES]. Issue #139: a
+   * verb spends a token, so its price shows only where a token could genuinely be spent. A
+   * visitor with no account, or an account with no live count, sees no price. */
+  protected readonly showPrice = computed(() =>
+    METERED_STATUSES.has(this.account.view()?.status ?? ''),
+  );
 
   readonly chosen = output<Verb>();
   /** One output for every dismissal, with the reason attached — see [PickerDismissal]. A second
