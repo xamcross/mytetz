@@ -14,9 +14,18 @@ describe('TermsPageComponent', () => {
     expect(fixture.nativeElement.querySelector('h1').textContent).toContain('Terms');
   });
 
-  it("marks every place that still waits for the owner's legal text", () => {
+  it('carries no owner-text marker; every section holds real text', () => {
     const text = fixture.nativeElement.textContent as string;
     const markers = text.match(/\[owner text\]/g) ?? [];
-    expect(markers.length).toBeGreaterThan(0);
+    expect(markers.length).toBe(0);
+  });
+
+  it('states the price, the trial, the daily allowance and the right of withdrawal', () => {
+    const text = fixture.nativeElement.textContent as string;
+    expect(text).toContain('$12');
+    expect(text).toMatch(/40 tokens/);
+    expect(text).toMatch(/25 tokens/);
+    expect(text).toMatch(/14 days/);
+    expect(text).toMatch(/withdrawal/i);
   });
 });
