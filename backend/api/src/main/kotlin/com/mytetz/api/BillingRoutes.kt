@@ -2,6 +2,7 @@ package com.mytetz.api
 
 import com.mytetz.account.AccountService
 import com.mytetz.account.MagicLinkService
+import com.mytetz.billing.BillingConfig
 import com.mytetz.billing.BillingService
 import com.mytetz.billing.FreemiusConfig
 import com.mytetz.billing.FreemiusEvent
@@ -12,6 +13,7 @@ import io.ktor.server.request.contentLength
 import io.ktor.server.request.receiveChannel
 import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
+import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.utils.io.toByteArray
 import kotlinx.serialization.Serializable
@@ -48,11 +50,38 @@ const val PORTAL_REQUESTS_PER_LEARNER: Int = 5
 
 const val PORTAL_WINDOW_MILLIS: Long = 10L * 60 * 1000
 
+/**
+ * The monthly subscription price, in US dollars, for one reader.
+ *
+ * No configuration value holds this number. The price lives in the Freemius dashboard, and the
+ * owner set it on 2026-09-19, in pull request #130 of issue #121: "the price should be $12". One
+ * named constant, read by `GET /api/billing/plans` below and by `FaqRoutes.kt`'s `GET /faq`, so a
+ * later price change touches one line and the two pages can never disagree.
+ */
+internal const val SUBSCRIPTION_PRICE_USD_PER_MONTH: Int = 12
+
 @Serializable
 data class CheckoutResponse(val url: String)
 
 @Serializable
 data class PortalResponse(val url: String)
+
+/**
+ * The view `GET /api/billing/plans` answers.
+ *
+ * No field has a default value. `AuthConfigView`'s own KDoc, in `AuthRoutes.kt`, states the reason
+ * this matters here too: this project's `ContentNegotiation` install does not turn on
+ * `encodeDefaults`, so kotlinx.serialization omits a field whose value equals its declared
+ * default. A deployment can run with the very defaults [BillingConfig] declares, and this view
+ * must still carry every number on the wire for that deployment.
+ */
+@Serializable
+data class BillingPlansResponse(
+    val priceUsdPerMonth: Int,
+    val trialDays: Int,
+    val trialGenerations: Int,
+    val subscriberDailyExplains: Int,
+)
 
 /**
  * `POST /api/billing/checkout`, `POST /api/billing/portal`, and `POST /api/billing/webhook`.
@@ -115,6 +144,7 @@ data class PortalResponse(val url: String)
 fun Route.billingRoutes(
     account: AccountService,
     billing: BillingService,
+    billingConfig: BillingConfig,
     freemiusConfig: () -> FreemiusConfig,
     freemiusApiClient: () -> FreemiusApiClient,
     cookies: PrincipalCookieConfig,
@@ -125,6 +155,23 @@ fun Route.billingRoutes(
     // See `newConfigMissingLog`'s own KDoc.
     configMissingLogged: MutableSet<String> = newConfigMissingLog(),
 ) {
+
+    // `GET /api/billing/plans`. A pure read, the same shape `FaqRoutes.kt`'s `GET /faq` is: no
+    // sign-in, no cookie, and no vendor call. [billingConfig] is the one `BillingConfig` instance
+    // `Components.billing` also reads — see `Components.billingConfig`'s own KDoc — so the trial
+    // length, the trial pool and the subscriber allowance this view states can never disagree with
+    // the values the product actually enforces. The plan screen (issue #137) reads this route
+    // before a learner signs in, so the route must answer with no session at all.
+    get("/api/billing/plans") {
+        call.respond(
+            BillingPlansResponse(
+                priceUsdPerMonth = SUBSCRIPTION_PRICE_USD_PER_MONTH,
+                trialDays = billingConfig.trialDays,
+                trialGenerations = billingConfig.trialGenerations,
+                subscriberDailyExplains = billingConfig.subscriberDailyExplains,
+            ),
+        )
+    }
 
     post("/api/billing/checkout") {
         val user = Principals.readSessionId(call, cookies)?.let { account.resolveSession(it) }
