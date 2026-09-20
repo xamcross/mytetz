@@ -133,4 +133,34 @@ describe('AppShellComponent', () => {
     expect(link).toBeTruthy();
     expect(link.textContent?.trim()).toBe('FAQ');
   });
+
+  /**
+   * Issue #143. The nav holds exactly two links, in this order: Glossary, then Guides. No test
+   * file can read both sides of the parity rule at once — the backend test
+   * `the header of every Ktor page type and of every static guide page holds the same nav links,
+   * in the same order` in `backend/api/src/test/kotlin/com/mytetz/api/HeaderFooterParityTest.kt`
+   * asserts the other side, from the Ktor and the static guide markup. Also holds no "Topics"
+   * link: the owner's decision on 2026-09-20 removes it, since the wordmark already opens `/`.
+   */
+  it('holds only Glossary and Guides in the nav, in that order, with no Topics link', () => {
+    fixture.detectChanges();
+
+    const links = Array.from(
+      fixture.nativeElement.querySelectorAll('.bar__nav a'),
+    ) as HTMLAnchorElement[];
+    const labels = links.map((a) => a.textContent?.trim());
+    expect(labels).toEqual(['Glossary', 'Guides']);
+    expect(links.map((a) => a.getAttribute('href'))).toEqual(['/glossary', '/guides']);
+  });
+
+  it('shows a Guides link to /guides, since frontend/public/guides serves that page as a static file', () => {
+    fixture.detectChanges();
+
+    // A plain href, and not a routerLink, for the same reason the Guides footer link states:
+    // /guides is a static HTML file under frontend/public/guides, outside app.routes.ts.
+    const link = fixture.nativeElement.querySelector(
+      '.bar__nav a[href="/guides"]',
+    ) as HTMLAnchorElement;
+    expect(link.textContent?.trim()).toBe('Guides');
+  });
 });
