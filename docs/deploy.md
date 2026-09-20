@@ -1000,3 +1000,83 @@ nothing: an unknown slug among the named slugs stops the whole command, with not
 The command checks a chosen date against the topic's own seed text, when a seed is already stored
 for that topic. A topic with no stored seed skips this one check. Every other check still applies
 to it: an unknown slug, an unpublished topic, a badly formed date, and a date in the future.
+
+## Seed text correction (issue #162)
+
+This section is for the owner. It replaces the text of a topic's seed explanation. **The owner
+runs this command. An agent never runs it.** It writes to the production database.
+
+Three seed texts have a corrected statement, in
+`docs/content/seed-corrections-2026-09-20/`: `special-relativity`, `microbiology` and
+`historical-linguistics`. Each file holds that topic's full, corrected seed text. The investigation
+behind each correction, with a file and a line for each statement, is in that same folder's
+`README.md`.
+
+The command reads `MONGODB_URI` from the environment only. It never reads a `.env` file itself; the
+commands below read the owner's own `.env` file and pass the value in.
+
+### Step 1: the dry run
+
+This step writes nothing. It shows the present text, the corrected text, a line diff, how many
+existing child explanations sit under a sentence the correction drops, and how many sessions still
+hold a node on one of those children.
+
+```bash
+MONGODB_URI="$(grep '^MONGODB_URI=' .env | cut -d= -f2- | tr -d '[:cntrl:]')" ./gradlew :backend:graph:correctSeedText --args="--slug special-relativity --file docs/content/seed-corrections-2026-09-20/special-relativity.txt"
+```
+
+Repeat with `--slug microbiology --file docs/content/seed-corrections-2026-09-20/microbiology.txt`
+and with `--slug historical-linguistics --file docs/content/seed-corrections-2026-09-20/historical-linguistics.txt`.
+
+### Step 2: read the report
+
+Read the diff. Confirm it changes only the one statement the correction is for, and confirm every
+other sentence stays exactly as it was.
+
+### Step 3: write the correction
+
+```bash
+MONGODB_URI="$(grep '^MONGODB_URI=' .env | cut -d= -f2- | tr -d '[:cntrl:]')" ./gradlew :backend:graph:correctSeedText --args="--slug special-relativity --file docs/content/seed-corrections-2026-09-20/special-relativity.txt --write"
+```
+
+This step is all or nothing. It changes the seed's text only, and keeps its key and every other
+field. It refuses an unknown slug, a document that is not a seed, an empty text, a text with `<` or
+`>`, a text over the 600-character seed limit, and a text identical to the present one — each
+refusal writes nothing and names the reason. The command prints the same report step 1 shows,
+before it writes.
+
+Run the same write for `microbiology` and for `historical-linguistics`, each with its own `--slug`
+and `--file`.
+
+### Step 4: check the live page
+
+```bash
+curl -sI https://mytetz.com/topics/special-relativity
+```
+
+Then open the page and confirm it shows the corrected statement. Repeat for
+`https://mytetz.com/topics/microbiology` and `https://mytetz.com/topics/historical-linguistics`.
+Record the three checks in a comment on issue #162.
+
+### Taking a text back
+
+```bash
+MONGODB_URI="$(grep '^MONGODB_URI=' .env | cut -d= -f2- | tr -d '[:cntrl:]')" ./gradlew :backend:graph:correctSeedText --args="--key <the full content key the write step printed> --revert"
+```
+
+This restores the exact text the write step replaced, and clears the record of that replace. A
+second revert of the same key finds nothing left to undo.
+
+### After a model-family migration
+
+`MYTETZ_MIGRATE_ON_BOOT=true` deletes every explanation whose model family is not the deploy's own
+family, seed or not, corrected or not, then regenerates a fresh seed for each published topic. A
+correction survives an ordinary deploy, because it changes no document's model family — but a real
+model-family switch deletes a corrected seed exactly as it deletes every other explanation, and the
+regenerated text is not guaranteed to keep the correction. Repeat step 1 and step 4 above for these
+three topics after any deploy that turns this flag on.
+
+### Then: the review date
+
+Once the three checks in step 4 pass, run the review-date command from issue #47 for these three
+topics, so each corrected page carries a "Last reviewed" date.

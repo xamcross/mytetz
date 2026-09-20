@@ -26,7 +26,7 @@ sealed interface ValidationResult {
  */
 class ExplanationValidator(
     private val minChars: Int = 25,
-    private val maxChars: Int = 600,
+    private val maxChars: Int = DEFAULT_MAX_CHARS,
 ) {
 
     fun validate(rawBody: String, stopReason: String?): ValidationResult {
@@ -119,6 +119,14 @@ class ExplanationValidator(
 
         /** The only Messages API stop reason that means the model finished of its own accord. */
         const val COMPLETED_STOP_REASON: String = "end_turn"
+
+        /**
+         * The character ceiling a generated explanation must not cross — see [maxChars]'s own
+         * note. Named here, and public, so a caller that must enforce the same ceiling on text
+         * that never passes through this class — `CorrectSeedText.kt`'s own limit on a
+         * hand-written replacement seed text — reads one number instead of a second copy of it.
+         */
+        const val DEFAULT_MAX_CHARS: Int = 600
 
         /**
          * Internal markup that must never reach a learner. `<thinking>` is the obvious one; the
