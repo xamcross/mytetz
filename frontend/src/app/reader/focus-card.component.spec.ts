@@ -236,6 +236,100 @@ describe('FocusCardComponent', () => {
     ]);
   });
 
+  /**
+   * Issue #169. Selecting characters 6..9 of `BODY` lands both ends inside the word "pillars"
+   * (`BODY`'s own "pillars" spans 4..11) — the same shape of drag the issue's own evidence names:
+   * a little short of one word's edge, or a little long past it. `onSelectionChanged` must grow
+   * that to the whole word in three places at once: the browser's own selection (so the learner
+   * sees the grown phrase), the picker's lead line, and the span the request carries.
+   *
+   * The live browser `Selection` is read right after the `mouseup` dispatch and before
+   * `fixture.detectChanges()`, not through the shared `select()` helper. `detectChanges()` here
+   * creates `VerbPickerComponent`, whose constructor focuses its first button — and this
+   * project's own jsdom collapses `window.getSelection()` on any `focus()` call at all, on any
+   * element, selected text or not (confirmed against this project's own jsdom, not assumed; a
+   * real browser keeps a document selection independent of where focus moves). Reading the
+   * selection before that focus call is what lets this test see the grown highlight at all.
+   */
+  it('grows a mid-word drag to whole words in the highlight, the picker head and the request', () => {
+    const range = document.createRange();
+    const text = bodyEl().firstChild as Text;
+    range.setStart(text, 6); // "lla", entirely inside "pillars"
+    range.setEnd(text, 9);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    bodyEl().dispatchEvent(new Event('mouseup'));
+
+    // The visible highlight — the actual browser `Selection` — now covers the whole word, not the
+    // three characters the drag itself covered.
+    expect(selection?.toString()).toBe('pillars');
+
+    fixture.detectChanges();
+
+    expect(pickerLive()).toBe(true);
+    expect(bodyEl().parentElement!.querySelector('.picker__lead')!.textContent).toContain(
+      'pillars',
+    );
+
+    verbButton('EXPLAIN')!.click();
+
+    expect(requests).toEqual([{ span: { text: 'pillars', start: 4, end: 11 }, verb: 'EXPLAIN' }]);
+  });
+
+  /**
+   * Issue #169. Moving the browser's own selection fires a genuine DOM `selectionchange` event.
+   * If the handler that moves the selection were itself bound to that same event, this would be
+   * a loop with no end: the fix triggers the handler that made the fix. This proves the loop
+   * cannot start, by firing the real event the fix produces and checking that nothing reacts to
+   * it — the handler runs from `mouseup` and `touchend` alone, a fact the class doc comment on
+   * `onSelectionChanged` states and this pins.
+   */
+  it('does not react to a selectionchange event on its own — only mouseup and touchend open the picker', () => {
+    const range = document.createRange();
+    const text = bodyEl().firstChild as Text;
+    range.setStart(text, 4);
+    range.setEnd(text, 11);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+    fixture.detectChanges();
+
+    expect(pickerLive()).toBe(false);
+  });
+
+  /**
+   * Review correction 3. `select(4, 11)` picks "pillars" out of `BODY`, already on both of that
+   * word's own edges, so `selectionToSpan` grows nothing — the span's own offsets already equal
+   * the drag's own offsets. `onSelectionChanged` must not call `removeAllRanges`/`addRange` in
+   * this case: on a touch screen, that pair replaces the native selection handles with a fresh
+   * pair even when the selection itself does not move, which reads as the handles jumping under
+   * the learner's finger for no reason at all.
+   */
+  it('does not touch the browser selection when the drag already stands on word edges', () => {
+    // Built by hand, rather than through the shared `select()` helper: that helper's own setup
+    // calls `removeAllRanges()` itself, before the `mouseup` it dispatches — a spy installed
+    // before calling it would also count that unrelated setup call as if it were the component's
+    // own. The spy below starts only once that setup has already finished.
+    const range = document.createRange();
+    const text = bodyEl().firstChild as Text;
+    range.setStart(text, 4); // "pillars" — already on both of that word's own edges.
+    range.setEnd(text, 11);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+
+    const removeAllRangesSpy = vi.spyOn(Selection.prototype, 'removeAllRanges');
+    bodyEl().dispatchEvent(new Event('mouseup'));
+    fixture.detectChanges();
+
+    expect(pickerLive()).toBe(true);
+    expect(removeAllRangesSpy).not.toHaveBeenCalled();
+
+    removeAllRangesSpy.mockRestore();
+  });
+
   it('clears the span, rather than throwing, on a mouseup that selected nothing', () => {
     select(4, 11);
     expect(pickerLive()).toBe(true);

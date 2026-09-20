@@ -5,8 +5,6 @@ import com.mytetz.graph.ExplanationRepository
 import com.mytetz.graph.MAX_PUBLISHED_EXPLANATIONS
 import com.mytetz.graph.Verb
 import com.mytetz.persistence.Mongo
-import com.mytetz.persistence.MongoConfig
-import kotlinx.coroutines.runBlocking
 import java.io.File
 import kotlin.system.exitProcess
 
@@ -80,52 +78,102 @@ const val DEFAULT_LIST_LIMIT: Int = 50
  * ## What this script never does
  *
  * It never reads a `.env` file: it reads the `MONGODB_URI` environment variable only, the same way
- * production does ([MongoConfig.fromEnv]). It never prints that variable's value, or any other part
+ * production does (`MongoConfig.fromEnv`). It never prints that variable's value, or any other part
  * of a connection string. [listTopCandidates], [publishByKeys] and [unpublishByKeys] are the
  * functions this issue's own tests exercise, against a real Testcontainers Mongo, never against a
  * live database — see `PublishTopExplanationsTest.kt`.
+ *
+ * ## How this process ends (issue #175)
+ *
+ * [main] ends with one call to [exitProcess], as its last statement, on the result of [runMain].
+ * [runMain] catches every [Throwable]. This one call is then the sole reason this process always
+ * ends. It does not depend on which thread of the driver is not a daemon thread, or on why.
  */
 fun main(args: Array<String>) {
-    when (val command = parseArgs(args.toList()) { path -> File(path).readText() }) {
-        is ReviewCommand.InvalidArgs -> {
-            System.err.println("Error: ${command.message}")
-            exitProcess(1)
-        }
-        is ReviewCommand.ListCandidates -> runBlocking {
-            val explanations = explanationRepository()
-            val candidates = listTopCandidates(explanations, command.limit)
-            val report = renderCandidateReport(candidates)
-            println(report)
-            if (command.outFile != null) {
-                File(command.outFile).writeText(report)
-                println("Wrote ${candidates.size} candidate(s) to ${command.outFile}")
-            }
-        }
-        is ReviewCommand.Publish -> runBlocking {
-            when (val outcome = publishByKeys(explanationRepository(), command.keys)) {
-                is PublishOutcome.Applied -> println("Published ${outcome.changedKeys.size} document(s).")
-                is PublishOutcome.Rejected -> {
-                    System.err.println("Nothing was published. Problems:")
-                    outcome.problems.forEach { System.err.println("- $it") }
-                    exitProcess(1)
+    exitProcess(
+        runMain {
+            when (val command = parseArgs(args.toList()) { path -> File(path).readText() }) {
+                is ReviewCommand.InvalidArgs -> {
+                    System.err.println("Error: ${command.message}")
+                    1
                 }
+                is ReviewCommand.ListCandidates ->
+                    if (!requireMongoUriSet()) 1 else runListCandidatesCommand(command)
+                is ReviewCommand.Publish ->
+                    if (!requireMongoUriSet()) 1 else runOwnerScript { mongo -> runPublish(mongo, command) }
+                is ReviewCommand.Unpublish ->
+                    if (!requireMongoUriSet()) 1 else runOwnerScript { mongo -> runUnpublish(mongo, command) }
             }
+        },
+    )
+}
+
+/**
+ * Checks a given `--out` folder before [runOwnerScript] ever makes a client. A bad path then gets
+ * a fast, clean refusal, and never a database read followed by a write that fails. Issue #175's
+ * own evidence: `PublishTopExplanations.kt:100` threw `FileNotFoundException` on a Windows path in
+ * the form `/c/Users/...`, well after the database read had already run.
+ */
+private fun runListCandidatesCommand(command: ReviewCommand.ListCandidates): Int {
+    val outFile = command.outFile
+    if (outFile != null) {
+        val parentFolder = File(outFile).absoluteFile.parentFile
+        if (parentFolder != null && !parentFolder.exists()) {
+            System.err.println("Error: the folder of --out does not exist: $outFile")
+            return 1
         }
-        is ReviewCommand.Unpublish -> runBlocking {
-            when (val outcome = unpublishByKeys(explanationRepository(), command.keys)) {
-                is PublishOutcome.Applied -> println("Unpublished ${outcome.changedKeys.size} document(s).")
-                is PublishOutcome.Rejected -> {
-                    System.err.println("Nothing was unpublished. Problems:")
-                    outcome.problems.forEach { System.err.println("- $it") }
-                    exitProcess(1)
-                }
-            }
+    }
+    return runOwnerScript { mongo -> runListCandidates(mongo, command) }
+}
+
+private suspend fun runListCandidates(mongo: Mongo, command: ReviewCommand.ListCandidates): Int {
+    val explanations = ExplanationRepository(mongo.database)
+    val candidates = listTopCandidates(explanations, command.limit)
+    val report = renderCandidateReport(candidates)
+    println(report)
+    val outFile = command.outFile
+    if (outFile != null) {
+        try {
+            File(outFile).writeText(report)
+        } catch (e: Exception) {
+            System.err.println("Error: ${e.message}")
+            System.err.println("The list above was printed. The file was not written.")
+            return 1
+        }
+        println("Wrote ${candidates.size} candidate(s) to $outFile")
+    }
+    return 0
+}
+
+private suspend fun runPublish(mongo: Mongo, command: ReviewCommand.Publish): Int {
+    val explanations = ExplanationRepository(mongo.database)
+    return when (val outcome = publishByKeys(explanations, command.keys)) {
+        is PublishOutcome.Applied -> {
+            println("Published ${outcome.changedKeys.size} document(s).")
+            0
+        }
+        is PublishOutcome.Rejected -> {
+            System.err.println("Nothing was published. Problems:")
+            outcome.problems.forEach { System.err.println("- $it") }
+            1
         }
     }
 }
 
-private fun explanationRepository(): ExplanationRepository =
-    ExplanationRepository(Mongo(MongoConfig.fromEnv()).database)
+private suspend fun runUnpublish(mongo: Mongo, command: ReviewCommand.Unpublish): Int {
+    val explanations = ExplanationRepository(mongo.database)
+    return when (val outcome = unpublishByKeys(explanations, command.keys)) {
+        is PublishOutcome.Applied -> {
+            println("Unpublished ${outcome.changedKeys.size} document(s).")
+            0
+        }
+        is PublishOutcome.Rejected -> {
+            System.err.println("Nothing was unpublished. Problems:")
+            outcome.problems.forEach { System.err.println("- $it") }
+            1
+        }
+    }
+}
 
 // ---------------------------------------------------------------------- argument parsing
 
