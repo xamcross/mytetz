@@ -266,18 +266,25 @@ describe('VerbPickerComponent', () => {
     });
 
     /**
-     * The price is part of the accessible description, not a separate announcement: it joins the
-     * same element `aria-describedby` already names, alongside the caption. A screen reader then
-     * reads one description, not two.
+     * The price is part of the accessible description, and not the name — aria-describedby can
+     * name more than one element, space-separated, and a browser reads each one's text in
+     * order. This helper does the same lookup by hand, so the assertion below does not need a
+     * real browser's own accessible-description computation to prove the fact.
      */
-    it('puts the price in the accessible description, alongside the caption', () => {
+    function describedText(el: HTMLElement): string {
+      const ids = (el.getAttribute('aria-describedby') ?? '').split(' ').filter(Boolean);
+      return ids
+        .map((id) => fixture.nativeElement.querySelector(`#${id}`)?.textContent ?? '')
+        .join(' ');
+    }
+
+    it('puts the price in the accessible description, after the caption', () => {
       TestBed.inject(AccountStore).view.set(trialing);
       fixture.detectChanges();
 
       const explain = button('EXPLAIN');
-      const describedBy = explain.getAttribute('aria-describedby');
-      expect(describedBy).toBeTruthy();
-      const description = fixture.nativeElement.querySelector(`#${describedBy}`).textContent;
+      expect(explain.getAttribute('aria-describedby')).toBeTruthy();
+      const description = describedText(explain);
       expect(description).toContain('Plain words');
       expect(description).toContain('1' + ' ' + 'token');
     });
@@ -287,8 +294,7 @@ describe('VerbPickerComponent', () => {
       fixture.detectChanges();
 
       const explain = button('EXPLAIN');
-      const describedBy = explain.getAttribute('aria-describedby');
-      const description = fixture.nativeElement.querySelector(`#${describedBy}`).textContent;
+      const description = describedText(explain);
       expect(description).toContain('Plain words');
       expect(description).not.toContain('1 token');
     });

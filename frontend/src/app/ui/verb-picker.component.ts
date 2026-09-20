@@ -91,24 +91,28 @@ const VERBS: ReadonlyArray<{ verb: Verb; name: string; caption: string }> = [
             [class.picker__verb--primary]="first"
             [attr.data-verb]="v.verb"
             [attr.aria-label]="v.name"
-            [attr.aria-describedby]="'cap-' + v.verb"
+            [attr.aria-describedby]="
+              showPrice() ? 'cap-' + v.verb + ' price-' + v.verb : 'cap-' + v.verb
+            "
             (click)="onVerbClick(v.verb)"
           >
-            <span class="picker__name">{{ v.name }}</span>
             <!--
-              Issue #139. The price sits inside the same element aria-describedby already names,
-              so a screen reader reads one description — the caption, then the price — and not
-              two. "1 token" is the maximum price: a cache hit spends nothing, but the button
-              cannot know that before the click.
+              Issue #139, review round 2. The price used to sit inside the caption's own text,
+              which put it in two different places across the five buttons: at the end of a short
+              caption's line, or wrapped onto a line of its own for a long one — a real screenshot
+              found this, at an offset the owner could see. The price is now its own element, on
+              the name's own row, at the row's right end, in every button alike; the caption row
+              below it is unchanged from before this issue, so a button's height is unchanged too.
+              aria-describedby names both the caption and the price, in that order, so a screen
+              reader still reads one description with both facts in it, never the price alone.
             -->
-            <span class="picker__caption" [id]="'cap-' + v.verb"
-              >{{ v.caption }}
+            <span class="picker__row">
+              <span class="picker__name">{{ v.name }}</span>
               @if (showPrice()) {
-                <!-- A non-breaking space between "1" and "token": a narrow card once wrapped the
-                     phrase across two lines, splitting the number from its own unit. -->
-                <span class="picker__price">· 1&nbsp;token</span>
+                <span class="picker__price" [id]="'price-' + v.verb">1&nbsp;token</span>
               }
             </span>
+            <span class="picker__caption" [id]="'cap-' + v.verb">{{ v.caption }}</span>
           </button>
         }
       </div>
@@ -240,10 +244,36 @@ const VERBS: ReadonlyArray<{ verb: Verb; name: string; caption: string }> = [
           box-shadow: var(--mt-lift-hover-coral);
         }
       }
+      /* Issue #139, review round 2. One row for the name and the price, so the price has one
+         fixed place in every button: at the row's right end. space-between holds the name at the
+         left and the price at the right, whether or not the price is there — a button with no
+         price still measures this row the same way, so its own height never depends on whether
+         a learner is signed in. */
+      .picker__row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
       .picker__name {
         font-family: var(--mt-display);
         font-size: 16px;
         font-weight: 600;
+      }
+      /* --mt-muted on --mt-surface measures 5.84:1, above the 4.5:1 an AA small text needs, so
+         this rule adds no new colour token. white-space: nowrap and flex-shrink: 0 keep "1 token"
+         on its own one line at the row's right end, never squeezed by a long verb name next to
+         it — every verb name here is short enough that the two never actually collide. */
+      .picker__price {
+        font-size: 11px;
+        font-weight: 800;
+        color: var(--mt-muted);
+        white-space: nowrap;
+        flex-shrink: 0;
+      }
+      .picker__verb--primary .picker__price {
+        /* --mt-surface on --mt-coral-press measures 5.42:1, the same reason as above. */
+        color: var(--mt-surface);
       }
       .picker__caption {
         font-size: 12px;
@@ -252,13 +282,6 @@ const VERBS: ReadonlyArray<{ verb: Verb; name: string; caption: string }> = [
       }
       .picker__verb--primary .picker__caption {
         color: var(--mt-surface);
-      }
-      /* Issue #139. The price inherits the caption's own colour — --mt-muted on --mt-surface
-         (5.84:1), --mt-surface on --mt-coral-press for the primary verb (5.42:1) — both already
-         above the 4.5:1 an AA small text needs, so this rule adds no new colour token, only the
-         weight that marks it as a distinct fact from the caption's own words. */
-      .picker__price {
-        font-weight: 800;
       }
       /* F13. Hidden above 768px on purpose: a wide screen already closes the picker on Escape and
          on a press outside, so a second, always-on close control would only add noise there.
@@ -283,6 +306,18 @@ const VERBS: ReadonlyArray<{ verb: Verb; name: string; caption: string }> = [
           /* The sheet rises from the edge it is attached to. */
           transform-origin: bottom center;
           animation: picker-rise var(--mt-dur-panel) var(--mt-ease-out) both;
+        }
+        /*
+         * Issue #139, review round 2. One column, not two, below 768px. A real run measured the
+         * name's own row too narrow for "Show me a diagram" and its own price to share, in a
+         * 2-column grid at 390px: the longest verb name alone measures near the whole column's
+         * own width, and the row then wrapped the name itself onto two lines, taller than main's
+         * own height for that button. The sheet is a scrollable bottom sheet at this width
+         * already (max-height and overflow: auto, above), so one column, five rows tall, costs
+         * this design nothing above 767px it did not already have below it.
+         */
+        .picker__grid {
+          grid-template-columns: 1fr;
         }
         .picker__cancel {
           display: block;
