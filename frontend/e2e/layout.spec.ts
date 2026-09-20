@@ -2362,3 +2362,56 @@ for (const { label, overrides } of TABLET_GAP_CASES) {
     });
   }
 }
+
+/**
+ * Issue #142. The owner decided the header states no trial end date, at any width — the
+ * "Trial ends …" text stayed only for the account page's own card. This asserts the header
+ * shows no visible "Trial ends" text at 768px and 1024px, the two widths where issue #100's
+ * original rule and this review's own extension change from hidden to shown, and at 1360px,
+ * a plain desktop width. It must fail on the code before this round of review, because that
+ * code shows the detail text at 768px and above.
+ */
+for (const width of [768, 1024, 1360]) {
+  test(`the header shows no "Trial ends" text for a learner in trial at ${width}px`, async ({
+    page,
+  }) => {
+    await stubCatalogueAndSession(page);
+    await stubAccount(
+      page,
+      accountView({
+        status: 'TRIALING',
+        trialEndsAtEpochMillis: Date.UTC(2026, 8, 20),
+        resetsAtEpochMillis: null,
+      }),
+    );
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto('/');
+    await page.locator('.topic__tile').first().waitFor();
+
+    const headerDetail = page.locator('header.bar .allowance-meter__detail');
+    await expect(headerDetail, `the header hides the trial detail at ${width}px`).toBeHidden();
+  });
+}
+
+/**
+ * Issue #142. The account page is the one place left that gives the end of a trial, so its own
+ * card must still show it, at the same width issue #100's own account-card test already uses.
+ */
+test('the account card still shows "Trial ends" for a learner in trial at 390px', async ({
+  page,
+}) => {
+  await stubAccount(
+    page,
+    accountView({
+      status: 'TRIALING',
+      trialEndsAtEpochMillis: Date.UTC(2026, 8, 20),
+      resetsAtEpochMillis: null,
+    }),
+  );
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.goto('/account');
+
+  const cardDetail = page.locator('.account-page__card .allowance-meter__detail');
+  await expect(cardDetail, 'the account card shows the trial detail').toBeVisible();
+  await expect(cardDetail).toContainText('Trial ends September 20, 2026.');
+});

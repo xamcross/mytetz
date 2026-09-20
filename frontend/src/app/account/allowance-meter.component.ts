@@ -44,7 +44,9 @@ const METERED_STATUSES: ReadonlySet<string> = new Set([
           </span>
           @if (account.status === 'TRIALING') {
             @if (trialEndText(account.trialEndsAtEpochMillis); as end) {
-              <span class="allowance-meter__detail">Trial ends {{ end }}.</span>
+              <span class="allowance-meter__detail allowance-meter__detail--trial"
+                >Trial ends {{ end }}.</span
+              >
             }
           } @else {
             @if (resetText(account.resetsAtEpochMillis); as reset) {
@@ -162,6 +164,17 @@ const METERED_STATUSES: ReadonlySet<string> = new Set([
         :host-context(.bar) .allowance-meter__detail {
           display: inline;
         }
+      }
+      /*
+       * Issue #142. The owner decided the header never states a trial's end date, at any width —
+       * the account page is the one place that keeps it, in its own "Trial ends" row. This
+       * selector matches only the trial branch of the detail text (see the template above), so a
+       * subscriber's own "Resets …" text still follows the rule above and shows from 1024px up.
+       * This rule has the same specificity as the min-width rule above and stands after it in
+       * this file, so it wins at every width, including 1024px and above.
+       */
+      :host-context(.bar) .allowance-meter__detail--trial {
+        display: none;
       }
       @media (max-width: 767px) {
         /*
