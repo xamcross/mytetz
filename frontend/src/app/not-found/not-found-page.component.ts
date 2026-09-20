@@ -14,7 +14,7 @@ import { RouterLink } from '@angular/router';
     <main class="legal-page not-found-page">
       <h1>Page not found</h1>
       <p>This page does not exist.</p>
-      <a class="mt-pill mt-pill--ghost" routerLink="/">Back to topics</a>
+      <a class="mt-pill mt-pill--ghost" routerLink="/">Back to the dashboard</a>
     </main>
   `,
   styles: [

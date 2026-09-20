@@ -44,6 +44,20 @@ class FaqRoutesTest {
         assertTrue(!html.contains("€"), "the page still holds a euro sign")
     }
 
+    /** Issue #145: the page names the page at `/` the "dashboard", and holds no "catalogue". */
+    @Test
+    fun `the reader-access answer names the dashboard, and holds no catalogue`() = testApplication {
+        application { routing { faqRoutes(billingConfig = BillingConfig()) } }
+
+        val html = client.get("/faq").bodyAsText()
+
+        assertTrue(
+            "A reader reads the dashboard, a topic page and its seed text" in html,
+            "the answer must name the dashboard",
+        )
+        assertTrue("catalogue" !in html, "the page must hold no word \"catalogue\"")
+    }
+
     @Test
     fun `the html element states the language of the page`() = testApplication {
         application { routing { faqRoutes(billingConfig = BillingConfig()) } }

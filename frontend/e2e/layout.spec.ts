@@ -1624,23 +1624,20 @@ test('the header fits on one line for a signed-in learner at 390px and 400px, wi
  * `:host-context(.bar)` guard: at 768px, 772px, 776px, 780px and 800px, the header's own meter
  * wrapped onto two lines, 34px tall, with the detail text below the count.
  *
- * Updated by a review of issue #133: the detail now hides inside the header below 1024px, not
- * only below 768px (see the CSS comment in `allowance-meter.component.ts` for the real cause
- * this review found). The old assertion — `countBox.y` equal to `detailBox.y` — no longer applies
- * at 768px and 800px, because the detail is hidden there and has no box a real browser reports.
- * This test now asserts, at those two widths, that the detail stays hidden and the meter itself
- * stays one line tall, well under the 34px a wrapped, two-line meter once measured; at 1024px it
- * keeps the original assertion, because the detail shows again there and the two must still
- * share one line — two elements on a wrapped, second row would each report a different, lower
- * `y`.
+ * Updated by issue #153: the owner decided the header shows the detail text at no width at all,
+ * so it now hides at 1024px too, and not only below it. The old assertion at 1024px checked that
+ * the count and the detail shared one line; that assertion is gone, because the detail has no box
+ * a real browser reports there any more. This test now asserts, at all three widths, that the
+ * detail stays hidden and the meter itself stays one line tall, well under the 34px a wrapped,
+ * two-line meter once measured.
  */
-test('the header meter stays one line high at 768px and 800px, and shares one line with the detail at 1024px', async ({
+test('the header meter stays one line high at 768px, 800px and 1024px, with the detail hidden at each', async ({
   page,
 }) => {
   await stubCatalogueAndSession(page);
   await stubAccount(page, accountView());
 
-  for (const width of [768, 800]) {
+  for (const width of [768, 800, 1024]) {
     await page.setViewportSize({ width, height: 900 });
     await page.goto('/');
     await page.locator('.topic__tile').first().waitFor();
@@ -1649,10 +1646,7 @@ test('the header meter stays one line high at 768px and 800px, and shares one li
     const detail = page.locator('header.bar .allowance-meter__detail');
     const meter = page.locator('header.bar app-allowance-meter');
     await expect(count, `the count is visible at ${width}px`).toBeVisible();
-    await expect(
-      detail,
-      `the detail stays hidden at ${width}px, below the 1024px this review sets`,
-    ).toBeHidden();
+    await expect(detail, `the detail stays hidden at ${width}px`).toBeHidden();
 
     const bar = (await page.locator('.bar').boundingBox())!;
     const meterBox = (await meter.boundingBox())!;
@@ -1674,35 +1668,6 @@ test('the header meter stays one line high at 768px and 800px, and shares one li
       doc.client,
     );
   }
-
-  await page.setViewportSize({ width: 1024, height: 900 });
-  await page.goto('/');
-  await page.locator('.topic__tile').first().waitFor();
-
-  const count = page.locator('header.bar .allowance-meter__count');
-  const detail = page.locator('header.bar .allowance-meter__detail');
-  await expect(count).toBeVisible();
-  await expect(
-    detail,
-    'the detail shows again at 1024px, this review’s own new threshold',
-  ).toBeVisible();
-
-  const bar = (await page.locator('.bar').boundingBox())!;
-  const countBox = (await count.boundingBox())!;
-  const detailBox = (await detail.boundingBox())!;
-  const doc = await page.evaluate(() => ({
-    scroll: document.documentElement.scrollWidth,
-    client: document.documentElement.clientWidth,
-  }));
-
-  console.log(
-    `[issue-106] width=1024 barHeight=${bar.height} countY=${countBox.y} detailY=${detailBox.y} ` +
-      `scrollWidth=${doc.scroll} clientWidth=${doc.client}`,
-  );
-
-  expect(bar.height, 'the bar stays 64px tall at 1024px').toBe(64);
-  expect(countBox.y, 'the count and the detail share one line at 1024px').toBe(detailBox.y);
-  expect(doc.scroll, 'the page does not scroll sideways at 1024px').toBeLessThanOrEqual(doc.client);
 });
 
 /**
@@ -2446,6 +2411,40 @@ test('the account card still shows "Trial ends" for a learner in trial at 390px'
   const cardDetail = page.locator('.account-page__card .allowance-meter__detail');
   await expect(cardDetail, 'the account card shows the trial detail').toBeVisible();
   await expect(cardDetail).toContainText('Trial ends September 20, 2026.');
+});
+
+/**
+ * Issue #153. The owner decided "Resets ..." leaves the header completely, at every width — the
+ * same decision #142 already made for "Trial ends ...". This asserts the header shows no visible
+ * "Resets" text for a subscriber, at 768px, 1024px and 1360px: 1024px is the width where the old
+ * rule used to show the detail again, and 1360px is a plain desktop width above it. It must fail
+ * on the code before this change, because that code shows the detail from 1024px up.
+ */
+for (const width of [768, 1024, 1360]) {
+  test(`the header shows no "Resets" text for a subscriber at ${width}px`, async ({ page }) => {
+    await stubCatalogueAndSession(page);
+    await stubAccount(page, accountView({ status: 'ACTIVE' }));
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto('/');
+    await page.locator('.topic__tile').first().waitFor();
+
+    const headerDetail = page.locator('header.bar .allowance-meter__detail');
+    await expect(headerDetail, `the header hides the reset detail at ${width}px`).toBeHidden();
+  });
+}
+
+/**
+ * Issue #153. The account page is the one place left that gives the next reset, so its own card
+ * must still show it, at the same width and status the header test above uses.
+ */
+test('the account card still shows "Resets" for a subscriber at 1360px', async ({ page }) => {
+  await stubAccount(page, accountView({ status: 'ACTIVE' }));
+  await page.setViewportSize(WIDTHS.wide);
+  await page.goto('/account');
+
+  const cardDetail = page.locator('.account-page__card .allowance-meter__detail');
+  await expect(cardDetail, 'the account card shows the reset detail').toBeVisible();
+  await expect(cardDetail).toContainText('Resets September 20, 2026 at 3:00 PM.');
 });
 
 /**
