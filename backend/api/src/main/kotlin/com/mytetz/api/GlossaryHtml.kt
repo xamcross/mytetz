@@ -66,7 +66,7 @@ fun HTML.glossaryHtml(entries: List<GlossaryEntryView>) {
                 p {
                     +"The glossary has no entry yet. An entry appears here after a person has "
                     +"reviewed it. Go to the "
-                    a(href = "/") { +"catalogue" }
+                    a(href = "/") { +"dashboard" }
                     +" to start with a topic."
                 }
             } else {

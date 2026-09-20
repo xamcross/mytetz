@@ -47,9 +47,14 @@ class HowItWorksRoutesTest {
         assertEquals(HttpStatusCode.OK, response.status)
         val body = response.bodyAsText()
         assertTrue("claude-sonnet-5" in body)
-        // The only script tag on this page is the JSON-LD block.
+        // Issue #143 adds site-header.js in commonHeadTags, so this page's script-tag count
+        // changed from 1 (the JSON-LD block) to 2 (the JSON-LD block and site-header.js).
         val scriptTags = Regex("<script[ >]").findAll(body).count()
-        assertEquals(1, scriptTags, "expected exactly one <script> tag (the JSON-LD block): $body")
+        assertEquals(
+            2,
+            scriptTags,
+            "expected exactly two <script> tags (the JSON-LD block and site-header.js): $body",
+        )
     }
 
     @Test
@@ -81,13 +86,20 @@ class HowItWorksRoutesTest {
         assertTrue("""<meta property="og:url" content="https://mytetz.com/how-it-works">""" in body, body)
     }
 
+    /**
+     * Issue #144 gives this link the class `foot__link`, the same class `AppShellComponent`'s
+     * own footer link carries. The assertion below changed from
+     * `<a href="/how-it-works">How it works</a>` (no class) to the string below, to match —
+     * `kotlinx.html` writes the `href` `a(...)` sets by name before the `class` its `classes`
+     * parameter adds.
+     */
     @Test
     fun `the footer links to itself, the same as every other page`() = testApplication {
         application { routing { howItWorksRoutes(modelId = { "claude-sonnet-5" }) } }
 
         val body = client.get("/how-it-works").bodyAsText()
 
-        assertTrue("""<a href="/how-it-works">How it works</a>""" in body, body)
+        assertTrue("""<a href="/how-it-works" class="foot__link">How it works</a>""" in body, body)
     }
 
     @Test
