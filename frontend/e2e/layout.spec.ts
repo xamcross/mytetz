@@ -2258,7 +2258,50 @@ function assertHeaderGapInvariants(
   );
 }
 
+/**
+ * Issue #133, review round 2. At a phone width the page's own content starts 20px from the
+ * left edge, and the header must line up with it: the owner saw the header's wordmark sit 12px
+ * further in than the page title below it, once a narrower padding closed the phone-width
+ * overlap. This checks the header's own left and right margins directly, in pixels, so a future
+ * change to that padding cannot silently drift away from the page's own 20px margin again.
+ * `boxes` is sorted by `x` first, so "the first element" and "the last element" are read off the
+ * sorted order, not off the order `namedBarLocators` happens to list them in.
+ */
+function assertHeaderEdgeMargins(
+  boxes: BarElementBox[],
+  doc: { client: number },
+  width: number,
+): void {
+  const sortedByX = [...boxes].sort((a, b) => a.box.x - b.box.x);
+  const first = sortedByX[0];
+  const last = sortedByX[sortedByX.length - 1];
+  // Within 1px, and not an exact match: a real browser's own subpixel rounding on font metrics
+  // moves a box by a fraction of a pixel between runs, on the same code, with nothing wrong.
+  expect(
+    first.box.x,
+    `${first.label} starts 20px from the left edge at ${width}px`,
+  ).toBeGreaterThanOrEqual(19);
+  expect(
+    first.box.x,
+    `${first.label} starts 20px from the left edge at ${width}px`,
+  ).toBeLessThanOrEqual(21);
+  const rightMargin = doc.client - (last.box.x + last.box.width);
+  expect(
+    rightMargin,
+    `${last.label} ends 20px from the right edge at ${width}px`,
+  ).toBeGreaterThanOrEqual(19);
+  expect(
+    rightMargin,
+    `${last.label} ends 20px from the right edge at ${width}px`,
+  ).toBeLessThanOrEqual(21);
+}
+
 const HEADER_GAP_WIDTHS = [320, 360, 390, 412, 768];
+
+/** The widths of `HEADER_GAP_WIDTHS` that use the phone padding of 20px, for
+ * `assertHeaderEdgeMargins`. 768px is in `HEADER_GAP_WIDTHS` too, but it already uses the
+ * desktop padding of 32px, not 20px. */
+const PHONE_EDGE_WIDTHS = [320, 360, 390, 412];
 
 /** One case per status the header renders differently for. TRIALING carries the longest count
  * text ("left in your trial"), EXPIRED carries no count and a "Subscribe" button instead, and
@@ -2281,20 +2324,6 @@ for (const { label, overrides } of HEADER_GAP_CASES) {
     test(`no two header elements overlap or sit closer than 8px, for ${label}, at ${width}px`, async ({
       page,
     }) => {
-      // Issue #133's own report of a measurement, not a guess made ahead of a real run: an
-      // expired learner at 320px has no count text to shorten — the row holds only the
-      // wordmark, the "Account" link, the "Subscribe" button and the status dot — so the fix
-      // that shortens the count text does nothing here. The bar's own side padding is already
-      // down to 8px, the tightest this rule uses without a broken look, and the wordmark and the
-      // "Account" link still land only 3.28px apart, not the full 8px this test asks for. No two
-      // elements overlap at this width — the padding fix does reach that far — so this expected
-      // failure is the softer "8px" purpose, not the hard "no overlap" rule. Closing the last
-      // 4.7px needs a padding near 5px, and that reads as broken on a 320px phone.
-      test.fail(
-        label === 'an expired learner' && width === 320,
-        'a known, reported shortfall — see the comment above',
-      );
-
       await stubCatalogueAndSession(page);
       await stubAccount(page, accountView(overrides));
       await page.setViewportSize({ width, height: 900 });
@@ -2313,6 +2342,9 @@ for (const { label, overrides } of HEADER_GAP_CASES) {
       );
 
       assertHeaderGapInvariants(boxes, doc, width);
+      // Only at a plain phone width: 768px already uses the desktop side padding of 32px, not
+      // the phone's 20px, so a 20px margin is not the right claim to check there.
+      if (PHONE_EDGE_WIDTHS.includes(width)) assertHeaderEdgeMargins(boxes, doc, width);
     });
   }
 }

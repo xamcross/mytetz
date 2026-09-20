@@ -34,7 +34,7 @@ import { BackendState, StatusDotComponent } from './status-dot.component';
       <div class="bar__left">
         <a class="bar__mark" routerLink="/">
           <app-logo-mark />
-          mytetz
+          <span class="bar__mark-text mt-sr-only">mytetz</span>
         </a>
         <nav class="bar__nav" aria-label="Sections">
           <a
@@ -149,27 +149,34 @@ import { BackendState, StatusDotComponent } from './status-dot.component';
         }
       }
       /*
-       * Issue #133. Below 480px, the wordmark, the "Account" link, the meter and the status dot
-       * still do not fit on one line for a learner in trial: the header's own padding and the
-       * gap inside the right-hand group are wide enough to push the "Account" link on top of the
-       * last letter of "mytetz". This rule narrows both, the same way issue #132's own footer
-       * rule narrows the footer's padding below 480px. This block stands after the rule above on
-       * purpose: the two share the bar selector, at the same specificity, so the later one wins
-       * for a width the two ranges share.
-       *
-       * 8px is the tightest padding this rule uses without also narrowing an account with no
-       * live count — the row of the "Account" link, the "Subscribe" button and the status dot.
-       * At 320px that account still ends 4.7px short of an 8px gap from the wordmark, a real
-       * overlap of zero but a gap the layout test still flags as narrow. Closing that last 4.7px
-       * needs a padding near 5px, tighter than a phone header should read, so this rule stops
-       * here — see the issue's own report for the exact measurement.
+       * Issue #133, review round 2. A padding of 8px below 480px (an earlier version of this
+       * rule) moved the page content 12px away from the header's own left edge at 390px and
+       * 412px, the two most common phone widths — the header no longer lined up with the page
+       * title below it. The page content itself starts 20px from the left at a phone width, so
+       * the bar's own side padding stays 20px at every phone width. Only the gap inside the
+       * right-hand group narrows, for the two rare widths, 320px and 360px, where the wordmark,
+       * the "Account" link, the meter and the status dot still crowd each other.
        */
       @media (max-width: 479px) {
-        .bar {
-          padding: 0 8px;
-        }
         .bar__right {
-          gap: 8px;
+          gap: 12px;
+        }
+      }
+      /*
+       * Issue #133, review round 2. Below 360px, the wordmark's own text adds about 87px that
+       * 320px does not have to spare, once the gap above already narrows as far as it reads well.
+       * The link still needs a name a learner can read and a screen reader can announce, so the
+       * text stays in the markup and keeps the .mt-sr-only treatment below 360px; the logo mark
+       * alone carries the link at that width. From 360px up, this rule undoes that treatment and
+       * the text shows again, the same way it always has.
+       */
+      @media (min-width: 360px) {
+        .bar__mark-text {
+          position: static;
+          width: auto;
+          height: auto;
+          overflow: visible;
+          clip-path: none;
         }
       }
       .foot {
