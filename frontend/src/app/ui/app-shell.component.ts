@@ -124,18 +124,45 @@ import { BackendState, StatusDotComponent } from './status-dot.component';
         align-items: center;
         gap: 16px;
       }
+      /*
+       * Issue #141. This rule once reserved the underline's own space with a padding-bottom of
+       * 3px and a transparent border-bottom of 3px, both below the text and none above it. The
+       * bar centres a link's whole box, so that one-sided space pushed the text itself about 3px
+       * above the true centre line -- the owner's own report of an "Account" link that sat higher
+       * than the count text next to it. The fix below gives the underline no box of its own: the
+       * link's box is now the text alone, the same as every other text in the bar, so it lands on
+       * the same centre line without a margin-top or a top-padding number to match it. The
+       * position rule below only sets the frame the underline positions itself against; it
+       * changes nothing else about the link's own layout.
+       */
       .bar__link {
+        position: relative;
         font-size: 15px;
         font-weight: 700;
         color: var(--mt-muted);
         text-decoration: none;
-        padding-bottom: 3px;
-        border-bottom: 3px solid transparent;
+      }
+      /*
+       * The underline itself, drawn outside the box the text sits in, so it never moves the text.
+       * It sits flush against the text's own bottom edge and reaches 3px further down — the same
+       * 3px thickness the old border-bottom drew, at the same distance below the text, so the
+       * active underline stays where a learner already knows it from.
+       */
+      .bar__link::after {
+        content: '';
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: -3px;
+        height: 3px;
+        background: transparent;
       }
       .bar__link--active {
         font-weight: 800;
         color: var(--mt-teal);
-        border-bottom-color: var(--mt-teal);
+      }
+      .bar__link--active::after {
+        background: var(--mt-teal);
       }
       .bar__account {
         white-space: nowrap;
