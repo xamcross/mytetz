@@ -61,9 +61,7 @@ export const METERED_STATUSES: ReadonlySet<string> = new Set([
           </span>
           @if (account.status === 'TRIALING') {
             @if (trialEndText(account.trialEndsAtEpochMillis); as end) {
-              <span class="allowance-meter__detail allowance-meter__detail--trial"
-                >Trial ends {{ end }}.</span
-              >
+              <span class="allowance-meter__detail">Trial ends {{ end }}.</span>
             }
           } @else {
             @if (resetText(account.resetsAtEpochMillis); as reset) {
@@ -170,33 +168,18 @@ export const METERED_STATUSES: ReadonlySet<string> = new Set([
         font-weight: 700;
       }
       /*
-       * Issue #100, extended by a review of issue #133. At a phone width, the count and the
-       * detail together are wider than the header bar — a real run once measured a scroll width
-       * of 488px inside a 390px window. The same review found that the row stays too narrow for
-       * the detail from 769px up to about 790px, once the nav shows again next to the meter: the
-       * header has no room for the detail text before 1024px. This rule hides the detail inside
-       * the header below 1024px, and shows it again from 1024px up. host-context(.bar) matches
-       * the header's own bar element only; the account page renders this same component outside
-       * that element, in its own card, so the account page keeps the full detail text at every
-       * width.
+       * Issue #100, extended by a review of issue #133, and finished by issue #142 and issue
+       * #153. At a phone width, the count and the detail together are wider than the header bar
+       * — a real run once measured a scroll width of 488px inside a 390px window. The same
+       * review found that the row stays too narrow for the detail from 769px up to about 790px,
+       * once the nav shows again next to the meter. The owner then decided the header states no
+       * detail text at all, for any account status and at any width: "Trial ends …" left first,
+       * in issue #142, and "Resets …" left last, in issue #153. This one rule now hides the
+       * detail inside the header at every width. host-context(.bar) matches the header's own bar
+       * element only; the account page renders this same component outside that element, in its
+       * own card, so the account page keeps the full detail text at every width.
        */
       :host-context(.bar) .allowance-meter__detail {
-        display: none;
-      }
-      @media (min-width: 1024px) {
-        :host-context(.bar) .allowance-meter__detail {
-          display: inline;
-        }
-      }
-      /*
-       * Issue #142. The owner decided the header never states a trial's end date, at any width —
-       * the account page is the one place that keeps it, in its own "Trial ends" row. This
-       * selector matches only the trial branch of the detail text (see the template above), so a
-       * subscriber's own "Resets …" text still follows the rule above and shows from 1024px up.
-       * This rule has the same specificity as the min-width rule above and stands after it in
-       * this file, so it wins at every width, including 1024px and above.
-       */
-      :host-context(.bar) .allowance-meter__detail--trial {
         display: none;
       }
       @media (max-width: 767px) {

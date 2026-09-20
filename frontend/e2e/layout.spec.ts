@@ -1625,23 +1625,20 @@ test('the header fits on one line for a signed-in learner at 390px and 400px, wi
  * `:host-context(.bar)` guard: at 768px, 772px, 776px, 780px and 800px, the header's own meter
  * wrapped onto two lines, 34px tall, with the detail text below the count.
  *
- * Updated by a review of issue #133: the detail now hides inside the header below 1024px, not
- * only below 768px (see the CSS comment in `allowance-meter.component.ts` for the real cause
- * this review found). The old assertion — `countBox.y` equal to `detailBox.y` — no longer applies
- * at 768px and 800px, because the detail is hidden there and has no box a real browser reports.
- * This test now asserts, at those two widths, that the detail stays hidden and the meter itself
- * stays one line tall, well under the 34px a wrapped, two-line meter once measured; at 1024px it
- * keeps the original assertion, because the detail shows again there and the two must still
- * share one line — two elements on a wrapped, second row would each report a different, lower
- * `y`.
+ * Updated by issue #153: the owner decided the header shows the detail text at no width at all,
+ * so it now hides at 1024px too, and not only below it. The old assertion at 1024px checked that
+ * the count and the detail shared one line; that assertion is gone, because the detail has no box
+ * a real browser reports there any more. This test now asserts, at all three widths, that the
+ * detail stays hidden and the meter itself stays one line tall, well under the 34px a wrapped,
+ * two-line meter once measured.
  */
-test('the header meter stays one line high at 768px and 800px, and shares one line with the detail at 1024px', async ({
+test('the header meter stays one line high at 768px, 800px and 1024px, with the detail hidden at each', async ({
   page,
 }) => {
   await stubCatalogueAndSession(page);
   await stubAccount(page, accountView());
 
-  for (const width of [768, 800]) {
+  for (const width of [768, 800, 1024]) {
     await page.setViewportSize({ width, height: 900 });
     await page.goto('/');
     await page.locator('.topic__tile').first().waitFor();
@@ -1650,10 +1647,7 @@ test('the header meter stays one line high at 768px and 800px, and shares one li
     const detail = page.locator('header.bar .allowance-meter__detail');
     const meter = page.locator('header.bar app-allowance-meter');
     await expect(count, `the count is visible at ${width}px`).toBeVisible();
-    await expect(
-      detail,
-      `the detail stays hidden at ${width}px, below the 1024px this review sets`,
-    ).toBeHidden();
+    await expect(detail, `the detail stays hidden at ${width}px`).toBeHidden();
 
     const bar = (await page.locator('.bar').boundingBox())!;
     const meterBox = (await meter.boundingBox())!;
@@ -1675,35 +1669,6 @@ test('the header meter stays one line high at 768px and 800px, and shares one li
       doc.client,
     );
   }
-
-  await page.setViewportSize({ width: 1024, height: 900 });
-  await page.goto('/');
-  await page.locator('.topic__tile').first().waitFor();
-
-  const count = page.locator('header.bar .allowance-meter__count');
-  const detail = page.locator('header.bar .allowance-meter__detail');
-  await expect(count).toBeVisible();
-  await expect(
-    detail,
-    'the detail shows again at 1024px, this review’s own new threshold',
-  ).toBeVisible();
-
-  const bar = (await page.locator('.bar').boundingBox())!;
-  const countBox = (await count.boundingBox())!;
-  const detailBox = (await detail.boundingBox())!;
-  const doc = await page.evaluate(() => ({
-    scroll: document.documentElement.scrollWidth,
-    client: document.documentElement.clientWidth,
-  }));
-
-  console.log(
-    `[issue-106] width=1024 barHeight=${bar.height} countY=${countBox.y} detailY=${detailBox.y} ` +
-      `scrollWidth=${doc.scroll} clientWidth=${doc.client}`,
-  );
-
-  expect(bar.height, 'the bar stays 64px tall at 1024px').toBe(64);
-  expect(countBox.y, 'the count and the detail share one line at 1024px').toBe(detailBox.y);
-  expect(doc.scroll, 'the page does not scroll sideways at 1024px').toBeLessThanOrEqual(doc.client);
 });
 
 /**
@@ -2449,4 +2414,224 @@ test('the account card still shows "Trial ends" for a learner in trial at 390px'
   const cardDetail = page.locator('.account-page__card .allowance-meter__detail');
   await expect(cardDetail, 'the account card shows the trial detail').toBeVisible();
   await expect(cardDetail).toContainText('Trial ends September 20, 2026.');
+});
+
+/**
+ * Issue #153. The owner decided "Resets ..." leaves the header completely, at every width — the
+ * same decision #142 already made for "Trial ends ...". This asserts the header shows no visible
+ * "Resets" text for a subscriber, at 768px, 1024px and 1360px: 1024px is the width where the old
+ * rule used to show the detail again, and 1360px is a plain desktop width above it. It must fail
+ * on the code before this change, because that code shows the detail from 1024px up.
+ */
+for (const width of [768, 1024, 1360]) {
+  test(`the header shows no "Resets" text for a subscriber at ${width}px`, async ({ page }) => {
+    await stubCatalogueAndSession(page);
+    await stubAccount(page, accountView({ status: 'ACTIVE' }));
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto('/');
+    await page.locator('.topic__tile').first().waitFor();
+
+    const headerDetail = page.locator('header.bar .allowance-meter__detail');
+    await expect(headerDetail, `the header hides the reset detail at ${width}px`).toBeHidden();
+  });
+}
+
+/**
+ * Issue #153. The account page is the one place left that gives the next reset, so its own card
+ * must still show it, at the same width and status the header test above uses.
+ */
+test('the account card still shows "Resets" for a subscriber at 1360px', async ({ page }) => {
+  await stubAccount(page, accountView({ status: 'ACTIVE' }));
+  await page.setViewportSize(WIDTHS.wide);
+  await page.goto('/account');
+
+  const cardDetail = page.locator('.account-page__card .allowance-meter__detail');
+  await expect(cardDetail, 'the account card shows the reset detail').toBeVisible();
+  await expect(cardDetail).toContainText('Resets September 20, 2026 at 3:00 PM.');
+});
+
+/**
+ * Issue #141. The owner saw the "Account" link sit higher than the count text next to it, and the
+ * left side sit out of line with the right side. This block reads the true vertical centre of
+ * every text and every control of the header — the text of a link, by `Range.getBoundingClientRect()`
+ * on its own text node, so a link's own padding and border never count as part of its text — and
+ * compares that centre against the centre of the bar. `.bar` sets `box-sizing: border-box` and a
+ * `border-bottom` with no matching `border-top`, so even a correctly centred element sits 1px
+ * above the bar's own outer centre; every reading below allows for that with a 1px tolerance (2px
+ * for the wordmark, whose display font carries different metrics from the body font every other
+ * text in the bar uses).
+ */
+type HeaderCentreReading = { label: string; centre: number; tolerance: number };
+
+async function headerCentreReadings(
+  page: Page,
+): Promise<{ barCentre: number; readings: HeaderCentreReading[] }> {
+  return page.evaluate(() => {
+    function textCentre(el: Element | null): number | null {
+      if (!el) return null;
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      const rect = range.getBoundingClientRect();
+      return (rect.top + rect.bottom) / 2;
+    }
+    function elementCentre(el: Element | null): number | null {
+      if (!el) return null;
+      const rect = el.getBoundingClientRect();
+      return (rect.top + rect.bottom) / 2;
+    }
+    function visible(el: Element | null): boolean {
+      if (!el) return false;
+      const rect = el.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    }
+
+    const bar = document.querySelector('.bar')!.getBoundingClientRect();
+    const barCentre = (bar.top + bar.bottom) / 2;
+    const readings: HeaderCentreReading[] = [];
+    const add = (label: string, centre: number | null, tolerance: number) => {
+      if (centre !== null) readings.push({ label, centre, tolerance });
+    };
+
+    const mark = document.querySelector('.bar__mark-text');
+    if (visible(mark)) add('wordmark', textCentre(mark), 2);
+
+    const logo = document.querySelector('.bar app-logo-mark');
+    if (visible(logo)) add('logo', elementCentre(logo), 1);
+
+    document.querySelectorAll('.bar__nav .bar__link').forEach((el, i) => {
+      if (visible(el)) add(`nav-link-${i}`, textCentre(el), 1);
+    });
+
+    const account = document.querySelector('a.bar__account');
+    if (visible(account)) add('account-link', textCentre(account), 1);
+
+    const count = document.querySelector('.allowance-meter__count [aria-hidden="true"]');
+    if (visible(count)) add('meter-count', textCentre(count), 1);
+
+    const subscribe = document.querySelector('.allowance-meter__subscribe');
+    if (visible(subscribe)) add('subscribe-button', elementCentre(subscribe), 1);
+
+    const dot = document.querySelector('.bar app-status-dot .dot');
+    if (visible(dot)) add('status-dot', elementCentre(dot), 1);
+
+    return { barCentre, readings };
+  });
+}
+
+const HEADER_CENTRE_WIDTHS = [1360, 768, 390];
+const HEADER_CENTRE_CASES: Array<{ label: string; view: Partial<AccountView> | null }> = [
+  { label: 'no account', view: null },
+  {
+    label: 'a learner in trial',
+    view: {
+      status: 'TRIALING',
+      trialEndsAtEpochMillis: Date.UTC(2026, 8, 20),
+      resetsAtEpochMillis: null,
+    },
+  },
+  { label: 'an active learner', view: {} },
+  { label: 'an expired learner', view: { status: 'EXPIRED', remaining: 0 } },
+];
+
+for (const { label, view } of HEADER_CENTRE_CASES) {
+  for (const width of HEADER_CENTRE_WIDTHS) {
+    test(`each text and each control of the header sits on the bar's centre line, for ${label}, at ${width}px`, async ({
+      page,
+    }) => {
+      await stubCatalogueAndSession(page);
+      if (view) await stubAccount(page, accountView(view));
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto('/');
+      await page.locator('.topic__tile').first().waitFor();
+
+      const { barCentre, readings } = await headerCentreReadings(page);
+
+      // Printed so a report of this issue quotes a real run, and not an estimate.
+      console.log(
+        `[issue-141] label=${label} width=${width} barCentre=${barCentre} ` +
+          `readings=${JSON.stringify(readings)}`,
+      );
+
+      expect(readings.length, `at least one header element was read, for ${label}`).toBeGreaterThan(
+        0,
+      );
+      for (const { label: elementLabel, centre, tolerance } of readings) {
+        expect(
+          Math.abs(centre - barCentre),
+          `${elementLabel} sits within ${tolerance}px of the bar's centre line, for ${label}, at ${width}px`,
+        ).toBeLessThanOrEqual(tolerance);
+      }
+    });
+  }
+}
+
+/**
+ * Issue #146. `.catalog__intro` and `.catalog__more` shared one rule with `max-width: 62ch`,
+ * and `.catalog__search` had its own `max-width: 520px`. Each rule stopped that block short of
+ * the tile grid. The owner asked for one width for every block of the column: the introduction,
+ * the search field, the pill row, the grid and the text below the grid.
+ */
+const DASHBOARD_WIDTH_TOPICS: TopicSummary[] = [
+  {
+    slug: 'quantum-physics',
+    title: 'Quantum Physics',
+    category: 'Physics',
+    summary: 'Small things.',
+  },
+  {
+    slug: 'cell-biology',
+    title: 'Cell Biology',
+    category: 'Biology',
+    summary: 'The unit of life.',
+  },
+  {
+    slug: 'ancient-rome',
+    title: 'Ancient Rome',
+    category: 'History',
+    summary: 'Republic to empire.',
+  },
+];
+
+test.describe('every block of the column has the width of the tile grid', () => {
+  for (const width of [390, 768, 1360]) {
+    test(`the introduction, the search field and the text below the grid match the grid at ${width}px`, async ({
+      page,
+    }) => {
+      await stubCatalogueAndSession(page);
+      // Registered after the shared stub above, so this handler wins: Playwright runs the most
+      // recently registered route first. Three topics give the grid its full column count.
+      await page.route('**/api/catalog/topics*', (route) =>
+        route.fulfill({ json: DASHBOARD_WIDTH_TOPICS }),
+      );
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto('/');
+      await page.locator('.topic__tile').first().waitFor();
+
+      const grid = (await page.locator('.topics').boundingBox())!;
+      const boxes = {
+        'the introduction': (await page.locator('.catalog__intro').boundingBox())!,
+        'the search field': (await page.locator('.catalog__search').boundingBox())!,
+        'the text below the grid': (await page.locator('.catalog__more').boundingBox())!,
+      };
+
+      for (const [name, box] of Object.entries(boxes)) {
+        expect(
+          Math.abs(box.x - grid.x),
+          `${name} shares the grid's left edge at ${width}px`,
+        ).toBeLessThanOrEqual(1);
+        expect(
+          Math.abs(box.x + box.width - (grid.x + grid.width)),
+          `${name} shares the grid's right edge at ${width}px`,
+        ).toBeLessThanOrEqual(1);
+      }
+
+      const doc = await page.evaluate(() => ({
+        scroll: document.documentElement.scrollWidth,
+        client: document.documentElement.clientWidth,
+      }));
+      expect(doc.scroll, `the page does not scroll sideways at ${width}px`).toBeLessThanOrEqual(
+        doc.client,
+      );
+    });
+  }
 });

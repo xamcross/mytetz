@@ -859,22 +859,21 @@ describe('FocusCardComponent', () => {
 
   it('clears its pending timer on destroy, so a card the learner has left writes to nothing', () => {
     vi.useFakeTimers();
-    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
 
     fixture.componentRef.setInput('isStreaming', true);
     fixture.detectChanges();
     fixture.componentRef.setInput('isStreaming', false);
     fixture.detectChanges();
 
-    // Finds the exact timer this component started for the "ready" text, by its own delay, so
-    // the assertion below cannot pass on an unrelated `clearTimeout` call from somewhere else.
-    const readyTimerCallIndex = setTimeoutSpy.mock.calls.findIndex(([, delay]) => delay === 4000);
-    expect(readyTimerCallIndex).toBeGreaterThanOrEqual(0);
-    const readyTimerId = setTimeoutSpy.mock.results[readyTimerCallIndex].value;
+    // The fake clock counts its own pending timers, so this test needs no spy on a global timer
+    // function. A spy on `globalThis.setTimeout` that a test installs after `vi.useFakeTimers()`
+    // wraps the fake function. `vi.useRealTimers()` then cannot put the real function back, and a
+    // later restore of the spy leaves the fake function of a dead clock as the global
+    // `setTimeout`. Each later `setTimeout` in the same worker then never fires (issue #151).
+    expect(vi.getTimerCount()).toBe(1);
 
-    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout');
     fixture.destroy();
 
-    expect(clearTimeoutSpy).toHaveBeenCalledWith(readyTimerId);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
