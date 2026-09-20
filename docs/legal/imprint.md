@@ -13,5 +13,4 @@ Email: support@mytetz.com
 
 ## Responsible for content
 
-mytetz.com is responsible for the content of this website. Contact:
-support@mytetz.com.
+mytetz.com is responsible for the content of this website.

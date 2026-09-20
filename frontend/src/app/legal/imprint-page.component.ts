@@ -39,10 +39,7 @@ import { Component } from '@angular/core';
 
       <section>
         <h2>Responsible for content</h2>
-        <p>
-          mytetz.com is responsible for the content of this website. Contact:
-          <a href="mailto:support@mytetz.com">support&#64;mytetz.com</a>.
-        </p>
+        <p>mytetz.com is responsible for the content of this website.</p>
       </section>
     </main>
   `,

@@ -141,15 +141,18 @@ reaches the trial cap.
 
 ## How long mytetz keeps data
 
-A sign-in session lasts 30 days and slides forward each time you use the site. A
-billing event lasts 90 days. mytetz may remove an old, unread explanation after 90
-days or more. This does not affect your own data, because an explanation holds no
-personal data. A learning session started with no account lasts 90 days from its
-last activity, then mytetz removes it automatically. A learning session moves to
-your account when you sign in, and it then lasts until you delete your account. An
-allowance counter resets automatically each day, whether or not you have an
-account. mytetz keeps your account until you delete it. mytetz has no rule that
-deletes an inactive account.
+- A sign-in session: 30 days. Each use of the site moves the 30 days forward.
+- A learning session of a visitor with no account: 90 days from its start. Then
+  mytetz removes it automatically.
+- A learning session of an account: until you delete your account. A sign-in moves
+  your sessions to your account.
+- An allowance counter: one day. It resets each day, with or without an account.
+- A billing event: 90 days.
+- Your account: until you delete it. mytetz has no rule that deletes an inactive
+  account.
+
+mytetz can remove an old, unread explanation after 90 days or more. An explanation
+holds no personal data, so this rule does not change your data.
 
 ## Delete your account
 

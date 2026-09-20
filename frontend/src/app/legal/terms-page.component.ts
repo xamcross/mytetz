@@ -128,7 +128,14 @@ import { RouterLink } from '@angular/router';
           mytetz posts it. If you do not agree with a change, cancel your subscription before your
           next period starts.
         </p>
-        <p>Write to support&#64;mytetz.com for a question about these terms.</p>
+      </section>
+
+      <section>
+        <h2>Contact</h2>
+        <p>
+          Write to <a href="mailto:support@mytetz.com">support&#64;mytetz.com</a> for a question
+          about these terms.
+        </p>
       </section>
     </main>
   `,
