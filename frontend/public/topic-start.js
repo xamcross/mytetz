@@ -10,14 +10,24 @@
  * pages.
  *
  * A network response never carries HTML from a model or from a learner, so no value here goes near
- * innerHTML: every write to the page uses textContent.
+ * innerHTML: every write to the page uses textContent, a property assignment, or setAttribute with
+ * a fixed value.
+ *
+ * Issue #161: the button ships `disabled` in the server HTML. A slow or a failed request for this
+ * very file left a learner with a button that looked ready but had no click handler yet. This
+ * script now enables the button itself, as the last step below, only after it has attached the
+ * click handler — so a click can never land on a button with no listener. `guides.css`'s own
+ * `.start__script-hint` rule shows a fixed reason to a learner whose script never runs at all,
+ * after a short CSS-only wait; this script hides that paragraph for good once it is ready, with
+ * `setAttribute('hidden', 'hidden')`.
  */
 (function () {
   'use strict';
 
   var button = document.getElementById('topic-start-button');
   var errorParagraph = document.getElementById('topic-start-error');
-  if (!button || !errorParagraph) {
+  var scriptHint = document.getElementById('topic-start-script-hint');
+  if (!button || !errorParagraph || !scriptHint) {
     return;
   }
 
@@ -121,4 +131,13 @@
         errorParagraph.textContent = 'Could not start that topic. Please try again.';
       });
   });
+
+  // The button is now usable: the click handler above is live, so a click can no longer land on
+  // a button with nothing to answer it. This runs last, and only once, right after that handler
+  // is attached — never before it. `setBusy(false)` also matches the label to the idle state,
+  // which the server already rendered, so this line changes only the disabled attribute in
+  // practice. The script hint paragraph is hidden for good: a live handler is proof this very
+  // script did run, so guides.css's own timer, still pending, must never reveal it.
+  setBusy(false);
+  scriptHint.setAttribute('hidden', 'hidden');
 })();

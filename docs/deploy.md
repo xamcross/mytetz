@@ -148,7 +148,7 @@ live in the process, so they reset whenever the machine cold-starts.
 
 ### 2.2 Every variable the backend reads
 
-45 variables, and each one is listed here and in `.env.example`. The Default
+46 variables, and each one is listed here and in `.env.example`. The Default
 column gives `none` for a name with no default in code, and the real default
 for every other name.
 
@@ -181,6 +181,7 @@ needs it, until an operator sets it.
 | `MYTETZ_COOKIE_SIGNING_KEY` | none — required | signs the principal cookie. The app refuses to boot without it. 32 characters minimum. |
 | `MYTETZ_COOKIE_SECURE` | `true` | whether the cookie carries `Secure`. Only an explicit `false`, `0`, `no` or `off` turns it off. |
 | `MYTETZ_CLIENT_IP_HEADER` | `Fly-Client-IP` | which header the rate limiters key on. See section 2. |
+| `MYTETZ_EDGE_SECRET` | off | the shared secret behind the `X-Mytetz-Edge` header. Off means the check does not run, and every `/api/*` request behaves exactly as it does today. On means each `/api/*` request must carry the header with this value, or the app answers `403`. `/api/health` stays open in both states. A value under 32 characters stops the app at boot. See section 5. |
 | `MYTETZ_MIGRATE_ON_BOOT` | off | whether the app deletes an explanation stranded by a model family change, at boot. Only the exact word `true` turns it on. It does **not** control the pre-warm of a missing seed: that step runs on every boot, with no flag. Section "The B0 model migration" explains both. |
 | `GOOGLE_CLIENT_ID` | none | the Google OAuth client ID. Sign-in with Google answers `503` until this and `GOOGLE_CLIENT_SECRET` are both set. |
 | `GOOGLE_CLIENT_SECRET` | none | the Google OAuth client secret. Sign-in with Google answers `503` until this and `GOOGLE_CLIENT_ID` are both set. |
@@ -481,8 +482,8 @@ dashboard / API and are not automated by this repo.**
    is 60 per minute. `EXPLAINS_PER_CALLER` (30 per 10 minutes, in
    `SessionRoutes.kt`) is the tighter bound for a caller that comes through
    `mytetz.com`. **It bounds nothing for a caller that goes straight to
-   `mytetz.fly.dev`,** because that host never reaches Cloudflare. Issue #68
-   tracks that hole.
+   `mytetz.fly.dev`,** because that host never reaches Cloudflare. Step 8 below
+   closes that hole, once you complete it (issue #68).
 6. **Bot Fight Mode: on.** Security > Bots. The API token in `.env` cannot read or
    set this — `GET /zones/{zone}/bot_management` answers `403`. It is a dashboard
    step unless the token gains `Zone → Bot Management → Edit`.
@@ -491,6 +492,60 @@ dashboard / API and are not automated by this repo.**
    redirect to `concat("https://mytetz.com", http.request.uri.path)`, status
    `301`, "Preserve query string" on. The rule runs at the edge, so the `www`
    DNS record stays proxied and the fly certificate for `www` stays in place.
+8. **Edge secret header (issue #68).** The app can refuse an `/api/*` request
+   that skips Cloudflare. `MYTETZ_EDGE_SECRET` turns the check on. This step sets
+   it up.
+
+   Confirm the field names of the Transform Rule against the live API first.
+   Read [Modify Request Header](https://developers.cloudflare.com/rules/transform/request-header-modification/)
+   for the present names. Do not copy a field name from issue #68.
+
+   Do the four steps below in this exact order. Each step keeps the site up.
+
+   1. Make a secret on your own machine:
+
+      ```bash
+      openssl rand -base64 32
+      ```
+
+      Do not paste this value into an issue, a commit or a chat.
+   2. In the Cloudflare dashboard, open **Rules > Transform Rules > Modify Request
+      Header**. Add a rule for the zone. Set the header name to
+      `X-Mytetz-Edge`. Set the header value to the secret from step 1.
+   3. Set the same secret as a fly secret:
+
+      ```bash
+      fly secrets set MYTETZ_EDGE_SECRET="<the secret from step 1>" --app mytetz
+      ```
+
+      This step restarts the app. The check turns on only now, because both
+      sides then hold the same value.
+   4. Run the four checks below.
+
+      ```bash
+      curl -s -o /dev/null -w "%{http_code}" https://mytetz.fly.dev/api/sessions
+      # expect 403
+
+      curl -s -o /dev/null -w "%{http_code}" https://mytetz.com/api/sessions
+      # expect the same code this path gave before this change
+
+      curl -sI https://mytetz.fly.dev/api/health
+      # expect 200
+
+      curl -s -o /dev/null -w "%{http_code}" -H "CF-Connecting-IP: 1.2.3.4" \
+        https://mytetz.fly.dev/api/sessions/x/explain
+      # expect 403
+      ```
+
+   **To go back:** unset the fly secret.
+
+   ```bash
+   fly secrets unset MYTETZ_EDGE_SECRET --app mytetz
+   ```
+
+   The check turns off again. The app then answers exactly as it did before
+   this step. You may leave the Transform Rule in place. An unset secret on
+   the app side is enough to turn the check off.
 
 Verify end to end:
 
@@ -1000,3 +1055,83 @@ nothing: an unknown slug among the named slugs stops the whole command, with not
 The command checks a chosen date against the topic's own seed text, when a seed is already stored
 for that topic. A topic with no stored seed skips this one check. Every other check still applies
 to it: an unknown slug, an unpublished topic, a badly formed date, and a date in the future.
+
+## Seed text correction (issue #162)
+
+This section is for the owner. It replaces the text of a topic's seed explanation. **The owner
+runs this command. An agent never runs it.** It writes to the production database.
+
+Three seed texts have a corrected statement, in
+`docs/content/seed-corrections-2026-09-20/`: `special-relativity`, `microbiology` and
+`historical-linguistics`. Each file holds that topic's full, corrected seed text. The investigation
+behind each correction, with a file and a line for each statement, is in that same folder's
+`README.md`.
+
+The command reads `MONGODB_URI` from the environment only. It never reads a `.env` file itself; the
+commands below read the owner's own `.env` file and pass the value in.
+
+### Step 1: the dry run
+
+This step writes nothing. It shows the present text, the corrected text, a line diff, how many
+existing child explanations sit under a sentence the correction drops, and how many sessions still
+hold a node on one of those children.
+
+```bash
+MONGODB_URI="$(grep '^MONGODB_URI=' .env | cut -d= -f2- | tr -d '[:cntrl:]')" ./gradlew :backend:graph:correctSeedText --args="--slug special-relativity --file docs/content/seed-corrections-2026-09-20/special-relativity.txt"
+```
+
+Repeat with `--slug microbiology --file docs/content/seed-corrections-2026-09-20/microbiology.txt`
+and with `--slug historical-linguistics --file docs/content/seed-corrections-2026-09-20/historical-linguistics.txt`.
+
+### Step 2: read the report
+
+Read the diff. Confirm it changes only the one statement the correction is for, and confirm every
+other sentence stays exactly as it was.
+
+### Step 3: write the correction
+
+```bash
+MONGODB_URI="$(grep '^MONGODB_URI=' .env | cut -d= -f2- | tr -d '[:cntrl:]')" ./gradlew :backend:graph:correctSeedText --args="--slug special-relativity --file docs/content/seed-corrections-2026-09-20/special-relativity.txt --write"
+```
+
+This step is all or nothing. It changes the seed's text only, and keeps its key and every other
+field. It refuses an unknown slug, a document that is not a seed, an empty text, a text with `<` or
+`>`, a text over the 600-character seed limit, and a text identical to the present one — each
+refusal writes nothing and names the reason. The command prints the same report step 1 shows,
+before it writes.
+
+Run the same write for `microbiology` and for `historical-linguistics`, each with its own `--slug`
+and `--file`.
+
+### Step 4: check the live page
+
+```bash
+curl -sI https://mytetz.com/topics/special-relativity
+```
+
+Then open the page and confirm it shows the corrected statement. Repeat for
+`https://mytetz.com/topics/microbiology` and `https://mytetz.com/topics/historical-linguistics`.
+Record the three checks in a comment on issue #162.
+
+### Taking a text back
+
+```bash
+MONGODB_URI="$(grep '^MONGODB_URI=' .env | cut -d= -f2- | tr -d '[:cntrl:]')" ./gradlew :backend:graph:correctSeedText --args="--key <the full content key the write step printed> --revert"
+```
+
+This restores the exact text the write step replaced, and clears the record of that replace. A
+second revert of the same key finds nothing left to undo.
+
+### After a model-family migration
+
+`MYTETZ_MIGRATE_ON_BOOT=true` deletes every explanation whose model family is not the deploy's own
+family, seed or not, corrected or not, then regenerates a fresh seed for each published topic. A
+correction survives an ordinary deploy, because it changes no document's model family — but a real
+model-family switch deletes a corrected seed exactly as it deletes every other explanation, and the
+regenerated text is not guaranteed to keep the correction. Repeat step 1 and step 4 above for these
+three topics after any deploy that turns this flag on.
+
+### Then: the review date
+
+Once the three checks in step 4 pass, run the review-date command from issue #47 for these three
+topics, so each corrected page carries a "Last reviewed" date.

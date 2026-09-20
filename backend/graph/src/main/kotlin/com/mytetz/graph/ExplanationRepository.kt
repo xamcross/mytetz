@@ -220,4 +220,71 @@ open class ExplanationRepository(database: MongoDatabase) {
             .sort(Indexes.descending("requestCount"))
             .limit(limit)
             .toList()
+
+    // ------------------------------------------------------------------ seed correction (issue #162)
+
+    /**
+     * Every `SEED` document of [topicSlug]. Ordinarily exactly one — [ContentKey.seed] keys a seed
+     * on `(topicSlug, promptVersion, modelFamily)`, and one deployment runs one model family — but
+     * this returns the whole list rather than assuming that, so `CorrectSeedText.kt` can refuse a
+     * slug with none and an ambiguous slug with more than one, instead of picking either silently.
+     */
+    suspend fun findSeedsByTopicSlug(topicSlug: String): List<Explanation> =
+        collection.find(Filters.and(Filters.eq("topicSlug", topicSlug), Filters.eq("verb", Verb.SEED.name))).toList()
+
+    /**
+     * Every direct child of [parentKey] — every explanation whose own [Explanation.parentKey]
+     * equals it. `CorrectSeedText.kt`'s dry run reads this once, for the seed the owner named, to
+     * count how many children hang off each of its sentences before the text changes underneath
+     * them.
+     */
+    suspend fun findByParentKey(parentKey: String): List<Explanation> =
+        collection.find(Filters.eq("parentKey", parentKey)).toList()
+
+    /**
+     * Replaces [key]'s [Explanation.body] with [newBody], and only that field, keeping the text it
+     * replaces in [Explanation.previousBody] and the moment of the replace in
+     * [Explanation.correctedAtEpochMillis] — the one command's worth of history
+     * [revertSeedBody] needs to take the change back. A single `updateOne` on one document is
+     * atomic in MongoDB, so this write is all or nothing by construction: [body], [previousBody]
+     * and [correctedAtEpochMillis] change together or not at all.
+     *
+     * Matches only a document that is still [Verb.SEED] — a defensive check repeated at the
+     * database, alongside `CorrectSeedText.kt`'s own check of the document it already read, on the
+     * same reasoning as [deleteEvictable]'s repeated filter: the two reads are not the same instant.
+     *
+     * Returns `false`, having written nothing, when [key] does not name a `SEED` document.
+     */
+    suspend fun replaceSeedBody(key: String, newBody: String, nowEpochMillis: Long): Boolean {
+        val current = findByKey(key)?.takeIf { it.verb == Verb.SEED } ?: return false
+        val result = collection.updateOne(
+            Filters.and(Filters.eq("_id", key), Filters.eq("verb", Verb.SEED.name)),
+            Updates.combine(
+                Updates.set("body", newBody),
+                Updates.set("previousBody", current.body),
+                Updates.set("correctedAtEpochMillis", nowEpochMillis),
+            ),
+        )
+        return result.modifiedCount == 1L
+    }
+
+    /**
+     * Restores [key]'s [Explanation.body] from [Explanation.previousBody] — the one-command way
+     * back from [replaceSeedBody] — then clears both [Explanation.previousBody] and
+     * [Explanation.correctedAtEpochMillis]. One level of history, not a stack: a second call finds
+     * nothing to restore and returns `false`, having written nothing.
+     */
+    suspend fun revertSeedBody(key: String): Boolean {
+        val current = findByKey(key)?.takeIf { it.verb == Verb.SEED } ?: return false
+        val previous = current.previousBody ?: return false
+        val result = collection.updateOne(
+            Filters.and(Filters.eq("_id", key), Filters.eq("verb", Verb.SEED.name)),
+            Updates.combine(
+                Updates.set("body", previous),
+                Updates.unset("previousBody"),
+                Updates.unset("correctedAtEpochMillis"),
+            ),
+        )
+        return result.modifiedCount == 1L
+    }
 }

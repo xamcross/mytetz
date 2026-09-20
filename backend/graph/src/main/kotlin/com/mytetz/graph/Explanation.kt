@@ -41,4 +41,20 @@ data class Explanation(
      * ever sets this to `true` — see issue #48's own safety rule.
      */
     val published: Boolean = false,
+    /**
+     * The body's own text just before `CorrectSeedText`'s last write to this document, or null when
+     * that script has never written to it. `CorrectSeedText --revert` restores [body] from here and
+     * clears this field, so a second revert has nothing left to undo — one level back, not a stack.
+     *
+     * Default `null` for the same reason [media] and [published] default the way they do: a stored
+     * document from before this field existed has no such key at all, and the driver decodes that
+     * document with `previousBody == null`, exactly as if this script had never touched it.
+     */
+    val previousBody: String? = null,
+    /**
+     * When `CorrectSeedText` last replaced [body], in epoch milliseconds, or null when it never
+     * has. Read together with [previousBody]: both are set together, and both are cleared together
+     * by a revert. See [previousBody]'s own note on why the default is safe for an old document.
+     */
+    val correctedAtEpochMillis: Long? = null,
 )

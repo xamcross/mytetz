@@ -18,10 +18,11 @@ primary_region = "fra"
   # Which header the rate limiter keys on. Cloudflare sits in front of this app (see docs/deploy.md),
   # so CF-Connecting-IP is the visitor's real address and gives a bucket per visitor.
   #
-  # The trade, recorded because it is a security decision and not a tuning one: anyone reaching
-  # mytetz.fly.dev directly, bypassing Cloudflare, can set this header to whatever they like and so
-  # escape their own rate limit. That evasion is bounded by the limiter's key ceiling and by the
-  # eviction cap in TopicRequestRepository, and it costs honest visitors nothing. The alternative,
+  # The trade, recorded because it is a security decision and not a tuning one: a direct request to
+  # mytetz.fly.dev, bypassing Cloudflare, can set this header to any value it likes, and so choose
+  # its own rate-limit key. MYTETZ_EDGE_SECRET closes this gap (issue #68). Set it together with the
+  # matching Cloudflare Transform Rule, and the app refuses such a request before the rate limiter
+  # ever sees it. See docs/deploy.md section 5 for the owner runbook. The alternative to this header,
   # Fly-Client-IP, cannot be forged but resolves to the Cloudflare edge — so everyone behind one
   # edge would share a single allowance and legitimate visitors would be refused.
   #

@@ -582,8 +582,10 @@ tbody tr:last-child td {
   transform: translateY(2px);
   box-shadow: 0 2px 0 var(--mt-coral-deep);
 }
-/* The topic page's own Start with this topic button, and not a guide page's plain link, can be
-   disabled while a request is in flight — see topic-start.js. */
+/* The topic page's own Start with this topic button, and not a guide page's plain link, is
+   disabled while a request is in flight, and (issue #161) before topic-start.js has attached its
+   click handler — see that file's own header comment. Same rule, same look, both times: a learner
+   sees one intended, muted state, and not two different ones. */
 .start__cta:disabled {
   opacity: 0.55;
   box-shadow: none;
@@ -598,6 +600,28 @@ tbody tr:last-child td {
 }
 .start__error:empty {
   margin: 0;
+}
+/* Issue #161: the reason for a Start with this topic button that never becomes usable, next to
+   the button. The text is in the page from the first response, but stays out of sight — and out
+   of a screen reader's own reading order, through `visibility` and not only `opacity` — until the
+   animation below reveals it. No script decides this: a zero-length animation, delayed three
+   seconds, is a plain CSS timer with a fixed end state, so the paragraph shows itself with no
+   script running at all. topic-start.js hides it for good, with the `hidden` attribute, the
+   moment it attaches its own click handler; the browser's own `[hidden]` rule then wins over this
+   animation, so a script that did load hides this text well before the timer ever runs out. */
+.start__script-hint {
+  margin: 10px 0 0;
+  font-size: 14px;
+  color: var(--mt-muted);
+  opacity: 0;
+  visibility: hidden;
+  animation: reveal-script-hint 0s linear 3s forwards;
+}
+@keyframes reveal-script-hint {
+  to {
+    opacity: 1;
+    visibility: visible;
+  }
 }
 
 /* ── The guide index on the hub ────────────────────────────────────────────── */
