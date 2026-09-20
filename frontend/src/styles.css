@@ -392,7 +392,8 @@ button:disabled {
   }
 }
 /* Three links carry this class and keep the browser's default underline: "Terms" on the account
-   page, "Continue with Google" in the sign-in panel, and "Back to topics" on the not-found page. */
+   page, "Continue with Google" in the sign-in panel, and "Back to the dashboard" on the not-found
+   page. */
 a.mt-pill {
   text-decoration: none;
 }

@@ -104,7 +104,9 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
                   Try again
                 </button>
               }
-              <a class="mt-pill mt-pill--ghost banner__back" routerLink="/">Back to topics</a>
+              <a class="mt-pill mt-pill--ghost banner__back" routerLink="/"
+                >Back to the dashboard</a
+              >
             </div>
           </div>
         </div>
