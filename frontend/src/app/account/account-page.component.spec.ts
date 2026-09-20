@@ -348,28 +348,25 @@ describe('AccountPageComponent', () => {
     expect(terms.classList).not.toContain('mt-pill--ghost');
   });
 
-  it('puts delete account in its own block, below a divider, under its own heading', async () => {
-    // Finding F15. "Delete account" once sat in the same row as "Sign out", "Manage subscription"
-    // and "Terms", at one visual weight. It now sits in its own block, below a divider, under the
-    // heading "Close your account" — and the DOM order proves the block comes after the primary
-    // row and not before it.
+  it('puts delete account in its own block, below a divider, with no heading', async () => {
+    // Finding F15 put "Delete account" in its own block, below a divider, under the heading
+    // "Close your account". Issue #140 removes the heading: the button already names the action,
+    // so a heading above it repeats the same words. The DOM order still proves the block comes
+    // after the primary row and not before it.
     await mount((req) => req.flush(active));
 
     const actions = fixture.nativeElement.querySelector('.account-page__actions');
     const signOut = fixture.nativeElement.querySelector('[data-action="sign-out"]');
     const divider = fixture.nativeElement.querySelector('.account-page__divider');
-    const heading = fixture.nativeElement.querySelector('.account-page__danger-heading');
     const del = fixture.nativeElement.querySelector('[data-action="delete-account"]');
 
     expect(actions.querySelector('[data-action="delete-account"]')).toBeNull();
-    expect(heading?.textContent).toContain('Close your account');
+    expect(text()).not.toContain('Close your account');
+    expect(fixture.nativeElement.querySelector('.account-page__danger-heading')).toBeNull();
     expect(
       signOut.compareDocumentPosition(divider) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
-    expect(
-      divider.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
-    expect(heading.compareDocumentPosition(del) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(divider.compareDocumentPosition(del) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('delete account opens a confirmation panel instead of sending a request at once', async () => {

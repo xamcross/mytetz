@@ -161,10 +161,11 @@ function sentenceForStatus(status: string): string {
           </div>
 
           <!-- Finding F15. A destructive control once stood beside a navigation link at the same
-               weight. It now sits below a divider, in its own block, under its own heading. -->
+               weight. It now sits below a divider, in its own block. Issue #140 removes the
+               block's own heading: the button below already names the action, and a heading
+               above it only repeats that name. -->
           <hr class="account-page__divider" />
           <div class="account-page__danger">
-            <h2 class="account-page__danger-heading">Close your account</h2>
             @if (!confirmingDelete()) {
               <button
                 type="button"
@@ -290,7 +291,7 @@ function sentenceForStatus(status: string): string {
         font-size: 14px;
         font-weight: 600;
       }
-      /* Finding F15. The divider above "Close your account" — the same rule used between the
+      /* Finding F15. The divider above the delete-account block — the same rule used between the
          header and the footer. See app-shell.component.ts. */
       .account-page__divider {
         width: 100%;
@@ -304,12 +305,6 @@ function sentenceForStatus(status: string): string {
         flex-direction: column;
         align-items: flex-start;
         gap: 12px;
-      }
-      .account-page__danger-heading {
-        margin: 0;
-        font-size: 15px;
-        font-weight: 700;
-        color: var(--mt-ink);
       }
       .account-page__confirm {
         width: 100%;
