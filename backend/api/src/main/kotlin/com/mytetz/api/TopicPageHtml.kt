@@ -23,6 +23,7 @@ import kotlinx.html.p
 import kotlinx.html.script
 import kotlinx.html.section
 import kotlinx.html.span
+import kotlinx.html.svg
 import kotlinx.html.title
 import kotlinx.html.ul
 import kotlinx.html.unsafe
@@ -120,35 +121,90 @@ internal fun HEAD.commonHeadTags(
     meta { attributes["property"] = "og:description"; attributes["content"] = description }
     meta { attributes["property"] = "og:image"; attributes["content"] = "$SITE_URL/og-image.png" }
     meta(name = "twitter:card", content = "summary_large_image")
+
+    // The one script that fills in the account control of siteHeaderBar() below, for every page
+    // of this layout. External and deferred, never inline: see site-header.js's own header
+    // comment for the full rule set. Placed in commonHeadTags, and not in siteHeaderBar() itself,
+    // so it loads once per page and not once per call of the header function.
+    script(src = "/site-header.js") { attributes["defer"] = "defer" }
 }
 
-/** The 64px header bar every guide page and every page of this layout shares. */
+/**
+ * The mark's fixed inner shapes: two coral and teal bars and one elbow stroke, on a 32-unit grid.
+ * Copied from `frontend/src/app/ui/logo-mark.component.ts`, whose own KDoc states the design.
+ *
+ * A constant string, with no variable part, and never built from a value this page receives:
+ * `kotlinx.html`'s SVG tag builds no `rect` or `path` child of its own, so this is the one
+ * `unsafe { }` block on this page that does not wrap [jsonLdGraph]'s output. Each colour is a CSS
+ * custom property `guides.css` defines under `:root`, the same tokens the Angular mark paints
+ * with, so the two marks stay the same colour with no value repeated here.
+ */
+private const val LOGO_MARK_INNER_SVG = """<rect x="0" y="0" width="32" height="32" rx="10" fill="var(--mt-chip)" /><rect x="5" y="7" width="17" height="6" rx="3" fill="var(--mt-coral)" /><path d="M9 15V22H13" fill="none" stroke="var(--mt-teal)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /><rect x="13" y="19" width="14" height="6" rx="3" fill="var(--mt-teal)" />"""
+
+/**
+ * The 64px header bar every page of this layout shares: the topic page, the glossary page, the
+ * FAQ page, the how-it-works page, the explanation page, and, by hand, each of the 13 static guide
+ * pages under `frontend/public/guides`.
+ *
+ * A Ktor page is a pure read (issue #45): it never calls `Principals.resolve` and it sets no
+ * cookie, so this function alone can only ever render a visitor with no account: the "Sign in"
+ * link, to `/auth`. `frontend/public/site-header.js`, loaded once per page in [commonHeadTags],
+ * reads `GET /api/account` after the page loads and rewrites `#site-header-account` to "Account"
+ * for a signed-in learner — the same order `AppShellComponent` itself renders in, before its own
+ * first account answer arrives.
+ *
+ * `HeaderFooterParityTest` proves this function and every static guide page agree.
+ * `frontend/src/app/ui/app-shell.component.spec.ts` proves the Angular side of the same list.
+ *
+ * Issue #143: the status dot `AppShellComponent` shows next to the account control is a live
+ * health check the Angular app polls after it loads. A Ktor page or a static guide page has no
+ * such check running, and one request per page view cannot stand in for it, so no dot renders
+ * here. A dot that never changes states nothing true, and a false "ok" is worse than no dot.
+ */
 internal fun BODY.siteHeaderBar() {
     header(classes = "bar") {
-        a(href = "/", classes = "bar__mark") { +"mytetz" }
-        nav(classes = "bar__nav") {
-            attributes["aria-label"] = "Main"
-            a(href = "/") { +"Catalogue" }
-            a(href = "/guides") { +"Guides" }
+        div(classes = "bar__left") {
+            a(href = "/", classes = "bar__mark") {
+                svg(classes = "bar__mark-icon") {
+                    attributes["viewBox"] = "0 0 32 32"
+                    attributes["aria-hidden"] = "true"
+                    attributes["focusable"] = "false"
+                    unsafe { +LOGO_MARK_INNER_SVG }
+                }
+                +"mytetz"
+            }
+            nav(classes = "bar__nav") {
+                attributes["aria-label"] = "Main"
+                a(href = "/glossary", classes = "bar__link") { +"Glossary" }
+                a(href = "/guides", classes = "bar__link") { +"Guides" }
+            }
+        }
+        div(classes = "bar__right") {
+            a(href = "/auth", classes = "bar__link bar__account") {
+                attributes["id"] = "site-header-account"
+                +"Sign in"
+            }
+            span(classes = "bar__count") { attributes["id"] = "site-header-count" }
         }
     }
 }
 
-/** The footer every guide page and every page of this layout shares. */
+/**
+ * The footer every page of this layout shares, with the same six links and the same look as
+ * `AppShellComponent`'s own `.foot`: Guides, How it works, FAQ, Privacy, Terms and Imprint, no
+ * "Catalogue", and no underline. Flat `<a>` children of `<footer>`, with no wrapping `<nav>` or
+ * `<div>` — the same shape `AppShellComponent`'s own footer has — so `.foot`'s own centred,
+ * wrapping flex row lays out these links exactly as it lays out the Angular footer's links.
+ */
 internal fun BODY.siteFooter() {
     footer(classes = "foot") {
-        div(classes = "foot__inner") {
-            nav(classes = "foot__links") {
-                attributes["aria-label"] = "Footer"
-                a(href = "/") { +"Catalogue" }
-                a(href = "/guides") { +"Guides" }
-                a(href = "/how-it-works") { +"How it works" }
-                a(href = "/faq") { +"FAQ" }
-                a(href = "/privacy") { +"Privacy" }
-                a(href = "/terms") { +"Terms" }
-                a(href = "/imprint") { +"Imprint" }
-            }
-        }
+        attributes["aria-label"] = "Footer"
+        a(href = "/guides", classes = "foot__link") { +"Guides" }
+        a(href = "/how-it-works", classes = "foot__link") { +"How it works" }
+        a(href = "/faq", classes = "foot__link") { +"FAQ" }
+        a(href = "/privacy", classes = "foot__link") { +"Privacy" }
+        a(href = "/terms", classes = "foot__link") { +"Terms" }
+        a(href = "/imprint", classes = "foot__link") { +"Imprint" }
     }
 }
 
