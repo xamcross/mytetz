@@ -208,15 +208,18 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
               -->
               <div class="focus__actions">
                 <!--
-                  Issue #139. "1 token" is the maximum price: a cache hit spends nothing, but the
-                  button cannot know that before the click. aria-label keeps the accessible name
-                  "Test me" fixed, so the price joins the description aria-describedby names and
-                  not the name itself — the same split the verb picker keeps.
+                  Issue #139, review round 2. The price used to sit on a second line under the
+                  label, which gave this pill and the plain one-line pill next to it two
+                  different heights on the same row — a real screenshot found this. The price now
+                  sits after the label, on the pill's own one line, the way .mt-pill already lays
+                  out any two children: the pill's height is therefore the plain, one-line height
+                  it always was, price or no price. aria-label keeps the accessible name "Test me"
+                  fixed, so the price joins the description aria-describedby names and not the
+                  name itself — the same split the verb picker keeps.
                 -->
                 <button
                   type="button"
                   class="mt-pill mt-pill--ghost"
-                  [class.reader__priced-pill]="showTokenPrice()"
                   data-testid="test-me"
                   aria-label="Test me"
                   [attr.aria-describedby]="showTokenPrice() ? 'test-me-price' : null"
@@ -278,7 +281,6 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
             <button
               type="button"
               class="mt-pill mt-pill--ghost reader__exam"
-              [class.reader__priced-pill]="showTokenPrice()"
               data-testid="exam"
               aria-label="Exam"
               [attr.aria-describedby]="showTokenPrice() ? 'exam-price' : null"
@@ -355,29 +357,40 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
          clear of the shadow's own 5px, a margin above the 12px the criterion asks for. */
       .focus__actions {
         display: flex;
-        /* Issue #139. flex-start, not the flex default of stretch: a priced pill grows a second
-           line for its price and a plain pill next to it does not, and stretch would pull the
-           plain pill's own height up to match, leaving empty space inside it. flex-start keeps
-           every pill in the row its own natural height, aligned at the top. */
-        align-items: flex-start;
-        gap: 10px;
+        /* Issue #139, review round 2. 8px, not the 10px this row always had: at 390px, Test me's
+           new price left the row 2.4px over its own 350px width, one real run measured, which
+           wrapped "Mark this session complete" onto a second line — the very row this round
+           keeps to one line and one height. 8px recovers exactly the 2px this rule's own share
+           of the fix needs; the rest comes from the smaller gap the priced pill itself now
+           carries, below. */
+        gap: 8px;
         flex-wrap: wrap;
         margin-top: 20px;
       }
-      /* Issue #139. A pill that carries a price grows a second, small line for it, so it turns
-         from .mt-pill's own single-line row into a two-line column: the label on top, the price
-         under it, both start-aligned so neither the label nor the price drifts sideways. */
-      .reader__priced-pill {
-        flex-direction: column;
-        align-items: flex-start;
-        gap: 2px;
-      }
-      /* Inherits its colour from the pill it sits inside — --mt-teal on --mt-surface for a ghost
-         pill (5.47:1), already above the 4.5:1 an AA small text needs, so this rule adds no new
-         colour token. */
+      /*
+       * Issue #139, review round 2. The price used to sit on a second line under the label,
+       * which gave Test me one height and the plain, one-line "Mark this session complete" pill
+       * next to it another — a real screenshot found the row with two heights and two centre
+       * lines. The price now sits after the label, on .mt-pill's own one line, so Test me is a
+       * plain one-line pill again, the same height as every pill beside it, price or no price.
+       *
+       * Inherits its colour from the pill it sits inside — --mt-teal on --mt-surface for a ghost
+       * pill (5.47:1), already above the 4.5:1 an AA small text needs, so this rule adds no new
+       * colour token.
+       */
       .reader__action-price {
         font-size: 11px;
         font-weight: 800;
+      }
+      /*
+       * Issue #139, review round 2. .mt-pill's own 6px gap, between Test me's label and its new
+       * price, was measured pushing the row 2.4px past the 350px this row has at 390px — a real
+       * run then wrapped "Mark this session complete" onto a second line, the very defect this
+       * round fixes for the row's own height. :has() scopes a smaller gap to a pill that actually
+       * carries a price, so .mt-pill's own rule stays the same for every other pill in the app.
+       */
+      .focus__actions .mt-pill:has(.reader__action-price) {
+        gap: 4px;
       }
       /* Issue #139. One line, reserved whether or not it holds text, so the sentence that names
          the true result of an action moves nothing below it when it appears or clears. */
