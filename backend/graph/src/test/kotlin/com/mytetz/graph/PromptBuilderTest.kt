@@ -391,6 +391,33 @@ class PromptBuilderTest {
     }
 
     @Test
+    fun `the visualize schema also names an imageSearchTerms field`() {
+        val schema = PromptBuilder.visualizeSchema()
+        assertTrue(schema.containsKey("imageSearchTerms"))
+    }
+
+    @Test
+    fun `the visualize system prompt asks the model to name its own image search terms`() {
+        val system = PromptBuilder.visualizeSystem()
+        assertContains(system, "imageSearchTerms")
+        assertTrue(
+            "two to five" in system.lowercase(),
+            "the prompt does not state the word-count the model is asked for:\n$system",
+        )
+    }
+
+    @Test
+    fun `a stored-shape visualize answer with no imageSearchTerms field still decodes`() {
+        // Issue 115's own compatibility rule: an older JSON fixture, and a stored explanation
+        // written before this field existed, must still decode -- with the empty default, never
+        // a decode failure.
+        val answer = kotlinx.serialization.json.Json.decodeFromString<VisualizeAnswer>(
+            """{"explanation":"e","svg":"s"}"""
+        )
+        assertEquals("", answer.imageSearchTerms)
+    }
+
+    @Test
     fun `the visualize system prompt asks for one short sentence, not one to three`() {
         // The shared system() prompt asks for "1 to 3 sentences." The visualize path asks for one,
         // since the sentence sits beside a diagram and does not carry the whole answer.

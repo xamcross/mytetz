@@ -76,8 +76,16 @@ internal const val SITE_URL = "https://mytetz.com"
  * edit reaches every page outside the Angular application. See `guides.css`'s own header comment.
  *
  * `internal`, and not `private`: `HowItWorksRoutes.kt`'s renderer shares this layout too, through
- * [commonHeadTags]. */
-internal const val GUIDES_STYLESHEET = "/guides/guides.css"
+ * [commonHeadTags].
+ *
+ * The query string is the version of the file: the first 10 characters of the SHA-256 of
+ * `guides.css`. The file is served with `Cache-Control: max-age=86400`, and Cloudflare and each
+ * browser keep it for a day. On 2026-09-20 each public page showed new markup with the old cached
+ * stylesheet for that reason. A new version is a new URL, so no cache holds it.
+ * `StylesheetVersionTest` fails, and prints the new value, when the file changes and this value
+ * does not. */
+internal const val GUIDES_STYLESHEET_VERSION = "e3b8aca600"
+internal const val GUIDES_STYLESHEET = "/guides/guides.css?v=$GUIDES_STYLESHEET_VERSION"
 
 /**
  * The head tags every page of this layout shares: the character set, the viewport, the page
