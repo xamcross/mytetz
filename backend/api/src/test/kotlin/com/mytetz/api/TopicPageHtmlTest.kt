@@ -199,8 +199,8 @@ class TopicPageHtmlTest {
         val html = render(view(related = emptyList()))
 
         assertTrue(
-            """<button type="button" id="topic-start-button" class="start__cta" data-topic-slug="special-relativity">""" in html,
-            "the start button, with its data-topic-slug attribute, was not found: $html",
+            """<button type="button" id="topic-start-button" class="start__cta" data-topic-slug="special-relativity" disabled="disabled">""" in html,
+            "the start button, disabled and with its data-topic-slug attribute, was not found: $html",
         )
         assertTrue(
             """<p id="topic-start-error" class="start__error" role="alert"></p>""" in html,
@@ -211,6 +211,34 @@ class TopicPageHtmlTest {
             "needs JavaScript" in html,
             "the noscript text does not say the control needs JavaScript: $html",
         )
+    }
+
+    /**
+     * Issue #161: the button ships disabled, so a click cannot reach `/api/sessions` before
+     * `topic-start.js` attaches its own click handler. `topic-start.js` clears this attribute once
+     * it is ready, and only then — see that file's own header comment.
+     */
+    @Test
+    fun `the start button ships disabled, so it does nothing before its script attaches a handler`() {
+        val html = render(view())
+
+        val buttonTag = Regex("""<button[^>]*id="topic-start-button"[^>]*>""").find(html)!!.value
+        assertTrue("disabled" in buttonTag, "the button did not ship disabled: $buttonTag")
+    }
+
+    /**
+     * Issue #161: a short text near the button, hidden until a CSS timer reveals it, so a learner
+     * whose script never loads still reads why the button does nothing. `topic-start.js` hides this
+     * paragraph for good, with `setAttribute('hidden', 'hidden')`, the moment it is ready — see that
+     * file's own header comment, and `guides.css`'s own `.start__script-hint` rule for the timer.
+     */
+    @Test
+    fun `the start control holds a hidden hint that names the reason for a script that never loads`() {
+        val html = render(view())
+
+        val expectedHint = """<p id="topic-start-script-hint" class="start__script-hint" role="status">""" +
+            "This button needs a script that did not load. Load the page again.</p>"
+        assertTrue(expectedHint in html, "the script hint paragraph was not found as expected: $html")
     }
 
     @Test
@@ -307,7 +335,8 @@ class TopicPageHtmlTest {
     fun `the page loads exactly one external script, and exactly one other script, the JSON-LD one`() {
         val html = render(view())
 
-        val scriptSrcCount = Regex("""<script src="/topic-start\.js" defer[^>]*></script>""").findAll(html).count()
+        val scriptSrcCount =
+            Regex("<script src=\"" + Regex.escape(TOPIC_START_SCRIPT) + "\" defer[^>]*></script>").findAll(html).count()
         assertEquals(1, scriptSrcCount, "expected exactly one topic-start.js script tag: $html")
 
         val totalScriptTags = Regex("<script[ >]").findAll(html).count()

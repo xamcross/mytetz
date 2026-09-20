@@ -33,14 +33,16 @@ function topicPageFixture(slug: string, title: string): string {
   <head>
     <meta charset="utf-8" />
     <title>${title} explained simply | mytetz</title>
+    <link rel="stylesheet" href="/guides/guides.css" />
     <script src="/topic-start.js" defer></script>
   </head>
   <body>
     <h1>${title}</h1>
     <section class="start">
       <h2>Start with this topic</h2>
-      <button type="button" id="topic-start-button" class="start__cta" data-topic-slug="${slug}">Start with this topic</button>
+      <button type="button" id="topic-start-button" class="start__cta" data-topic-slug="${slug}" disabled>Start with this topic</button>
       <p id="topic-start-error" class="start__error" role="alert"></p>
+      <p id="topic-start-script-hint" class="start__script-hint" role="status">This button needs a script that did not load. Load the page again.</p>
       <noscript><p>The Start with this topic button needs JavaScript.</p></noscript>
     </section>
   </body>
@@ -63,20 +65,125 @@ test('the full path: tile link, topic page, start, reader', async ({ page }) => 
   // Topic page: the fixture answered the navigation, standing in for the real Ktor route.
   await expect(page.locator('h1')).toHaveText('Quantum Physics');
 
-  // The h1 renders as soon as the browser parses the response body, which can happen before
-  // /topic-start.js finishes its own, separate network fetch — the `defer` attribute lets the
-  // rest of the document parse first. A click issued between those two moments lands on a
-  // button with no listener yet, and does nothing. `domcontentloaded` is the browser's own
-  // signal that every deferred script has downloaded and run, so this waits for that real
-  // event instead of guessing how long the fetch takes.
-  await page.waitForLoadState('domcontentloaded');
-
   // Start: a real click, running the real, unstubbed topic-start.js against the stubbed
-  // POST /api/sessions stubCatalogueAndSession already installed.
+  // POST /api/sessions stubCatalogueAndSession already installed. The button ships disabled
+  // (issue #161), and Playwright's own click() already waits for an element to become enabled
+  // before it acts — so this click waits out the same gap the removed domcontentloaded wait
+  // once covered, with no guess about how long the deferred script's own fetch takes.
   await page.getByRole('button', { name: 'Start with this topic' }).click();
 
   // Reader: the real Angular route at /learn/:sessionId, rendering the stubbed session's seed.
   await page.getByText(SEED).waitFor();
+});
+
+test('a click before a delayed script attaches its handler starts nothing; the button works once it does', async ({
+  page,
+}) => {
+  let sessionRequests = 0;
+  await page.route('**/topics/quantum-physics', (route) =>
+    route.fulfill({
+      contentType: 'text/html',
+      body: topicPageFixture('quantum-physics', 'Quantum Physics'),
+    }),
+  );
+  // Issue #161's own evidence: a real script request can finish over a second after a learner's
+  // click. This delays the real /topic-start.js request by 1500ms and then serves the real file,
+  // so the button has no click handler yet for that whole time.
+  await page.route('**/topic-start.js', async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    await route.continue();
+  });
+  await page.route('**/api/sessions', (route) => {
+    sessionRequests += 1;
+    route.fulfill({
+      json: {
+        sessionId: 's1',
+        topicSlug: 'quantum-physics',
+        rootNodeId: 'n0',
+        currentNodeId: 'n0',
+        nodes: [],
+        status: 'ACTIVE',
+        explanations: { k0: SEED },
+      },
+    });
+  });
+  await page.route('**/api/sessions/s1', (route) =>
+    route.fulfill({
+      json: {
+        sessionId: 's1',
+        topicSlug: 'quantum-physics',
+        rootNodeId: 'n0',
+        currentNodeId: 'n0',
+        nodes: [
+          {
+            nodeId: 'n0',
+            parentNodeId: null,
+            explanationKey: 'k0',
+            span: '',
+            verb: 'SEED',
+            variant: 0,
+            depth: 0,
+          },
+        ],
+        status: 'ACTIVE',
+        explanations: { k0: SEED },
+      },
+    }),
+  );
+
+  // `waitUntil: 'commit'`, and not the default `'load'`: the `load` event fires only once every
+  // deferred script has run, so a plain `goto()` here would sit through the whole 1500ms delay
+  // before returning, and the button this test wants to see disabled would already be enabled.
+  // `'commit'` returns as soon as the navigation itself lands, well before the deferred script's
+  // own, separate, delayed request even starts.
+  await page.goto('/topics/quantum-physics', { waitUntil: 'commit' });
+
+  const button = page.locator('#topic-start-button');
+  await expect(button).toBeDisabled();
+
+  // A forced click bypasses Playwright's own actionability wait, dispatching a real mouse click
+  // straight at the button while it is still disabled. A genuinely disabled control does not
+  // dispatch a click event to any handler, attached or not, so this proves the server's own
+  // disabled attribute, and not only topic-start.js's own busy flag, is what blocks an early
+  // click — the absence of a request below is not a timing race, since a click with no effect
+  // never queues one, whenever it is checked.
+  await button.click({ force: true });
+  expect(sessionRequests).toBe(0);
+
+  // Once the delayed script finishes, it attaches its handler and enables the button.
+  await expect(button).toBeEnabled();
+
+  await button.click();
+  await page.getByText(SEED).waitFor();
+  expect(sessionRequests).toBe(1);
+});
+
+test('a 404 for the script leaves the button disabled and shows a reason', async ({ page }) => {
+  await page.route('**/topics/quantum-physics', (route) =>
+    route.fulfill({
+      contentType: 'text/html',
+      body: topicPageFixture('quantum-physics', 'Quantum Physics'),
+    }),
+  );
+  // The script request fails outright: topic-start.js never runs, so nothing ever attaches a
+  // click handler or hides the script hint paragraph.
+  await page.route('**/topic-start.js', (route) =>
+    route.fulfill({ status: 404, contentType: 'text/plain', body: 'not found' }),
+  );
+
+  await page.goto('/topics/quantum-physics');
+
+  const button = page.locator('#topic-start-button');
+  await expect(button).toBeDisabled();
+
+  // guides.css's own timer reveals the hint on its own, with no script of any kind involved —
+  // this is a plain wait for a real, running CSS animation, not a spy on a timer function.
+  const hint = page.locator('#topic-start-script-hint');
+  await expect(hint).toBeVisible();
+  await expect(hint).toHaveText(
+    'This button needs a script that did not load. Load the page again.',
+  );
+  await expect(button).toBeDisabled();
 });
 
 test('a second click while the request is in flight sends no second request', async ({ page }) => {
