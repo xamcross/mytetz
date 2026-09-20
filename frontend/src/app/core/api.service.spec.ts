@@ -153,6 +153,25 @@ describe('ApiService', () => {
     await expect(promise).resolves.toBeNull();
   });
 
+  it('fetches the billing plans, with no request body', async () => {
+    const promise = service.billingPlans();
+    const req = http.expectOne('/api/billing/plans');
+    expect(req.request.method).toBe('GET');
+    req.flush({
+      priceUsdPerMonth: 12,
+      trialDays: 7,
+      trialGenerations: 40,
+      subscriberDailyExplains: 25,
+    });
+
+    await expect(promise).resolves.toEqual({
+      priceUsdPerMonth: 12,
+      trialDays: 7,
+      trialGenerations: 40,
+      subscriberDailyExplains: 25,
+    });
+  });
+
   it('fetches a checkout url', async () => {
     const promise = service.checkout();
     const req = http.expectOne('/api/billing/checkout');

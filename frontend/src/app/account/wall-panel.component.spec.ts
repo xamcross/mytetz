@@ -1,20 +1,14 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { provideHttpClient } from '@angular/common/http';
-import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
+import { provideRouter } from '@angular/router';
 import { WallCode, WallPanelComponent } from './wall-panel.component';
 
 describe('WallPanelComponent', () => {
-  let http: HttpTestingController;
-
   beforeEach(() => {
     TestBed.configureTestingModule({
       imports: [WallPanelComponent],
-      providers: [provideHttpClient(), provideHttpClientTesting()],
+      providers: [provideRouter([])],
     });
-    http = TestBed.inject(HttpTestingController);
   });
-
-  afterEach(() => http.verify());
 
   function create(code: WallCode): ComponentFixture<WallPanelComponent> {
     const fixture = TestBed.createComponent(WallPanelComponent);
@@ -41,57 +35,21 @@ describe('WallPanelComponent', () => {
     expect(required.toLowerCase()).not.toContain('trial');
   });
 
-  it('the subscribe panel fetches a checkout url', async () => {
+  /**
+   * Issue #137 moves the checkout call out of this panel and onto the plan screen. This test
+   * replaces `the subscribe panel fetches a checkout url`, `marks Subscribe busy, with a label
+   * that names the work, while the request runs`, and `the subscribe panel reports a failed
+   * checkout request` — every one of which asserted a `POST /api/billing/checkout` call this
+   * panel no longer makes. What is left to assert here is that the control is a plain link to
+   * `/subscribe`, read off a real `Router` through `provideRouter` — `RouterLink` computes `href`
+   * from the router's own route table, so this is not a value this test invented itself.
+   */
+  it('the Subscribe control is a link to /subscribe, and not a checkout button', () => {
     const fixture = create('SUBSCRIPTION_REQUIRED');
-    const redirect = vi.spyOn(fixture.componentInstance, 'redirect').mockImplementation(() => {});
 
-    const button = fixture.nativeElement.querySelector('button') as HTMLButtonElement;
-    expect(button.getAttribute('type')).toBe('button');
-    button.click();
-
-    const req = http.expectOne('/api/billing/checkout');
-    expect(req.request.method).toBe('POST');
-    req.flush({
-      url: 'https://checkout.freemius.com/product/1/plan/2/?user_email=a%40b.com&readonly_user=true',
-    });
-    await fixture.whenStable();
-
-    // The server built the URL. This component only follows the URL. It never builds one itself.
-    expect(redirect).toHaveBeenCalledWith(
-      'https://checkout.freemius.com/product/1/plan/2/?user_email=a%40b.com&readonly_user=true',
-    );
-  });
-
-  it('marks Subscribe busy, with a label that names the work, while the request runs', async () => {
-    // Finding F7, animation J.
-    const fixture = create('SUBSCRIPTION_REQUIRED');
-    vi.spyOn(fixture.componentInstance, 'redirect').mockImplementation(() => {});
-    const button = fixture.nativeElement.querySelector('button') as HTMLButtonElement;
-    button.click();
-    fixture.detectChanges();
-
-    expect(button.getAttribute('aria-busy')).toBe('true');
-    expect(button.textContent).toContain('Opening checkout…');
-    expect(button.disabled).toBe(true);
-
-    http.expectOne('/api/billing/checkout').flush({ url: 'https://example.com/checkout' });
-    await fixture.whenStable();
-  });
-
-  it('the subscribe panel reports a failed checkout request', async () => {
-    const fixture = create('SUBSCRIPTION_REQUIRED');
-    const redirect = vi.spyOn(fixture.componentInstance, 'redirect').mockImplementation(() => {});
-
-    const button = fixture.nativeElement.querySelector('button') as HTMLButtonElement;
-    button.click();
-
-    http
-      .expectOne('/api/billing/checkout')
-      .flush(null, { status: 500, statusText: 'Server Error' });
-    await fixture.whenStable();
-    fixture.detectChanges();
-
-    expect(redirect).not.toHaveBeenCalled();
-    expect(fixture.nativeElement.textContent as string).toContain('Could not start checkout');
+    const link = fixture.nativeElement.querySelector('.wall-panel__subscribe') as HTMLAnchorElement;
+    expect(link.tagName.toLowerCase()).toBe('a');
+    expect(link.getAttribute('href')).toBe('/subscribe');
+    expect(fixture.nativeElement.querySelector('button')).toBeNull();
   });
 });

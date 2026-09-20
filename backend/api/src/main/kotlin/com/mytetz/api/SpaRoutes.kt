@@ -21,6 +21,7 @@ internal object SpaRoutes {
         "",
         "auth",
         "account",
+        "subscribe",
         "learn/:sessionId",
         "privacy",
         "terms",

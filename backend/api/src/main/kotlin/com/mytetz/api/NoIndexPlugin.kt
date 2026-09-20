@@ -25,9 +25,11 @@ internal const val FLY_HOST: String = "mytetz.fly.dev"
  *
  * `/learn/` holds a session URL, which only its owner can read (see `SessionRoutes.kt`); a visitor
  * without that session sees an error page. `/account` is the signed-in account page. `/auth` is the
- * sign-in landing page. None of the three is a page a search result should send a stranger to.
+ * sign-in landing page. `/subscribe` is the plan screen (issue #137): it is a page for a signed-in
+ * learner, and not a page a search result should send a stranger to, the same reason `/account`
+ * carries this header.
  */
-private val NOINDEX_PATH_PREFIXES: List<String> = listOf("/learn/", "/account", "/auth")
+private val NOINDEX_PATH_PREFIXES: List<String> = listOf("/learn/", "/account", "/auth", "/subscribe")
 
 /**
  * Reports true when a request for [path] on [host] must carry [NOINDEX].

@@ -315,6 +315,32 @@ describe('AccountPageComponent', () => {
     expect(fixture.nativeElement.querySelector('[data-action="manage-subscription"]')).toBeNull();
   });
 
+  /**
+   * Issue #137. A signed-in learner with no live subscription always has a path to the plan
+   * screen. `subscribeVisible` is the exact complement of `manageVisible` (see its own KDoc), so
+   * this covers `TRIALING`, `NONE`, `EXPIRED` and an unknown status in one pass.
+   */
+  it.each(['TRIALING', 'NONE', 'EXPIRED', 'SOME_UNKNOWN_STATUS'])(
+    'subscribe is present for %s, and links to /subscribe',
+    async (status) => {
+      await mount((req) => req.flush({ ...active, status }));
+
+      const subscribe = fixture.nativeElement.querySelector(
+        '[data-action="subscribe"]',
+      ) as HTMLAnchorElement;
+      expect(subscribe).toBeTruthy();
+      expect(subscribe.getAttribute('href')).toBe('/subscribe');
+      // Never both at once: a subscriber must not read a control that offers a second checkout.
+      expect(fixture.nativeElement.querySelector('[data-action="manage-subscription"]')).toBeNull();
+    },
+  );
+
+  it.each(['ACTIVE', 'PAST_DUE', 'CANCELLED'])('subscribe is absent for %s', async (status) => {
+    await mount((req) => req.flush({ ...active, status }));
+
+    expect(fixture.nativeElement.querySelector('[data-action="subscribe"]')).toBeNull();
+  });
+
   it('a failed portal request shows a message and keeps the learner on the page', async () => {
     await mount((req) => req.flush(active));
 
@@ -780,5 +806,57 @@ describe('AccountPageComponent — with the real router', () => {
     // `route.snapshot` again, after the swap, finds no `action` parameter, and never starts the
     // poll — so this second request never appears.
     http.expectOne('/api/account').flush(active);
+  });
+});
+
+/**
+ * Its own describe block, with the real clock: the block above runs under `vi.useFakeTimers()`
+ * for its poll-timing tests, and a real navigation triggered by a DOM click — rather than by
+ * `RouterTestingHarness.navigateByUrl` directly — needs the real clock's own microtask queue to
+ * settle. Issue #137's Subscribe control is a plain `routerLink`, so this is the same proof
+ * `AllowanceMeterComponent`'s own "with the real router" block gives its Subscribe link.
+ */
+describe('AccountPageComponent — Subscribe, with the real router', () => {
+  let harness: RouterTestingHarness;
+  let http: HttpTestingController;
+  let router: Router;
+
+  beforeEach(async () => {
+    TestBed.configureTestingModule({
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        provideRouter([
+          { path: 'account', component: AccountPageComponent },
+          { path: 'subscribe', component: AccountPageComponent },
+        ]),
+      ],
+    });
+    http = TestBed.inject(HttpTestingController);
+    router = TestBed.inject(Router);
+    harness = await RouterTestingHarness.create();
+  });
+
+  afterEach(() => http.verify());
+
+  it('a click on Subscribe opens /subscribe, for a learner in trial', async () => {
+    await harness.navigateByUrl('/account', AccountPageComponent);
+    http.expectOne('/api/account').flush(trialing);
+    await harness.fixture.whenStable();
+    harness.detectChanges();
+
+    const subscribe = harness.routeNativeElement?.querySelector(
+      '[data-action="subscribe"]',
+    ) as HTMLAnchorElement;
+    subscribe.click();
+    await harness.fixture.whenStable();
+
+    expect(router.url).toBe('/subscribe');
+    // The route table reuses AccountPageComponent for both paths, so landing on "/subscribe"
+    // fires its own GET /api/account in turn — this flush is that request, and not evidence that
+    // the click itself sent one. http.verify() in afterEach proves the click sent no other
+    // request of its own.
+    http.expectOne('/api/account').flush(active);
+    await harness.fixture.whenStable();
   });
 });
