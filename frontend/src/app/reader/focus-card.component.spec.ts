@@ -299,6 +299,37 @@ describe('FocusCardComponent', () => {
     expect(pickerLive()).toBe(false);
   });
 
+  /**
+   * Review correction 3. `select(4, 11)` picks "pillars" out of `BODY`, already on both of that
+   * word's own edges, so `selectionToSpan` grows nothing — the span's own offsets already equal
+   * the drag's own offsets. `onSelectionChanged` must not call `removeAllRanges`/`addRange` in
+   * this case: on a touch screen, that pair replaces the native selection handles with a fresh
+   * pair even when the selection itself does not move, which reads as the handles jumping under
+   * the learner's finger for no reason at all.
+   */
+  it('does not touch the browser selection when the drag already stands on word edges', () => {
+    // Built by hand, rather than through the shared `select()` helper: that helper's own setup
+    // calls `removeAllRanges()` itself, before the `mouseup` it dispatches — a spy installed
+    // before calling it would also count that unrelated setup call as if it were the component's
+    // own. The spy below starts only once that setup has already finished.
+    const range = document.createRange();
+    const text = bodyEl().firstChild as Text;
+    range.setStart(text, 4); // "pillars" — already on both of that word's own edges.
+    range.setEnd(text, 11);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+
+    const removeAllRangesSpy = vi.spyOn(Selection.prototype, 'removeAllRanges');
+    bodyEl().dispatchEvent(new Event('mouseup'));
+    fixture.detectChanges();
+
+    expect(pickerLive()).toBe(true);
+    expect(removeAllRangesSpy).not.toHaveBeenCalled();
+
+    removeAllRangesSpy.mockRestore();
+  });
+
   it('clears the span, rather than throwing, on a mouseup that selected nothing', () => {
     select(4, 11);
     expect(pickerLive()).toBe(true);

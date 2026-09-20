@@ -20,7 +20,7 @@ import {
   VerbPickerComponent,
 } from '../ui/verb-picker.component';
 import { MediaRendererComponent } from './media-renderer.component';
-import { rootTextMatchesBody, selectionToSpan } from './selection';
+import { offsetsOfRange, rootTextMatchesBody, selectionToSpan } from './selection';
 
 /**
  * Takes an element out of flow, at the exact place it already occupies, without moving it.
@@ -737,6 +737,12 @@ export class FocusCardComponent {
    * safe from a loop: this method runs only from the `mouseup`/`touchend` bindings on the
    * template above, never from a `selectionchange` listener, so a selection change this method
    * itself makes can never call this method again.
+   *
+   * Review correction 3. [snapVisibleSelection] only runs when the span's own offsets differ from
+   * the learner's own drag — a drag already on word edges is left untouched. A touch screen draws
+   * its own selection handles on the native selection, and `removeAllRanges`/`addRange` would
+   * replace them with a fresh pair even when nothing about the selection actually changes, which
+   * reads as the handles jumping under the learner's finger for no reason.
    */
   onSelectionChanged(): void {
     const root = this.bodyRef().nativeElement;
@@ -771,7 +777,9 @@ export class FocusCardComponent {
       return;
     }
 
-    const grownRange = this.snapVisibleSelection(root, selection, span);
+    const dragOffsets = offsetsOfRange(root, range);
+    const alreadyGrown = dragOffsets.start === span.start && dragOffsets.end === span.end;
+    const grownRange = alreadyGrown ? range : this.snapVisibleSelection(root, selection, span);
     // The anchor is measured against the grown range, not the learner's own drag, so the picker
     // opens under the phrase now on screen — the same phrase, whole words, that the lead line and
     // the request both hold. `grownRange` is only `null` when `root` holds no text node at all, a
@@ -783,6 +791,9 @@ export class FocusCardComponent {
    * Moves the browser's own selection to cover exactly `span`, so the highlight on screen shows
    * the whole words the picker and the request are about, and not the learner's own, possibly
    * short or long, drag.
+   *
+   * The caller only reaches this when `span`'s own offsets differ from the learner's own drag —
+   * see [onSelectionChanged]'s own comment on why an unchanged drag skips this call entirely.
    *
    * [pointAtOffset] is the one way back from a character offset to a DOM point: it is the inverse
    * of `selection.ts`'s own `offsetOf`, which goes the other way. Returns the new `Range` so the
