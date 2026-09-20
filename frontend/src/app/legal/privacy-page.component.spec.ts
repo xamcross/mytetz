@@ -54,8 +54,24 @@ describe('PrivacyPageComponent', () => {
     expect(fixture.nativeElement.querySelector('a[href="/account"]')).toBeTruthy();
   });
 
-  it("marks every place that still waits for the owner's legal text", () => {
+  it('carries no owner-text marker; every section holds real text', () => {
     const markers = text().match(/\[owner text\]/g) ?? [];
-    expect(markers.length).toBeGreaterThan(0);
+    expect(markers.length).toBe(0);
+  });
+
+  it('names the controller and gives an email contact', () => {
+    expect(text()).toContain('mytetz.com');
+    expect(fixture.nativeElement.querySelector('a[href="mailto:support@mytetz.com"]')).toBeTruthy();
+  });
+
+  it('names Turnstile and Wikimedia as conditional processors', () => {
+    expect(text()).toContain('Turnstile');
+    expect(text()).toContain('Wikimedia');
+  });
+
+  it('states the rights of the data subject and the minimum age', () => {
+    expect(text()).toMatch(/right of access|Article 15/);
+    expect(text()).toMatch(/Article 77/);
+    expect(text()).toMatch(/16 years/);
   });
 });

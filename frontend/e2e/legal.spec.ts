@@ -42,7 +42,16 @@ for (const route of ROUTES) {
 
   test(`${route} sets its own tab title`, async ({ page }) => {
     await page.goto(route);
-    expect(await page.title()).toBe(TITLES[route]);
+    // `toHaveTitle` polls until the title matches or the timeout ends. A one-time `page.title()`
+    // read can run before the lazy route finishes activating and sets the title, which is a race,
+    // not a flake to paper over with a retry or a sleep — see this file's own history.
+    await expect(page).toHaveTitle(TITLES[route]);
+  });
+
+  test(`${route} carries no owner-text marker`, async ({ page }) => {
+    await page.goto(route);
+    const body = await page.locator('main').innerText();
+    expect(body).not.toContain('[owner text]');
   });
 }
 
@@ -151,11 +160,22 @@ test('the privacy page states the technical facts the spec requires', async ({ p
     'Freemius',
     '30 days',
     '90 days',
+    'Turnstile',
+    'Wikimedia',
   ]) {
     expect(body, `the privacy page names "${fact}"`).toContain(fact);
   }
 
   await expect(page.locator('a[href="/account"]')).toBeVisible();
+});
+
+test('the terms page states the price, the trial and the daily allowance', async ({ page }) => {
+  await page.goto('/terms');
+
+  const body = await page.locator('main').innerText();
+  for (const fact of ['$12', '40 tokens', '25 tokens', '14 days']) {
+    expect(body, `the terms page names "${fact}"`).toContain(fact);
+  }
 });
 
 test('the account page links to the terms next to the subscribe control', async ({ page }) => {

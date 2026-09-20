@@ -14,9 +14,15 @@ describe('ImprintPageComponent', () => {
     expect(fixture.nativeElement.querySelector('h1').textContent).toContain('Imprint');
   });
 
-  it("marks every place that still waits for the owner's legal text", () => {
+  it('carries no owner-text marker; every section holds real text', () => {
     const text = fixture.nativeElement.textContent as string;
     const markers = text.match(/\[owner text\]/g) ?? [];
-    expect(markers.length).toBeGreaterThan(0);
+    expect(markers.length).toBe(0);
+  });
+
+  it('names mytetz.com as the provider and gives an email contact', () => {
+    const text = fixture.nativeElement.textContent as string;
+    expect(text).toContain('mytetz.com');
+    expect(fixture.nativeElement.querySelector('a[href="mailto:support@mytetz.com"]')).toBeTruthy();
   });
 });
