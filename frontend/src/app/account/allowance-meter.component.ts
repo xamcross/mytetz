@@ -33,8 +33,14 @@ const METERED_STATUSES: ReadonlySet<string> = new Set([
             [class.allowance-meter__count--tick]="ticked()"
             (animationend)="onCountAnimationEnd($event)"
           >
-            {{ account.remaining }} of {{ account.allowance }} left
-            {{ periodWords(account.status) }}
+            <span aria-hidden="true">{{ account.remaining }} of {{ account.allowance }} left</span>
+            <span aria-hidden="true" class="allowance-meter__period">{{
+              ' ' + periodWords(account.status)
+            }}</span>
+            <span class="mt-sr-only"
+              >{{ account.remaining }} of {{ account.allowance }} left
+              {{ periodWords(account.status) }}</span
+            >
           </span>
           @if (account.status === 'TRIALING') {
             @if (trialEndText(account.trialEndsAtEpochMillis); as end) {
@@ -147,6 +153,20 @@ const METERED_STATUSES: ReadonlySet<string> = new Set([
        */
       @media (max-width: 767px) {
         :host-context(.bar) .allowance-meter__detail {
+          display: none;
+        }
+        /*
+         * Issue #133. Below 768px, the header row is too narrow for the count and its period
+         * word together: "12 of 40 left in your trial" runs past the meter's own share of the
+         * row and lands on top of the "Account" link. This rule hides the period word only, and
+         * only inside the header, so the row reads "12 of 40 left" — true, and short enough to
+         * fit. The aria-hidden attribute marks both the digits and the period word as
+         * decorative, and the sibling .mt-sr-only span carries the one true sentence a screen
+         * reader announces, in the header and on the account page alike. The account page keeps
+         * this rule's own visible period word, because it renders outside the bar element, and
+         * this rule needs a host-context(.bar) match to apply.
+         */
+        :host-context(.bar) .allowance-meter__period {
           display: none;
         }
         /*

@@ -140,12 +140,45 @@ import { BackendState, StatusDotComponent } from './status-dot.component';
       .bar__account {
         white-space: nowrap;
       }
-      @media (max-width: 767px) {
+      /*
+       * Issue #133. Below 768px the nav goes, so a Ktor visitor never sees a live link into a
+       * page that has no route yet. The threshold was 767px, one pixel short of 768px: at exactly
+       * 768px, with the nav still shown, the bar has no room left for "Topics", "Glossary", the
+       * "Account" link, the meter and the status dot together — a real run measures "Glossary"
+       * running 16.6px into "Account". 768px is also the exact width issue #106 measured the
+       * meter against, so this fix moves the threshold up by one pixel instead of touching either
+       * measurement.
+       */
+      @media (max-width: 768px) {
         .bar {
           padding: 0 20px;
         }
         .bar__nav {
           display: none;
+        }
+      }
+      /*
+       * Issue #133. Below 480px, the wordmark, the "Account" link, the meter and the status dot
+       * still do not fit on one line for a learner in trial: the header's own padding and the
+       * gap inside the right-hand group are wide enough to push the "Account" link on top of the
+       * last letter of "mytetz". This rule narrows both, the same way issue #132's own footer
+       * rule narrows the footer's padding below 480px. This block stands after the rule above on
+       * purpose: the two share the bar selector, at the same specificity, so the later one wins
+       * for a width the two ranges share.
+       *
+       * 8px is the tightest padding this rule uses without also narrowing an account with no
+       * live count — the row of the "Account" link, the "Subscribe" button and the status dot.
+       * At 320px that account still ends 4.7px short of an 8px gap from the wordmark, a real
+       * overlap of zero but a gap the layout test still flags as narrow. Closing that last 4.7px
+       * needs a padding near 5px, tighter than a phone header should read, so this rule stops
+       * here — see the issue's own report for the exact measurement.
+       */
+      @media (max-width: 479px) {
+        .bar {
+          padding: 0 8px;
+        }
+        .bar__right {
+          gap: 8px;
         }
       }
       .foot {
