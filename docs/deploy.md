@@ -148,7 +148,7 @@ live in the process, so they reset whenever the machine cold-starts.
 
 ### 2.2 Every variable the backend reads
 
-45 variables, and each one is listed here and in `.env.example`. The Default
+46 variables, and each one is listed here and in `.env.example`. The Default
 column gives `none` for a name with no default in code, and the real default
 for every other name.
 
@@ -181,6 +181,7 @@ needs it, until an operator sets it.
 | `MYTETZ_COOKIE_SIGNING_KEY` | none — required | signs the principal cookie. The app refuses to boot without it. 32 characters minimum. |
 | `MYTETZ_COOKIE_SECURE` | `true` | whether the cookie carries `Secure`. Only an explicit `false`, `0`, `no` or `off` turns it off. |
 | `MYTETZ_CLIENT_IP_HEADER` | `Fly-Client-IP` | which header the rate limiters key on. See section 2. |
+| `MYTETZ_EDGE_SECRET` | off | the shared secret behind the `X-Mytetz-Edge` header. Off means the check does not run, and every `/api/*` request behaves exactly as it does today. On means each `/api/*` request must carry the header with this value, or the app answers `403`. `/api/health` stays open in both states. A value under 32 characters stops the app at boot. See section 5. |
 | `MYTETZ_MIGRATE_ON_BOOT` | off | whether the app deletes an explanation stranded by a model family change, at boot. Only the exact word `true` turns it on. It does **not** control the pre-warm of a missing seed: that step runs on every boot, with no flag. Section "The B0 model migration" explains both. |
 | `GOOGLE_CLIENT_ID` | none | the Google OAuth client ID. Sign-in with Google answers `503` until this and `GOOGLE_CLIENT_SECRET` are both set. |
 | `GOOGLE_CLIENT_SECRET` | none | the Google OAuth client secret. Sign-in with Google answers `503` until this and `GOOGLE_CLIENT_ID` are both set. |
@@ -481,8 +482,8 @@ dashboard / API and are not automated by this repo.**
    is 60 per minute. `EXPLAINS_PER_CALLER` (30 per 10 minutes, in
    `SessionRoutes.kt`) is the tighter bound for a caller that comes through
    `mytetz.com`. **It bounds nothing for a caller that goes straight to
-   `mytetz.fly.dev`,** because that host never reaches Cloudflare. Issue #68
-   tracks that hole.
+   `mytetz.fly.dev`,** because that host never reaches Cloudflare. Step 8 below
+   closes that hole, once you complete it (issue #68).
 6. **Bot Fight Mode: on.** Security > Bots. The API token in `.env` cannot read or
    set this — `GET /zones/{zone}/bot_management` answers `403`. It is a dashboard
    step unless the token gains `Zone → Bot Management → Edit`.
@@ -491,6 +492,60 @@ dashboard / API and are not automated by this repo.**
    redirect to `concat("https://mytetz.com", http.request.uri.path)`, status
    `301`, "Preserve query string" on. The rule runs at the edge, so the `www`
    DNS record stays proxied and the fly certificate for `www` stays in place.
+8. **Edge secret header (issue #68).** The app can refuse an `/api/*` request
+   that skips Cloudflare. `MYTETZ_EDGE_SECRET` turns the check on. This step sets
+   it up.
+
+   Confirm the field names of the Transform Rule against the live API first.
+   Read [Modify Request Header](https://developers.cloudflare.com/rules/transform/request-header-modification/)
+   for the present names. Do not copy a field name from issue #68.
+
+   Do the four steps below in this exact order. Each step keeps the site up.
+
+   1. Make a secret on your own machine:
+
+      ```bash
+      openssl rand -base64 32
+      ```
+
+      Do not paste this value into an issue, a commit or a chat.
+   2. In the Cloudflare dashboard, open **Rules > Transform Rules > Modify Request
+      Header**. Add a rule for the zone. Set the header name to
+      `X-Mytetz-Edge`. Set the header value to the secret from step 1.
+   3. Set the same secret as a fly secret:
+
+      ```bash
+      fly secrets set MYTETZ_EDGE_SECRET="<the secret from step 1>" --app mytetz
+      ```
+
+      This step restarts the app. The check turns on only now, because both
+      sides then hold the same value.
+   4. Run the four checks below.
+
+      ```bash
+      curl -s -o /dev/null -w "%{http_code}" https://mytetz.fly.dev/api/sessions
+      # expect 403
+
+      curl -s -o /dev/null -w "%{http_code}" https://mytetz.com/api/sessions
+      # expect the same code this path gave before this change
+
+      curl -sI https://mytetz.fly.dev/api/health
+      # expect 200
+
+      curl -s -o /dev/null -w "%{http_code}" -H "CF-Connecting-IP: 1.2.3.4" \
+        https://mytetz.fly.dev/api/sessions/x/explain
+      # expect 403
+      ```
+
+   **To go back:** unset the fly secret.
+
+   ```bash
+   fly secrets unset MYTETZ_EDGE_SECRET --app mytetz
+   ```
+
+   The check turns off again. The app then answers exactly as it did before
+   this step. You may leave the Transform Rule in place. An unset secret on
+   the app side is enough to turn the check off.
 
 Verify end to end:
 
