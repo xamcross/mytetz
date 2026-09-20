@@ -103,14 +103,16 @@ class FaqRoutesTest {
 
             val body = client.get("/faq").bodyAsText()
 
-            assertTrue("55 explanations over 9 days" in body, body)
-            assertTrue("A subscriber gets 30 explanations each day" in body, body)
+            // Issue #139 renamed the allowance unit "tokens" in these two answers, so the
+            // numbers this test pins moved with it.
+            assertTrue("55 tokens over 9 days" in body, body)
+            assertTrue("A subscriber gets 30 tokens each day" in body, body)
             assertTrue(
-                "40 explanations over 7 days" !in body,
+                "40 tokens over 7 days" !in body,
                 "the page fell back to the default trial numbers: $body",
             )
             assertTrue(
-                "gets 25 explanations each day" !in body,
+                "gets 25 tokens each day" !in body,
                 "the page fell back to the default subscriber allowance: $body",
             )
         }

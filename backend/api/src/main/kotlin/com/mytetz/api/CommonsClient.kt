@@ -130,8 +130,9 @@ private val ALLOWED_LICENSE_SHORT_NAME = Regex(
     RegexOption.IGNORE_CASE,
 )
 
-/** The most characters [searchQueryFor] ever sends as `gsrsearch`. A search term is a few words,
- * never a sentence; this bound exists so one long span cannot grow the query without limit. */
+/** The most characters [searchQueryFor] ever sends as `gsrsearch` when it falls back to the span.
+ * A search term is a few words, never a sentence; this bound exists so one long span cannot grow
+ * the query without limit. */
 private const val MAX_SEARCH_QUERY_CHARS = 120
 
 /**
@@ -146,14 +147,98 @@ private const val MAX_SEARCH_QUERY_CHARS = 120
  * placeholder string `"the topic introduction"` for every node one step below the seed —
  * `SessionService.kt:774`, the single most common case a learner ever reaches — so an earlier
  * version of this function searched for "mitosis the topic introduction" on that path, not
- * "mitosis". Reading past that placeholder would couple this module to a string literal owned by
- * `:backend:session`, for evidence that does not pay for the coupling. A later issue may let the
- * model that draws the diagram name its own search terms instead; this function does not attempt
- * that here.
+ * "mitosis".
+ *
+ * This is now the fallback path only — see [imageSearchQueryFor] for the function [findImage]
+ * actually calls, and its own KDoc for why. Issue 115 gave the model drawing the diagram its own
+ * search terms; this function is what still runs when that model gives none, or when every one of
+ * its own words is dropped.
  */
 @Suppress("UNUSED_PARAMETER") // ancestors: kept for the CommonsLookup port's own shape; never read. See this function's own KDoc.
 internal fun searchQueryFor(span: String, ancestors: List<Ancestor>): String =
     span.trim().take(MAX_SEARCH_QUERY_CHARS)
+
+/**
+ * The most words [imageSearchQueryFor] ever keeps from the model's own [VisualizeAnswer]
+ * `imageSearchTerms` field, once every word has passed [isPlainImageSearchTerm].
+ *
+ * The vendor's own search API states no word-count limit of its own for `gsrsearch`, confirmed at
+ * `action=help&modules=query%2Bsearch`, read 2026-09-20 — this is Task 115's own choice, on the
+ * model of [MAX_SEARCH_QUERY_CHARS] above. The prompt asks the model for "two to five words"; a
+ * model that sends more has every word after this limit dropped here, never rejected outright.
+ */
+private const val MAX_IMAGE_SEARCH_TERM_COUNT = 5
+
+/**
+ * The most characters one word of the model's own `imageSearchTerms` field may hold. A search
+ * term is one plain word — "diagram", "photosynthesis" — never a run-on string; a "word" longer
+ * than this is dropped whole, the same way a control character drops it. See
+ * [isPlainImageSearchTerm].
+ */
+private const val MAX_IMAGE_SEARCH_TERM_CHARS = 30
+
+/**
+ * The most characters the model's own raw `imageSearchTerms` field is read past, before it is even
+ * split into words. This bounds the field itself, ahead of the per-word and per-count bounds
+ * below, so a model that sends one long run-on string with no spaces at all cannot grow the field
+ * without limit before those two checks ever run.
+ */
+private const val MAX_IMAGE_SEARCH_TERMS_RAW_CHARS = 80
+
+/**
+ * Checks one word of the model's own `imageSearchTerms` field is plain and safe enough to reach
+ * [imageSearchQueryFor]'s own query string.
+ *
+ * The model's output is hostile input, the same rule this class's own KDoc states for [span]. A
+ * control character is refused outright — this project's own rule, needing no vendor source. So
+ * is any of the three characters CirrusSearch itself gives a special meaning inside an ordinary
+ * search string, confirmed at `Help:CirrusSearch`, read 2026-09-20: a colon starts a search
+ * keyword such as `filetype:`, a double quote starts a phrase match, and a leading hyphen excludes
+ * a term — none of which a plain descriptive word from a diagram's own subject ever needs.
+ */
+private fun isPlainImageSearchTerm(term: String): Boolean =
+    term.isNotEmpty() &&
+        term.length <= MAX_IMAGE_SEARCH_TERM_CHARS &&
+        term.none { it.isISOControl() } &&
+        ':' !in term &&
+        '"' !in term &&
+        !term.startsWith('-')
+
+/**
+ * Reduces the model's own [rawTerms] to a Commons search string, or to null when nothing in it
+ * survives.
+ *
+ * [rawTerms] is bounded to [MAX_IMAGE_SEARCH_TERMS_RAW_CHARS] before it is even split — see that
+ * constant's own KDoc — then split on whitespace. Each word is kept only when
+ * [isPlainImageSearchTerm] accepts it, and the words that survive are joined back with a single
+ * space, in the order the model wrote them, then bounded to [MAX_IMAGE_SEARCH_TERM_COUNT] words. A
+ * bad word is dropped on its own, never the whole field, so one bad word never costs every good
+ * word beside it.
+ *
+ * Null means every word was dropped, or the model sent nothing at all. [imageSearchQueryFor] reads
+ * null as "fall back to [searchQueryFor]" — the one degradation Issue 115 states for both cases.
+ */
+internal fun validatedImageSearchTerms(rawTerms: String): String? {
+    val words = rawTerms
+        .trim()
+        .take(MAX_IMAGE_SEARCH_TERMS_RAW_CHARS)
+        .split(WHITESPACE_RUN)
+        .filter(::isPlainImageSearchTerm)
+        .take(MAX_IMAGE_SEARCH_TERM_COUNT)
+    return words.takeIf { it.isNotEmpty() }?.joinToString(" ")
+}
+
+/**
+ * The `gsrsearch` value [findImage] actually sends: the model's own [imageSearchTerms] when at
+ * least one word of it survives [validatedImageSearchTerms], [span] alone (through
+ * [searchQueryFor]) otherwise.
+ *
+ * This is the one fallback this class states for a `VISUALIZE` lookup: an empty
+ * [imageSearchTerms], and an [imageSearchTerms] whose every word was hostile or malformed, answer
+ * the same way — the search this project ran before Issue 115 existed, never "no image at all".
+ */
+internal fun imageSearchQueryFor(span: String, ancestors: List<Ancestor>, imageSearchTerms: String): String =
+    validatedImageSearchTerms(imageSearchTerms) ?: searchQueryFor(span, ancestors)
 
 /** At most 300 characters of attribution text reach the wire. A licence credit is a name and a
  * short phrase, never a paragraph; this bound exists only to cap what a hostile or a malformed
@@ -273,11 +358,13 @@ internal fun hasExactSchemeAndHost(raw: String, scheme: String, host: String): B
  *   `extmetadata` — the last four also named, without their exact casing pinned down, by
  *   `https://www.mediawiki.org/wiki/Extension:CommonsMetadata`.
  *
- * [span] reaches the request only through
+ * [span] and the model's own `imageSearchTerms` both reach the request only through
  * [io.ktor.client.request.HttpRequestBuilder.parameter], never through string concatenation into
- * the URL, so a learner's selection cannot inject a second query parameter or otherwise reshape the
- * request. [ancestors] is accepted, for the `CommonsLookup` port's own shape, and never read — see
- * [searchQueryFor]'s own KDoc for why.
+ * the URL, so neither a learner's selection nor a model's own answer can inject a second query
+ * parameter or otherwise reshape the request. [ancestors] is accepted, for the `CommonsLookup`
+ * port's own shape, and never read — see [searchQueryFor]'s own KDoc for why. See
+ * [imageSearchQueryFor]'s own KDoc for how `imageSearchTerms` is reduced before it ever reaches
+ * [parameter].
  *
  * ## What "accept" means
  *
@@ -316,12 +403,18 @@ internal fun hasExactSchemeAndHost(raw: String, scheme: String, host: String): B
  */
 class CommonsClient(private val httpClient: HttpClient) {
 
-    suspend fun findImage(span: String, ancestors: List<Ancestor>): ImageMedia? {
+    /**
+     * [imageSearchTerms] is the model's own answer to the `imageSearchTerms` field of
+     * [com.mytetz.graph.VisualizeAnswer] — hostile input, the same as [span]. It defaults to
+     * `""`, which [imageSearchQueryFor] already reads as "use the span instead", so a caller
+     * that predates Issue 115 keeps compiling and keeps its old behaviour unchanged.
+     */
+    suspend fun findImage(span: String, ancestors: List<Ancestor>, imageSearchTerms: String = ""): ImageMedia? {
         return try {
             val response = httpClient.get(BASE_URL) {
                 parameter("action", "query")
                 parameter("generator", "search")
-                parameter("gsrsearch", searchQueryFor(span, ancestors))
+                parameter("gsrsearch", imageSearchQueryFor(span, ancestors, imageSearchTerms))
                 parameter("gsrnamespace", FILE_NAMESPACE)
                 parameter("gsrlimit", SEARCH_LIMIT)
                 parameter("prop", "imageinfo")

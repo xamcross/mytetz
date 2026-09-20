@@ -71,7 +71,7 @@ class ExplanationPageHtmlTest {
         val html = render(view())
 
         assertTrue("""<meta name="viewport" content="width=device-width, initial-scale=1">""" in html)
-        assertTrue("""<link href="/guides/guides.css" rel="stylesheet">""" in html)
+        assertTrue("""<link href="$GUIDES_STYLESHEET" rel="stylesheet">""" in html)
         assertTrue("""class="bar"""" in html)
         assertTrue("""class="foot"""" in html)
     }

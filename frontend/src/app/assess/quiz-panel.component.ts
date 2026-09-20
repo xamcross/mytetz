@@ -10,10 +10,29 @@ import {
   output,
   signal,
 } from '@angular/core';
+import { AccountStore } from '../core/account.store';
 import { ApiService } from '../core/api.service';
 import { QuizAnswerPayload, QuizKind, QuizQuestionView, QuizResultView } from '../core/models';
 
 type QuizPhase = 'loading' | 'question' | 'result';
+
+/**
+ * What starting this quiz truly spent, from the account's own `remaining` before and after —
+ * never a guess. Issue #139: `QuizRoutes.kt` spends the token while it builds the template
+ * (`POST /api/sessions/{id}/quizzes`), and a cache hit spends nothing there, the same rule
+ * `SessionRoutes.kt` follows for an explanation. See `SessionStore.TokenResult`, which this
+ * mirrors — kept as its own small type here rather than a shared import, so `assess/` and
+ * `reader/` stay two independent feature areas.
+ */
+interface QuizTokenResult {
+  usedToken: boolean;
+  remaining: number;
+}
+
+/** How long [QuizPanelComponent.tokenResult] stays before it clears itself, absent a new quiz.
+ * The same duration `SessionStore.TOKEN_RESULT_MILLIS` and `focus-card.component.ts`'s
+ * `READY_STATUS_MILLIS` both use. */
+const TOKEN_RESULT_MILLIS = 4000;
 
 /**
  * One flow for both quiz kinds: Test Me and Exam. It loads a template, collects one answer for
@@ -64,6 +83,15 @@ type QuizPhase = 'loading' | 'question' | 'result';
         <span class="mt-eyebrow"
           >{{ title() }} · question {{ currentIndex() + 1 }} of {{ questions().length }}</span
         >
+        <!--
+          Issue #139. The quiz spends its token when the template is built, not when the learner
+          answers — see QuizTokenResult's own KDoc — so this text can show as soon as the account
+          read that follows startQuiz settles. Absent while that read is still in flight, or when
+          it fails: a stale or wrong number is worse than none.
+        -->
+        @if (tokenResultText(); as resultText) {
+          <p class="quiz-panel__token-result">{{ resultText }}</p>
+        }
         <p class="quiz-panel__stem">{{ currentQuestion()?.stem }}</p>
         <div class="quiz-panel__options">
           @for (option of currentQuestion()?.options ?? []; track $index) {
@@ -134,6 +162,14 @@ type QuizPhase = 'loading' | 'question' | 'result';
         font-size: 19px;
         font-weight: 600;
         color: var(--mt-ink);
+      }
+      /* Issue #139. On --mt-surface, --mt-muted measures 5.84:1 — above the 4.5:1 an AA small
+         text needs — so this rule adds no new colour token. */
+      .quiz-panel__token-result {
+        margin: 0;
+        font-size: 14px;
+        font-weight: 700;
+        color: var(--mt-muted);
       }
       .quiz-panel__options {
         display: flex;
@@ -289,6 +325,7 @@ type QuizPhase = 'loading' | 'question' | 'result';
 })
 export class QuizPanelComponent {
   private readonly api = inject(ApiService);
+  private readonly account = inject(AccountStore);
   private readonly host = inject(ElementRef<HTMLElement>);
   private readonly destroyRef = inject(DestroyRef);
 
@@ -308,12 +345,31 @@ export class QuizPanelComponent {
    * order the questions were asked in, so the submitted list reads in the same order as the quiz. */
   private readonly answersGiven = new Map<string, number>();
 
+  /** What starting this quiz truly spent, or `null` when there is nothing to say — the account
+   * read is still in flight, it failed, or the pending clear (see [tokenResultTimer]) has
+   * already run. See [QuizTokenResult]. */
+  readonly tokenResult = signal<QuizTokenResult | null>(null);
+  /** The pending clear of [tokenResult], or `null` when none is pending. Cleared on destroy, the
+   * same guard `SessionStore.tokenResultTimer` uses for the same reason. */
+  private tokenResultTimer: ReturnType<typeof setTimeout> | null = null;
+
   readonly title = computed(() => (this.kind() === 'EXAM' ? 'Exam' : 'Test me'));
   readonly currentQuestion = computed<QuizQuestionView | null>(
     () => this.questions()[this.currentIndex()] ?? null,
   );
   readonly answered = computed(() => this.chosenIndex() !== null);
   readonly isLastQuestion = computed(() => this.currentIndex() === this.questions().length - 1);
+
+  /** The short, visible sentence for the result row, or `null` to show nothing — see
+   * [tokenResult]. Singular and plural follow the same rule `SessionStore` uses: "1 token used"
+   * is fixed text, because starting a quiz costs exactly one token or none at all. */
+  readonly tokenResultText = computed<string | null>(() => {
+    const result = this.tokenResult();
+    if (result === null) return null;
+    if (!result.usedToken) return 'No token used. This quiz existed already.';
+    const word = result.remaining === 1 ? 'token' : 'tokens';
+    return `1 token used. ${result.remaining} ${word} left.`;
+  });
 
   constructor() {
     effect(() => {
@@ -333,6 +389,7 @@ export class QuizPanelComponent {
     const trigger = this.host.nativeElement.ownerDocument?.activeElement;
     this.destroyRef.onDestroy(() => {
       if (trigger instanceof HTMLElement && trigger !== trigger.ownerDocument.body) trigger.focus();
+      this.clearTokenResultTimer();
     });
 
     // Runs after every render this panel's own signals cause, not once: the panel's first render
@@ -382,20 +439,73 @@ export class QuizPanelComponent {
     this.phase.set('loading');
     this.error.set(null);
     this.answersGiven.clear();
+    // Issue #139. A stale result from a previous quiz must not sit under one still in flight.
+    this.clearTokenResult();
     try {
+      // `remainingBefore` is read here, and not before this line — see the note this method's
+      // own constructor effect leaves on [start]'s call to it. This method runs from that effect,
+      // and a signal read in the synchronous part of an effect's callback becomes one of its
+      // dependencies; reading `this.account.view()` there made the effect re-run — calling
+      // `start` again — every time `reportTokenResult` itself changed that same signal, an
+      // unbounded loop this test suite's own account-read specs caught. Once past this `await`,
+      // the call is a plain microtask callback and no longer part of that tracked scope. Nothing
+      // else changes `remainingBefore`'s answer between `start` being called and this line, so
+      // reading it here is still the true count from before this quiz's own template call.
       const template = await this.api.startQuiz(
         this.sessionId(),
         this.kind(),
         this.nodeId() ?? undefined,
       );
+      const remainingBefore = this.account.view()?.remaining ?? null;
       this.attemptId = template.attemptId;
       this.questions.set(template.questions);
       this.currentIndex.set(0);
       this.chosenIndex.set(null);
       this.phase.set('question');
+      // Not awaited before the question renders: unlike the reader's own live region, this panel
+      // has no single message to join the result into, so the question shows at once and the
+      // small result text follows once the account read settles.
+      void this.reportTokenResult(remainingBefore);
     } catch {
       this.error.set('This quiz could not be started. Try again in a moment.');
     }
+  }
+
+  /**
+   * Reads the account after a quiz has started, and records whether it spent a token, from the
+   * true `remaining` before and after — never a guess. See [tokenResult].
+   *
+   * Sets nothing when the read itself fails, or answers with no usable count: a stale or wrong
+   * number is worse than none.
+   */
+  private async reportTokenResult(remainingBefore: number | null): Promise<void> {
+    await this.account.load();
+    if (this.account.error() !== null || remainingBefore === null) return;
+    const remainingAfter = this.account.view()?.remaining ?? null;
+    if (remainingAfter === null) return;
+
+    this.tokenResult.set({
+      usedToken: remainingAfter < remainingBefore,
+      remaining: remainingAfter,
+    });
+    this.clearTokenResultTimer();
+    this.tokenResultTimer = setTimeout(() => {
+      this.tokenResultTimer = null;
+      this.tokenResult.set(null);
+    }, TOKEN_RESULT_MILLIS);
+  }
+
+  /** Drops [tokenResult] and any pending clear of it. Run at the start of every new quiz, so a
+   * stale result from a finished one never sits under one still in flight. */
+  private clearTokenResult(): void {
+    this.clearTokenResultTimer();
+    this.tokenResult.set(null);
+  }
+
+  private clearTokenResultTimer(): void {
+    if (this.tokenResultTimer === null) return;
+    clearTimeout(this.tokenResultTimer);
+    this.tokenResultTimer = null;
   }
 
   choose(index: number): void {
