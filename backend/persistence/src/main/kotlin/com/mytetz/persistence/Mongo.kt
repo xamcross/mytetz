@@ -9,7 +9,14 @@ import kotlin.coroutines.cancellation.CancellationException
 import org.bson.BsonDocument
 import org.bson.BsonInt32
 
-class Mongo(config: MongoConfig) {
+/**
+ * `AutoCloseable` lets an owner script use Kotlin's `use { }` function. The type then states that
+ * a caller must close each instance. The application makes one instance for its whole life, and
+ * closes that instance only at shutdown. An owner script makes one instance for each run. It must
+ * close that instance every time, on success and on failure — see the `scripts` package in
+ * `:backend:graph`.
+ */
+class Mongo(config: MongoConfig) : AutoCloseable {
 
     /**
      * Built from settings rather than straight from the URI so that
@@ -55,5 +62,5 @@ class Mongo(config: MongoConfig) {
         false
     }
 
-    fun close() = client.close()
+    override fun close() = client.close()
 }

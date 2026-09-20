@@ -7,9 +7,11 @@ import com.mytetz.graph.MongoTestSupport
 import com.mytetz.graph.Verb
 import kotlinx.coroutines.test.runTest
 import org.bson.Document
+import java.io.File
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -402,5 +404,66 @@ class CorrectSeedTextTest {
         applyWrite(repository, SeedSelector.BySlug("special-relativity"), "New text.", nowEpochMillis = 1L)
 
         assertEquals("New text.", repository.findByKey("sr-seed")?.body)
+    }
+
+    // ------------------------------------------------------------------ the real process (issue #175)
+
+    private val processDatabase = MongoTestSupport.database("correct_seed_text_process")
+    private val processRepository = ExplanationRepository(processDatabase)
+
+    /** See `PublishTopExplanationsTest.kt`'s own KDoc on this same shape of test. */
+    private fun runMainProcess(
+        args: List<String> = emptyList(),
+        env: Map<String, String> = emptyMap(),
+    ): ScriptProcessResult = runScriptProcess(
+        mainClass = "com.mytetz.graph.scripts.CorrectSeedTextKt",
+        args = args,
+        env = mapOf(
+            "MONGODB_URI" to MongoTestSupport.connectionString,
+            "MONGODB_DATABASE" to "test_correct_seed_text_process",
+        ) + env,
+    )
+
+    @Test
+    fun `main ends the process with exit code 0 on success`() = runTest {
+        processDatabase.getCollection<Explanation>("explanations").drop()
+        processRepository.ensureIndexes()
+        processRepository.insertIfAbsent(seed(key = "process-seed", slug = "process-topic", body = "Old text."))
+        val newTextFile = File.createTempFile("issue175-correct-seed-text", ".txt")
+        newTextFile.writeText("New text.")
+
+        val result = runMainProcess(args = listOf("--slug", "process-topic", "--file", newTextFile.absolutePath))
+
+        assertEquals(0, result.exitCode)
+    }
+
+    @Test
+    fun `main ends the process with a non-zero exit code and an Error line when the new text file is missing`() {
+        val missingFile = File(System.getProperty("java.io.tmpdir"), "no-such-file-issue175.txt").absolutePath
+
+        val result = runMainProcess(args = listOf("--slug", "no-such-topic", "--file", missingFile))
+
+        assertFalse(result.exitCode == 0)
+        assertTrue("Error:" in result.output)
+    }
+
+    @Test
+    fun `main never prints the host name of an unreachable database`() {
+        val unreachableHost = "unreachable-host-issue175.invalid"
+        val newTextFile = File.createTempFile("issue175-correct-seed-text-unreachable", ".txt")
+        newTextFile.writeText("New text.")
+
+        val result = runMainProcess(
+            args = listOf("--slug", "process-topic", "--file", newTextFile.absolutePath),
+            env = mapOf(
+                "MONGODB_URI" to "mongodb://$unreachableHost:27017",
+                "MYTETZ_MONGO_SERVER_SELECTION_TIMEOUT_MILLIS" to "200",
+            ),
+        )
+
+        assertFalse(result.exitCode == 0)
+        assertTrue("Error:" in result.output)
+        assertFalse(unreachableHost in result.output, "the host name must never be printed")
+        assertFalse("MONGODB_URI" in result.output, "the environment variable's name must never be printed")
     }
 }
