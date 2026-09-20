@@ -134,7 +134,7 @@ import { TopicSummary } from '../core/models';
                 @if (query() || category() !== null) {
                   <h2 class="topics__empty-title">Nothing under that name yet.</h2>
                   <p class="topics__empty-body">
-                    The catalogue is {{ topics().length }} hand-written topics for now. Try a
+                    The dashboard holds {{ topics().length }} hand-written topics for now. Try a
                     shorter word, or clear the category.
                   </p>
                   <button type="button" class="mt-pill mt-pill--ghost" (click)="clearFilters()">
@@ -142,7 +142,7 @@ import { TopicSummary } from '../core/models';
                   </button>
                 } @else {
                   <h2 class="topics__empty-title">No topics yet.</h2>
-                  <p class="topics__empty-body">The catalogue is empty. Please come back later.</p>
+                  <p class="topics__empty-body">The dashboard is empty. Please come back later.</p>
                 }
               </li>
             }
@@ -158,7 +158,7 @@ import { TopicSummary } from '../core/models';
           Each topic opens with one short passage. Read the passage. Highlight a word or phrase you
           do not understand. mytetz writes a short explanation for that phrase. The explanation
           opens next to the passage. You can highlight a word inside the explanation too. Each
-          highlight opens a new explanation. You choose how many times you do this. The catalogue
+          highlight opens a new explanation. You choose how many times you do this. The dashboard
           holds twelve subject areas: astronomy, biology, chemistry, computer science, earth
           science, economics, history, linguistics, mathematics, philosophy, physics, and
           psychology. Use the search box or a category filter to find a topic fast.

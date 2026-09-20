@@ -1,6 +1,7 @@
 import { Page } from '@playwright/test';
 import type {
   AccountView,
+  BillingPlansView,
   QuizResultView,
   QuizTemplateView,
   SessionView,
@@ -458,4 +459,25 @@ export function accountView(overrides: Partial<AccountView> = {}): AccountView {
  */
 export async function stubAccount(page: Page, view: AccountView): Promise<void> {
   await page.route('**/api/account', (route) => route.fulfill({ json: view }));
+}
+
+/** The numbers `GET /api/billing/plans` answers, for `SubscribePageComponent`. Every field has a
+ * value — see `models.ts` — so a test never leans on a default the app happens to tolerate. */
+export function billingPlansView(overrides: Partial<BillingPlansView> = {}): BillingPlansView {
+  return {
+    priceUsdPerMonth: 12,
+    trialDays: 7,
+    trialGenerations: 40,
+    subscriberDailyExplains: 25,
+    ...overrides,
+  };
+}
+
+/** Stubs `GET /api/billing/plans` with `plans`, so `SubscribePageComponent` renders the two
+ * cards with real numbers instead of a permanent skeleton. */
+export async function stubBillingPlans(
+  page: Page,
+  plans: BillingPlansView = billingPlansView(),
+): Promise<void> {
+  await page.route('**/api/billing/plans', (route) => route.fulfill({ json: plans }));
 }

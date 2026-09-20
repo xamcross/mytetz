@@ -9,6 +9,7 @@ import { provideHttpClient } from '@angular/common/http';
 
 import { routes } from './app.routes';
 import { RouteMetaDescriptionService } from './core/route-meta-description.service';
+import { NavigationHistoryService } from './core/navigation-history.service';
 
 export const appConfig: ApplicationConfig = {
   providers: [
@@ -54,6 +55,10 @@ export const appConfig: ApplicationConfig = {
     // else injects it, so `provideAppInitializer` is what makes Angular construct it at all.
     provideAppInitializer(() => {
       inject(RouteMetaDescriptionService);
+      // `NavigationHistoryService` reads every navigation from its own constructor, for
+      // `SubscribePageComponent`'s "Stay on the free plan" control (issue #137). It needs the
+      // same early construction, for the same reason.
+      inject(NavigationHistoryService);
     }),
   ],
 };

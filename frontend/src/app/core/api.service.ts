@@ -4,6 +4,7 @@ import { firstValueFrom } from 'rxjs';
 import {
   AccountView,
   AuthConfig,
+  BillingPlansView,
   QuizAnswerPayload,
   QuizKind,
   QuizResultView,
@@ -113,6 +114,14 @@ export class ApiService {
 
   signOut(): Promise<void> {
     return firstValueFrom(this.http.post<void>('/api/auth/sign-out', null));
+  }
+
+  /**
+   * The price and the trial and subscriber numbers of the two plans. Open: it needs no account.
+   * `SubscribePageComponent` reads it before a learner signs in, on the plan screen (issue #137).
+   */
+  billingPlans(): Promise<BillingPlansView> {
+    return firstValueFrom(this.http.get<BillingPlansView>('/api/billing/plans'));
   }
 
   /**

@@ -241,6 +241,10 @@ class BillingRoutesTest {
         // far more than one ordinary test needs. A rate-limiter test overrides this to a small
         // limiter, so it does not need to send many requests to reach it.
         portalLimiter: FixedWindowRateLimiter? = null,
+        // The default `BillingConfig()` keeps every existing test on the same numbers `billing`
+        // below already uses. A plans test overrides this to prove the route reads its own
+        // argument, and not a second, hand-written default.
+        billingConfig: BillingConfig = BillingConfig(),
         block: suspend Scope.() -> Unit,
     ) = testApplication {
         val stack = TestFixtures.sessionApp()
@@ -249,7 +253,7 @@ class BillingRoutesTest {
         val mailSender = CapturingMailSender()
         val magicLink = MagicLinkService(accountRepository, mailSender, baseUrl = "http://localhost")
         val billingRepository = BillingRepository(stack.database)
-        val billing = BillingService(billingRepository, config = BillingConfig())
+        val billing = BillingService(billingRepository, config = billingConfig)
         val freemiusConfig = FreemiusConfig(secretKey = SECRET_KEY, productId = "prod-1", planId = "plan-1")
         val freemiusApiClient = portalClient(link = "https://example.freemius.com/portal?token=default")
 
@@ -281,6 +285,7 @@ class BillingRoutesTest {
                 billingRoutes(
                     account = account,
                     billing = billing,
+                    billingConfig = billingConfig,
                     freemiusConfig = freemiusConfigFactory ?: { freemiusConfig },
                     freemiusApiClient = freemiusApiClientFactory ?: { freemiusApiClient },
                     cookies = TestFixtures.cookieConfig,
@@ -342,6 +347,49 @@ class BillingRoutesTest {
     }
 
     private suspend fun HttpResponse.apiError(): ApiError = wireJson.decodeFromString(bodyAsText())
+
+    // ------------------------------------------------------------------ the plans view (issue #137)
+
+    @Test
+    fun `plans answers the price and the three billingConfig numbers, in the raw JSON`() = app {
+        val response = client.get("/api/billing/plans")
+
+        assertEquals(HttpStatusCode.OK, response.status)
+        // Asserted on the raw JSON text, and not on a decoded field: BillingPlansResponse has no
+        // default value on any field (see its own KDoc), so a field that regressed back to a
+        // default would still decode, and only the raw text would show it is missing or wrong.
+        assertEquals(
+            """{"priceUsdPerMonth":12,"trialDays":7,"trialGenerations":40,"subscriberDailyExplains":25}""",
+            response.bodyAsText(),
+        )
+    }
+
+    @Test
+    fun `plans reads a non-default billingConfig, and not the hard-coded defaults`() = app(
+        billingConfig = BillingConfig(trialDays = 9, trialGenerations = 55, subscriberDailyExplains = 30),
+    ) {
+        val response = client.get("/api/billing/plans")
+
+        assertEquals(
+            """{"priceUsdPerMonth":12,"trialDays":9,"trialGenerations":55,"subscriberDailyExplains":30}""",
+            response.bodyAsText(),
+        )
+    }
+
+    @Test
+    fun `plans needs no sign-in`() = app {
+        // No signIn() call here, on purpose: a visitor with no session must read this route too.
+        val response = client.get("/api/billing/plans")
+
+        assertEquals(HttpStatusCode.OK, response.status)
+    }
+
+    @Test
+    fun `plans sets no cookie`() = app {
+        val response = client.get("/api/billing/plans")
+
+        assertNull(response.headers[HttpHeaders.SetCookie])
+    }
 
     // ------------------------------------------------------------------ checkout
 

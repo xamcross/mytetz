@@ -273,20 +273,36 @@ class TopicPageHtmlTest {
 
     // ------------------------------------------------------------- the footer
 
+    /**
+     * Issue #144 gives this link the class `foot__link`, the same class `AppShellComponent`'s own
+     * footer link carries. The assertion below changed from `<a href="/how-it-works">How it
+     * works</a>` (no class) to the string below, to match — `kotlinx.html` writes the `href`
+     * `a(...)` sets by name before the `class` its `classes` parameter adds.
+     */
     @Test
     fun `the footer links to the how-it-works page`() {
         val html = render(view())
 
-        assertTrue("""<a href="/how-it-works">How it works</a>""" in html, html)
+        assertTrue("""<a href="/how-it-works" class="foot__link">How it works</a>""" in html, html)
     }
 
+    /**
+     * Issue #144 gives this link the class `foot__link`. The assertion below changed from
+     * `<a href="/faq">FAQ</a>` (no class) to the string below, to match.
+     */
     @Test
     fun `the footer links to the FAQ page`() {
         val html = render(view())
 
-        assertTrue("""<a href="/faq">FAQ</a>""" in html, html)
+        assertTrue("""<a href="/faq" class="foot__link">FAQ</a>""" in html, html)
     }
 
+    /**
+     * Issue #143 adds `site-header.js`, loaded in [commonHeadTags] for every page of this layout,
+     * so the total script-tag count on this page changed from 2 (JSON-LD, topic-start.js) to 3
+     * (JSON-LD, site-header.js, topic-start.js). The assertion below changed from
+     * `assertEquals(2, totalScriptTags, ...)` to `assertEquals(3, totalScriptTags, ...)` to match.
+     */
     @Test
     fun `the page loads exactly one external script, and exactly one other script, the JSON-LD one`() {
         val html = render(view())
@@ -295,6 +311,10 @@ class TopicPageHtmlTest {
         assertEquals(1, scriptSrcCount, "expected exactly one topic-start.js script tag: $html")
 
         val totalScriptTags = Regex("<script[ >]").findAll(html).count()
-        assertEquals(2, totalScriptTags, "expected exactly two <script tags in total (JSON-LD and topic-start.js): $html")
+        assertEquals(
+            3,
+            totalScriptTags,
+            "expected exactly three <script tags in total (JSON-LD, site-header.js and topic-start.js): $html",
+        )
     }
 }

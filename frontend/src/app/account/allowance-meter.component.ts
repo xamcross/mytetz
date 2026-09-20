@@ -1,6 +1,6 @@
 import { Component, effect, inject, signal } from '@angular/core';
+import { RouterLink } from '@angular/router';
 import { AccountStore } from '../core/account.store';
-import { ApiService } from '../core/api.service';
 
 /** The statuses that carry a live count. Every other status — `NONE`, `EXPIRED`, or a status this
  * client does not yet know — shows a subscribe link and no count, because there is nothing true
@@ -20,50 +20,67 @@ const METERED_STATUSES: ReadonlySet<string> = new Set([
  *
  * Renders nothing when `view()` is `null`. A signed-out visitor has no account, and no meter is the
  * honest answer — not a zero, and not a dash.
+ *
+ * Every "Subscribe" control here is a link to `/subscribe` (issue #137), and never a checkout
+ * call: the plan screen is the one place a checkout starts. See `SubscribePageComponent.subscribe`
+ * for that call, moved here from this component's own `subscribe` method.
  */
 @Component({
   selector: 'app-allowance-meter',
-  imports: [],
+  imports: [RouterLink],
   template: `
     @if (view(); as account) {
       <div class="allowance-meter">
         @if (metered(account.status)) {
-          <span
-            class="allowance-meter__count"
-            [class.allowance-meter__count--tick]="ticked()"
-            (animationend)="onCountAnimationEnd($event)"
-          >
-            <span aria-hidden="true">{{ account.remaining }} of {{ account.allowance }} left</span>
-            <span aria-hidden="true" class="allowance-meter__period">{{
-              ' ' + periodWords(account.status)
-            }}</span>
-            <span class="mt-sr-only"
-              >{{ account.remaining }} of {{ account.allowance }} left
-              {{ periodWords(account.status) }}</span
+          <!-- Issue #137. The count and the detail text keep their own baseline-aligned group,
+               apart from the Subscribe link below: a coral pill is taller than a line of text, and
+               issue #141's own centre-line rule found that sharing one baseline group with the
+               pill moved the count text off the bar's true centre. This wrapper keeps that group
+               exactly as issue #141 left it, whatever else the row also holds. -->
+          <span class="allowance-meter__text">
+            <span
+              class="allowance-meter__count"
+              [class.allowance-meter__count--tick]="ticked()"
+              (animationend)="onCountAnimationEnd($event)"
             >
+              <span aria-hidden="true"
+                >{{ account.remaining }} of {{ account.allowance }} left</span
+              >
+              <span aria-hidden="true" class="allowance-meter__period">{{
+                ' ' + periodWords(account.status)
+              }}</span>
+              <span class="mt-sr-only"
+                >{{ account.remaining }} of {{ account.allowance }} left
+                {{ periodWords(account.status) }}</span
+              >
+            </span>
+            @if (account.status === 'TRIALING') {
+              @if (trialEndText(account.trialEndsAtEpochMillis); as end) {
+                <span class="allowance-meter__detail">Trial ends {{ end }}.</span>
+              }
+            } @else {
+              @if (resetText(account.resetsAtEpochMillis); as reset) {
+                <span class="allowance-meter__detail">Resets {{ reset }}.</span>
+              }
+            }
           </span>
           @if (account.status === 'TRIALING') {
-            @if (trialEndText(account.trialEndsAtEpochMillis); as end) {
-              <span class="allowance-meter__detail">Trial ends {{ end }}.</span>
-            }
-          } @else {
-            @if (resetText(account.resetsAtEpochMillis); as reset) {
-              <span class="allowance-meter__detail">Resets {{ reset }}.</span>
-            }
+            <!-- A learner in trial had no path to the plan screen from the header at all:
+                 METERED_STATUSES already gives TRIALING a live count, so the plain-else Subscribe
+                 link below never rendered for this status. This link is scoped to the header
+                 alone (--trial, hidden outside :host-context(.bar)) and to a wide enough header
+                 (see the media query below): the account page carries its own primary Subscribe
+                 control instead, in AccountPageComponent's action row. -->
+            <a
+              routerLink="/subscribe"
+              class="mt-pill mt-pill--coral allowance-meter__subscribe allowance-meter__subscribe--trial"
+              >Subscribe</a
+            >
           }
         } @else {
-          @if (subscribeError(); as message) {
-            <span class="allowance-meter__error" role="alert">{{ message }}</span>
-          }
-          <button
-            type="button"
-            class="mt-pill mt-pill--coral allowance-meter__subscribe"
-            [disabled]="subscribing()"
-            [attr.aria-busy]="subscribing() ? 'true' : null"
-            (click)="subscribe()"
+          <a routerLink="/subscribe" class="mt-pill mt-pill--coral allowance-meter__subscribe"
+            >Subscribe</a
           >
-            {{ subscribing() ? 'Opening checkout…' : 'Subscribe' }}
-          </button>
         }
       </div>
     }
@@ -76,10 +93,21 @@ const METERED_STATUSES: ReadonlySet<string> = new Set([
       }
       .allowance-meter {
         display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 8px;
+        font-size: 13px;
+      }
+      /* Issue #137. The count and the detail text, in their own baseline-aligned group — see the
+         template's own comment on why this stands apart from the Subscribe link. Every rule
+         .allowance-meter itself carried for these two children before this issue now lives here
+         instead, unchanged. */
+      .allowance-meter__text {
+        display: flex;
         align-items: baseline;
         flex-wrap: wrap;
         gap: 4px 8px;
-        font-size: 13px;
+        min-width: 0;
       }
       .allowance-meter__count {
         font-weight: 700;
@@ -137,12 +165,25 @@ const METERED_STATUSES: ReadonlySet<string> = new Set([
        * meter on one line, the same way it always was; the account card, outside the bar
        * element, keeps the wrap.
        */
-      :host-context(.bar) .allowance-meter {
+      :host-context(.bar) .allowance-meter,
+      :host-context(.bar) .allowance-meter__text {
         flex-wrap: nowrap;
       }
-      .allowance-meter__error {
-        color: var(--mt-err-ink);
-        font-weight: 700;
+      /*
+       * Issue #137. The header's own Subscribe link for a learner in trial. Hidden by default, so
+       * the account page — which renders this same component outside the header's bar element,
+       * and carries its own primary Subscribe control in its action row — never shows it twice.
+       * The min-width below is the first header width a real Playwright run measured this link
+       * fitting with an 8px gap at every wider width too — see layout.spec.ts's own
+       * TABLET_GAP_WIDTHS block and this issue's own report for the numbers that run measured.
+       */
+      .allowance-meter__subscribe--trial {
+        display: none;
+      }
+      @media (min-width: 768px) {
+        :host-context(.bar) .allowance-meter__subscribe--trial {
+          display: inline-flex;
+        }
       }
       /*
        * Issue #100, extended by a review of issue #133, and finished by issue #142 and issue
@@ -174,42 +215,12 @@ const METERED_STATUSES: ReadonlySet<string> = new Set([
         :host-context(.bar) .allowance-meter__period {
           display: none;
         }
-        /*
-         * Issue #100, round 2. The checkout error can wrap into several lines. Inside the row,
-         * a tall child does not grow the bar: the bar keeps its own fixed height of 64px, and
-         * the child overflows over the bar's other elements instead. A real run measures the
-         * error box from y=-16 to y=89, well outside the bar's own 0-to-64 range.
-         *
-         * These two rules take the error out of the row and put it as a small card below the
-         * bar. The card hangs from this component's own host element, so it moves with the
-         * header when the page scrolls, and it needs no positioned ancestor in another file. A
-         * card with position: fixed was the first attempt. The bar is not sticky, so such a card
-         * stays on the screen, away from the header, after the learner scrolls. The host is about
-         * 38px tall and sits in the middle of the 64px bar, so 16px below the host is below the
-         * bar. The layout test asserts that result, and not this arithmetic.
-         */
-        :host-context(.bar) {
-          position: relative;
-        }
-        :host-context(.bar) .allowance-meter__error {
-          position: absolute;
-          top: calc(100% + 16px);
-          right: 0;
-          z-index: 1;
-          width: max-content;
-          max-width: 260px;
-          padding: 8px 12px;
-          background: var(--mt-err-bg);
-          border: var(--mt-border-w) solid var(--mt-err-border);
-          border-radius: var(--mt-r-row);
-        }
       }
     `,
   ],
 })
 export class AllowanceMeterComponent {
   private readonly account = inject(AccountStore);
-  private readonly api = inject(ApiService);
   readonly view = this.account.view;
 
   /** Animation I. True for the one render after `remaining` changes from one real value to
@@ -239,37 +250,6 @@ export class AllowanceMeterComponent {
    * so an unrelated animationend bubbling up from a child never clears this early. */
   onCountAnimationEnd(event: AnimationEvent): void {
     if (event.animationName === 'meter-tick') this.ticked.set(false);
-  }
-
-  /** True while a checkout request is in flight. The button stays disabled during this time.
-   * This stops a second click from sending a second request before the redirect happens. See
-   * `WallPanelComponent.subscribing`, which the same pattern comes from. */
-  readonly subscribing = signal(false);
-  /** The message for a failed checkout request, or `null` when there is no failure. */
-  readonly subscribeError = signal<string | null>(null);
-
-  /** Asks the backend for a checkout URL, then follows it. See `WallPanelComponent.subscribe`,
-   * which this method copies: the meter and the wall panel show the same button for the same
-   * reason, so both start checkout the same way. */
-  async subscribe(): Promise<void> {
-    if (this.subscribing()) return;
-    this.subscribing.set(true);
-    this.subscribeError.set(null);
-    try {
-      const { url } = await this.api.checkout();
-      this.redirect(url);
-      // This method leaves `subscribing` set to true after success. The browser is about to
-      // leave this page, so there is nothing left to re-enable.
-    } catch {
-      this.subscribeError.set('Could not start checkout. Check your connection and try again.');
-      this.subscribing.set(false);
-    }
-  }
-
-  /** Sends the browser to [url]. This method stays separate so a test can replace it. jsdom does
-   * not implement real navigation, so a test cannot check `window.location` directly. */
-  redirect(url: string): void {
-    window.location.href = url;
   }
 
   /** True for a status that carries a live count. See [METERED_STATUSES]. */

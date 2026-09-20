@@ -145,7 +145,13 @@ class GuidePagesTest {
         }
     }
 
-    /** Issue #47's own step 2: each public page links to the method page. */
+    /**
+     * Issue #47's own step 2: each public page links to the method page.
+     *
+     * Issue #144 gives this link the class `foot__link`, the same class `AppShellComponent`'s
+     * own footer link carries, so one `guides.css` rule styles both. The assertion below changed
+     * from `<a href="/how-it-works">How it works</a>` (no class) to the string below, to match.
+     */
     @Test
     fun `every guide page's footer links to the how-it-works page`() = testApplication {
         application { routing { spaRoutes() } }
@@ -154,13 +160,19 @@ class GuidePagesTest {
         for (path in GuidePages.paths) {
             val body = client.get(path).bodyAsText()
             assertTrue(
-                """<a href="/how-it-works">How it works</a>""" in body,
+                """<a class="foot__link" href="/how-it-works">How it works</a>""" in body,
                 "$path's footer carries no link to /how-it-works",
             )
         }
     }
 
-    /** Issue #121's own step 8: each public page links to the FAQ page too. */
+    /**
+     * Issue #121's own step 8: each public page links to the FAQ page too.
+     *
+     * Issue #144 gives this link the class `foot__link`, the same class `AppShellComponent`'s own
+     * footer link carries. The assertion below changed from `<a href="/faq">FAQ</a>` (no class)
+     * to the string below, to match.
+     */
     @Test
     fun `every guide page's footer links to the FAQ page`() = testApplication {
         application { routing { spaRoutes() } }
@@ -169,7 +181,7 @@ class GuidePagesTest {
         for (path in GuidePages.paths) {
             val body = client.get(path).bodyAsText()
             assertTrue(
-                """<a href="/faq">FAQ</a>""" in body,
+                """<a class="foot__link" href="/faq">FAQ</a>""" in body,
                 "$path's footer carries no link to /faq",
             )
         }

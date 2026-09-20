@@ -163,6 +163,20 @@ describe('ReaderPageComponent', () => {
     expect(harness.routeNativeElement?.querySelectorAll('.trail__item').length).toBe(2);
   });
 
+  // Issue #145. The page at `/` is the "dashboard" in every text a learner reads, and never
+  // "topics". A session that fails to load at all takes the full-page banner, with this link.
+  it('the full-page load failure links back to the dashboard', async () => {
+    await harness.navigateByUrl(`/learn/${view.sessionId}`, ReaderPageComponent);
+    http
+      .expectOne(`/api/sessions/${view.sessionId}`)
+      .flush({ code: 'NOT_FOUND', message: 'no such session' }, { status: 404, statusText: '' });
+    await harness.fixture.whenStable();
+    harness.detectChanges();
+
+    const back = harness.routeNativeElement?.querySelector('.banner__back');
+    expect(back?.textContent).toContain('Back to the dashboard');
+  });
+
   // Finding F11 of the design review. The topic name used to render three times at once: the
   // card's own <h1>, the breadcrumb's root crumb, and the trail rail's root row. The card now
   // carries the <h1> at step 1 only, and this file supplies a hidden one of its own past step 1 —
