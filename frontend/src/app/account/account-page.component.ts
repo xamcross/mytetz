@@ -12,26 +12,42 @@ const POLL_INTERVAL_MILLIS = 2000;
 const POLL_TIMEOUT_MILLIS = 30000;
 
 /**
- * Finding F15. The row once printed the raw enum value, for example `PAST_DUE`. A learner reads
- * a plain sentence now. Each sentence states a fact about the account and never a promise or a
- * price — a subscription's terms belong to Freemius, and not to this page.
+ * What the "Status" row shows for one backend status: a short [label], and an optional
+ * [secondLine] below it. [tone] picks the colour of [secondLine] — "error" for a payment
+ * problem, "muted" for a plain fact. A status with no second line carries neither field.
+ */
+interface StatusPresentation {
+  readonly label: string;
+  readonly secondLine?: string;
+  readonly tone?: 'error' | 'muted';
+}
+
+/**
+ * Issue #138. The row once printed a sentence, for example "Your payment is overdue." A status
+ * is a short label, and not a sentence: the owner asks for "TRIAL" or "PREMIUM". The owner named
+ * these two labels on 2026-09-20. The three other rows are a proposal, not yet confirmed by the
+ * owner.
  *
  * The five keys mirror the backend's own `SubscriptionStatus` enum
- * (`backend/billing/src/main/kotlin/com/mytetz/billing/Subscription.kt`). [statusSentence] falls
- * back to a neutral sentence for any other value, so a status this client does not yet know never
- * reaches the learner as a raw code.
+ * (`backend/billing/src/main/kotlin/com/mytetz/billing/Subscription.kt`).
+ * [presentationForStatus] falls back to `FREE_PRESENTATION` for any other value, so a status
+ * this client does not yet know never reaches the learner as a raw code.
  */
-const STATUS_SENTENCES: Readonly<Record<string, string>> = {
-  TRIALING: 'Your trial is active.',
-  ACTIVE: 'Your subscription is active.',
-  PAST_DUE: 'Your payment is overdue.',
-  CANCELLED: 'Your subscription is cancelled.',
-  EXPIRED: 'Your subscription has expired.',
+const STATUS_PRESENTATIONS: Readonly<Record<string, StatusPresentation>> = {
+  TRIALING: { label: 'TRIAL' },
+  ACTIVE: { label: 'PREMIUM' },
+  PAST_DUE: { label: 'PREMIUM', secondLine: 'Payment overdue.', tone: 'error' },
+  CANCELLED: { label: 'PREMIUM', secondLine: 'Cancelled.', tone: 'muted' },
+  EXPIRED: { label: 'FREE' },
 };
 
-/** The sentence for [status]. See [STATUS_SENTENCES]. */
-function sentenceForStatus(status: string): string {
-  return STATUS_SENTENCES[status] ?? 'We do not recognize this account status.';
+/** The fallback for `EXPIRED`, and for a status this client does not yet know. Issue #137 names
+ * this same label "Free" for its own plan screen. */
+const FREE_PRESENTATION: StatusPresentation = { label: 'FREE' };
+
+/** The presentation for [status]. See [STATUS_PRESENTATIONS]. */
+function presentationForStatus(status: string): StatusPresentation {
+  return STATUS_PRESENTATIONS[status] ?? FREE_PRESENTATION;
 }
 
 /**
@@ -105,10 +121,22 @@ function sentenceForStatus(status: string): string {
             <span class="account-page__label">Email</span>
             <span class="account-page__value">{{ account.email }}</span>
           </div>
-          <div class="account-page__row">
-            <span class="account-page__label">Status</span>
-            <span class="account-page__value">{{ statusSentence(account.status) }}</span>
-          </div>
+          @if (statusPresentation(account.status); as status) {
+            <div class="account-page__row account-page__row--status">
+              <span class="account-page__label">Status</span>
+              <span class="mt-chip mt-chip--teal account-page__status-badge">{{
+                status.label
+              }}</span>
+            </div>
+            @if (status.secondLine) {
+              <p
+                class="account-page__status-detail"
+                [class.account-page__status-detail--error]="status.tone === 'error'"
+              >
+                {{ status.secondLine }}
+              </p>
+            }
+          }
           @if (periodEndText(account.currentPeriodEndsAtEpochMillis); as periodEnd) {
             <div class="account-page__row">
               <span class="account-page__label">Current period ends</span>
@@ -267,6 +295,23 @@ function sentenceForStatus(status: string): string {
       }
       .account-page__value {
         font-weight: 600;
+      }
+      /* Issue #138. The badge sits taller than the plain "Status" text next to it, so this row
+         centres both on the cross axis, instead of the plain top alignment the other rows keep. */
+      .account-page__row--status {
+        align-items: center;
+      }
+      /* Issue #138. The second line under a status badge, for example "Payment overdue." The
+         muted colour is the default; the --error modifier switches to the page's own
+         error-text colour, for a status that needs the learner's attention. */
+      .account-page__status-detail {
+        margin: 0;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--mt-muted);
+      }
+      .account-page__status-detail--error {
+        color: var(--mt-err-ink);
       }
       .account-page__error {
         margin: 0;
@@ -451,9 +496,10 @@ export class AccountPageComponent implements OnInit {
     return epochMillis == null ? null : formatDate(epochMillis);
   }
 
-  /** The sentence for a status, for the template. See [sentenceForStatus]. */
-  statusSentence(status: string): string {
-    return sentenceForStatus(status);
+  /** The label and the optional second line for a status, for the template. See
+   * [presentationForStatus]. */
+  statusPresentation(status: string): StatusPresentation {
+    return presentationForStatus(status);
   }
 
   /**
