@@ -194,10 +194,20 @@ import { TopicSummary } from '../core/models';
         font-size: 34px;
         line-height: 1.15;
       }
-      .catalog__intro,
+      /* Issue #146. No max-width here: the block then stretches to the width of
+         .catalog__inner, the same width the tile grid below fills. */
+      .catalog__intro {
+        margin: 0;
+        font-size: 16px;
+        line-height: 1.6;
+        font-weight: 500;
+        color: var(--mt-muted);
+        text-wrap: pretty;
+      }
+      /* Issue #146. One wide column with no max-width, as .catalog__intro: the owner selected
+         this form on 2026-09-20, and not text columns below the card columns. */
       .catalog__more {
         margin: 0;
-        max-width: 62ch;
         font-size: 16px;
         line-height: 1.6;
         font-weight: 500;
@@ -228,8 +238,6 @@ import { TopicSummary } from '../core/models';
       }
       .catalog__search {
         width: 100%;
-        /* A search field wider than this reads as a text area. */
-        max-width: 520px;
         padding: 14px 18px;
         /* --mt-edge, not --mt-border: this is a control edge, and SC 1.4.11 needs 3:1. */
         border: var(--mt-border-w) solid var(--mt-edge);
@@ -401,9 +409,6 @@ import { TopicSummary } from '../core/models';
         }
         .catalog__title {
           font-size: 26px;
-        }
-        .catalog__search {
-          max-width: none;
         }
         /* Twelve wrapped pills push the first tile off a 390px screen. The row scrolls sideways
            here instead, which costs a gesture but keeps a topic in view. */
