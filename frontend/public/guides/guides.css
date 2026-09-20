@@ -211,6 +211,27 @@ a:hover {
 .bar__count:empty {
   display: none;
 }
+/* Issue #143's own review: the period word ("today", "in your trial") follows
+   allowance-meter.component.ts's own rule — hidden below 768px, because the full sentence ran
+   into the account link at a phone width, the same overlap issue #133 already fixed once. The
+   digits stay visible at every width. */
+@media (max-width: 767px) {
+  .bar__count-period {
+    display: none;
+  }
+}
+/* The one true sentence a screen reader announces, at every width — the same role
+   allowance-meter.component.ts's own .mt-sr-only span plays. guides.css carries its own copy,
+   because it is a plain stylesheet with no import from styles.css (see this file's own header
+   comment). */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
 @media (max-width: 767px) {
   .bar {
     padding: 0 20px;
