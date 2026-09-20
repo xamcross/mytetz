@@ -83,6 +83,12 @@ fun Application.module(components: Components = Components()) {
     install(AutoHeadResponse)
     installErrorMapping()
     installNoIndex()
+    // Refuses a request under `/api/` with no valid `X-Mytetz-Edge` header, once an operator sets
+    // `MYTETZ_EDGE_SECRET`. See `EdgeSecretPlugin.kt`'s own KDoc for the design. Issue #68 states
+    // the reason: a caller that reaches `mytetz.fly.dev` directly today bypasses the Cloudflare
+    // rate limiting rule and can choose its own rate-limit key. This call sits here, ahead of
+    // `routing` below, so a refused request never reaches a route handler.
+    installEdgeSecret()
 
     // Which source the rate limiters key on, said once, at startup. It is a security setting and
     // not a tuning one: a name that no request carries puts every visitor in one bucket. Nothing
