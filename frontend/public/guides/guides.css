@@ -90,9 +90,29 @@
   --mt-r-row: 16px;
   --mt-border-w: 2px;
   --mt-lift: 0 4px 0 var(--mt-border);
+  /* Issue #173, review: the three coral shadows of `.mt-pill--coral`, for the header's own
+     Subscribe pill. Not present before this issue, because no pill lived on this stylesheet
+     until now. Same values as frontend/src/styles.css — see this file's own header comment. */
+  --mt-lift-coral: 0 4px 0 var(--mt-coral-deep);
+  --mt-lift-hover-coral: 0 5px 0 var(--mt-coral-deep);
+  --mt-press-coral: 0 2px 0 var(--mt-coral-deep);
 
   --mt-display: 'Fredoka', 'Figtree', system-ui, sans-serif;
   --mt-body: 'Figtree', system-ui, sans-serif;
+
+  /* Issue #173, review: the one motion pair the Subscribe pill needs, the same values as
+     frontend/src/styles.css's own --mt-dur-press and --mt-ease-press. */
+  --mt-dur-press: 90ms;
+  --mt-ease-press: cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* Issue #173, review: the same reduced-motion rule styles.css states for --mt-dur-press — a
+   press or a hover still changes the pill's shadow, but the change lands in 1ms, with no
+   perceptible travel. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --mt-dur-press: 1ms;
+  }
 }
 
 /* ── Reset ─────────────────────────────────────────────────────────────────── */
@@ -204,11 +224,15 @@ a:hover {
 }
 /* The allowance count site-header.js fills in next to the account link, in the same words
    allowance-meter.component.ts renders. This span stays in the row even while it is empty — a
-   visitor with no account, or before the script's own answer arrives — because
-   AppShellComponent's own empty meter host does the same: it is an inline-flex element with no
-   content, and it still takes up one gap of .bar__right on each side. Hiding this span with
-   `display: none` would close that gap and move the account link and the dot out of line with
-   the application header (issue #143's own review). */
+   visitor with no account, before the script's own answer arrives, or a signed-in learner with a
+   live count still to come — because AppShellComponent's own empty meter host does the same: it
+   is an inline-flex element with no content, and it still takes up one gap of .bar__right on each
+   side. Hiding this span with `display: none` in one of those cases would close that gap and move
+   the account link and the dot out of line with the application header (issue #143's own review).
+   Issue #173: once the account answer names a status with no live count at all (NONE, EXPIRED, or
+   an unknown status), no reflow risk is left, and `site-header.js` sets `hidden` on this span —
+   `allowance-meter.component.ts`'s own template renders no count element at all for that case, so
+   this rule matches it, and not the AppShellComponent shape this comment first described. */
 .bar__count {
   font-size: 13px;
   font-weight: 700;
@@ -217,11 +241,111 @@ a:hover {
 }
 /* Issue #143's own review: the period word ("today", "in your trial") follows
    allowance-meter.component.ts's own rule — hidden below 768px, because the full sentence ran
-   into the account link at a phone width, the same overlap issue #133 already fixed once. The
-   digits stay visible at every width. */
+   into the account link at a phone width, the same overlap issue #133 already fixed once. */
 @media (max-width: 767px) {
   .bar__count-period {
     display: none;
+  }
+}
+/* Issue #173: the short form below 768px, the same rule allowance-meter.component.ts's own
+   `.allowance-meter__count-short` follows. "N of M tokens left" is too wide for a 360px phone
+   with the word "tokens" in it (issue #139's own finding); "N / M tokens" carries the same two
+   numbers and the same unit in less room. Hidden by default, so the full form shows at 768px
+   and above. */
+.bar__count-short {
+  display: none;
+}
+@media (max-width: 767px) {
+  .bar__count-full {
+    display: none;
+  }
+  .bar__count-short {
+    display: inline;
+  }
+}
+/* Issue #173, review: the header's own "Subscribe" link, the same metrics and the same four
+   states as `.mt-pill` plus `.mt-pill--coral` in `frontend/src/styles.css` — this plain
+   stylesheet carries its own copy of both, because it imports nothing from that file (see this
+   file's own header comment). A real run measured a 37px pill here against the application
+   header's own 38px: the missing `line-height: 1` left the label's own line box a few pixels
+   taller than the padding this rule states, so the padding and the border together no longer
+   added up to the same total height. The fill is `--mt-coral-press`, and not `--mt-coral`: white
+   text on `--mt-coral` measures 3.01:1 and fails the 4.5:1 contrast a 14px label needs.
+   `site-header.js` shows this link with `hidden = false` for a signed-in learner whose account
+   carries no live count, and, at 768px and above, for a learner in trial too — see that file's
+   own header comment for the full rule per status. */
+.bar__subscribe {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 16px;
+  border: var(--mt-border-w) solid var(--mt-coral-press);
+  border-radius: 999px;
+  background: var(--mt-coral-press);
+  color: var(--mt-surface);
+  font-family: var(--mt-body);
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 1;
+  text-decoration: none;
+  white-space: nowrap;
+  box-shadow: var(--mt-lift-coral);
+  transition:
+    transform var(--mt-dur-press) var(--mt-ease-press),
+    box-shadow var(--mt-dur-press) var(--mt-ease-press);
+}
+.bar__subscribe:hover {
+  color: var(--mt-surface);
+}
+/* `(hover: hover)`, and not a plain `:hover`: the same reason `.mt-pill`'s own rule states — a
+   touch screen keeps a `:hover` match after a tap, until the learner taps elsewhere, so a tapped
+   pill would stay lifted with no pointer on it. */
+@media (hover: hover) {
+  .bar__subscribe:hover {
+    transform: translateY(-1px);
+    box-shadow: var(--mt-lift-hover-coral);
+  }
+}
+.bar__subscribe:active {
+  transform: translateY(2px);
+  box-shadow: var(--mt-press-coral);
+}
+/* The ring is 1.01:1 against this fill (design review, section 3.3, carried over from
+   `.mt-pill--coral`'s own comment), so the pill also keeps its lift while it has the keyboard
+   focus. The two shadows sit in one list: a plain `:focus-visible` rule would replace the lift
+   instead of adding a ring next to it. */
+.bar__subscribe:focus-visible {
+  box-shadow:
+    var(--mt-lift-coral),
+    0 0 0 2px var(--mt-surface);
+}
+/* This rule must stay: the link's own `display: inline-flex` above is an author style, and an
+   author style wins over the browser's own `[hidden] { display: none }` default regardless of
+   which one is more specific — origin decides first, and specificity only breaks a tie inside one
+   origin. Without this rule the link would show through the `hidden` attribute the server ships
+   it with, before `site-header.js` ever runs. */
+.bar__subscribe[hidden] {
+  display: none;
+}
+/* Issue #173: the trial variant of the Subscribe link sits next to the count, and the row has no
+   room for both below 768px — the same width `allowance-meter.component.ts`'s own
+   `.allowance-meter__subscribe--trial` rule uses. The status-only variant (no live count: NONE,
+   EXPIRED, or an unknown status) carries no `--trial` class, and shows at every width instead. */
+.bar__subscribe--trial {
+  display: none;
+}
+@media (min-width: 768px) {
+  .bar__subscribe--trial {
+    display: inline-flex;
+    /* Issue #173, review: inside `.allowance-meter`, the application keeps the count and the
+       pill 8px apart, through that element's own `gap: 8px`. This link is a sibling of the count
+       inside `.bar__right` instead, whose own gap is 16px — the same gap every other pair in the
+       row correctly keeps. A real run measured the count and the account link 8px to the left of
+       the application header's own values at this width, for a learner in trial only: the extra
+       8px this row's own gap adds here, right before this pill, pushed the whole right-aligned
+       row 8px further left. A margin here, and not a smaller gap on `.bar__right` itself, keeps
+       every other pair in the row at its own correct 16px. */
+    margin-left: -8px;
   }
 }
 /* The one true sentence a screen reader announces, at every width — the same role
@@ -532,10 +656,6 @@ tbody tr:last-child td {
   box-shadow: 0 5px 0 var(--mt-border);
   padding: 24px;
   margin: 40px 0 0;
-}
-.start h2 {
-  margin: 0 0 10px;
-  font-size: 24px;
 }
 .start__list {
   list-style: none;

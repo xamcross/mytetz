@@ -6,6 +6,7 @@ import com.mytetz.graph.MAX_PUBLISHED_EXPLANATIONS
 import com.mytetz.graph.MongoTestSupport
 import com.mytetz.graph.Verb
 import kotlinx.coroutines.test.runTest
+import java.io.File
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -263,5 +264,106 @@ class PublishTopExplanationsTest {
     @Test
     fun `parseKeysFileText reads one key per line and drops a blank line`() {
         assertEquals(listOf("a", "b"), parseKeysFileText("a\n\n b \n"))
+    }
+
+    // ------------------------------------------------------------------ the real process (issue #175)
+
+    /**
+     * Every test below runs `main` as a real, separate `java` process, the level issue #175's bug
+     * lived at. A non-daemon thread of the driver does not stop an in-process test: the test's own
+     * JVM keeps running regardless. That same thread does stop a real process from ending.
+     */
+    private fun runMainProcess(
+        args: List<String> = emptyList(),
+        env: Map<String, String> = emptyMap(),
+    ): ScriptProcessResult = runScriptProcess(
+        mainClass = "com.mytetz.graph.scripts.PublishTopExplanationsKt",
+        args = args,
+        env = mapOf(
+            "MONGODB_URI" to MongoTestSupport.connectionString,
+            "MONGODB_DATABASE" to "test_publish_top_explanations_process",
+        ) + env,
+    )
+
+    @Test
+    fun `main ends the process with exit code 0 on success`() {
+        val result = runMainProcess()
+
+        assertEquals(0, result.exitCode)
+    }
+
+    @Test
+    fun `main ends the process with a non-zero exit code and an Error line on a bad --out path`() {
+        val badFolder = File(System.getProperty("java.io.tmpdir"), "no-such-folder-issue175").absolutePath
+        val outFile = "$badFolder/candidates.md"
+
+        val result = runMainProcess(args = listOf("--out", outFile))
+
+        assertFalse(result.exitCode == 0, "a bad --out path must not exit 0")
+        assertTrue("Error:" in result.output)
+        assertTrue(badFolder in result.output, "the refusal must name the missing folder")
+    }
+
+    @Test
+    fun `main refuses a bad --out path before it reads the database`() {
+        val badFolder = File(System.getProperty("java.io.tmpdir"), "no-such-folder-issue175-b").absolutePath
+        val outFile = "$badFolder/candidates.md"
+
+        // A database read here would time out on the unreachable host, and fail this test.
+        val result = runMainProcess(
+            args = listOf("--out", outFile),
+            env = mapOf(
+                "MONGODB_URI" to "mongodb://unreachable-host-issue175.invalid:27017",
+                "MYTETZ_MONGO_SERVER_SELECTION_TIMEOUT_MILLIS" to "200",
+            ),
+        )
+
+        assertFalse(result.exitCode == 0)
+        assertTrue("the folder of --out does not exist" in result.output)
+    }
+
+    @Test
+    fun `main never prints the host name of an unreachable database`() {
+        val unreachableHost = "unreachable-host-issue175.invalid"
+
+        val result = runMainProcess(
+            env = mapOf(
+                "MONGODB_URI" to "mongodb://$unreachableHost:27017",
+                "MYTETZ_MONGO_SERVER_SELECTION_TIMEOUT_MILLIS" to "200",
+            ),
+        )
+
+        assertFalse(result.exitCode == 0)
+        assertTrue("Error:" in result.output)
+        assertFalse(unreachableHost in result.output, "the host name must never be printed")
+        assertFalse("MONGODB_URI" in result.output, "the environment variable's name must never be printed")
+    }
+
+    @Test
+    fun `main gives one clear line, and ends the process, when MONGODB_URI is not set`() {
+        val result = runScriptProcess(
+            mainClass = "com.mytetz.graph.scripts.PublishTopExplanationsKt",
+            removeEnv = setOf("MONGODB_URI"),
+        )
+
+        assertFalse(result.exitCode == 0)
+        assertTrue("Error: MONGODB_URI is not set" in result.output)
+    }
+
+    /**
+     * See `ScriptSupportTest.kt`'s own KDoc on this same malformed `MONGODB_URI`. It carries a
+     * distinct marker in its user part, its host part and one query option.
+     */
+    @Test
+    fun `main never prints a part of a malformed MONGODB_URI`() {
+        val malformedUri = "mongodb://markeruser:markerpass@[markerhost/markerdb?markeropt=markervalue"
+
+        val result = runMainProcess(env = mapOf("MONGODB_URI" to malformedUri))
+
+        assertFalse(result.exitCode == 0)
+        assertTrue("Error:" in result.output)
+        for (marker in listOf("markeruser", "markerpass", "markerhost", "markeropt", "markervalue")) {
+            assertFalse(marker in result.output, "'$marker' must never be printed")
+        }
     }
 }

@@ -39,7 +39,6 @@ function topicPageFixture(slug: string, title: string): string {
   <body>
     <h1>${title}</h1>
     <section class="start">
-      <h2>Start with this topic</h2>
       <button type="button" id="topic-start-button" class="start__cta" data-topic-slug="${slug}" disabled>Start with this topic</button>
       <p id="topic-start-error" class="start__error" role="alert"></p>
       <p id="topic-start-script-hint" class="start__script-hint" role="status">This button needs a script that did not load. Load the page again.</p>

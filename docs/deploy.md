@@ -933,6 +933,9 @@ MONGODB_URI="$(grep '^MONGODB_URI=' .env | cut -d= -f2- | tr -d '\r\n')" \
 Each candidate shows its full key, its short key, its topic, its request count, its public path,
 and its full body text.
 
+On Windows, give `--out` a path in the form `C:/Users/…`. The script refuses the form `/c/Users/…`
+with a clean error, before it reads the database.
+
 ### Step 2: read each text
 
 Open each candidate's public path on the live site, or read the body text the list already shows.
@@ -1026,6 +1029,8 @@ MONGODB_URI="$(grep '^MONGODB_URI=' .env | cut -d= -f2- | tr -d '[:cntrl:]')" ./
 
 `--date` takes a plain calendar date, `YYYY-MM-DD`, read as UTC.
 
+On Windows, give `--slugs-file` a path in the form `C:/Users/…`.
+
 This step is all or nothing. If one slug is unknown, if one slug names a topic that is not
 published, or if the date fails a check, the command writes nothing. It names every bad value and
 stops. The command refuses a date in the future. It refuses a date before the topic's own seed text
@@ -1069,6 +1074,8 @@ behind each correction, with a file and a line for each statement, is in that sa
 
 The command reads `MONGODB_URI` from the environment only. It never reads a `.env` file itself; the
 commands below read the owner's own `.env` file and pass the value in.
+
+On Windows, give `--file` a path in the form `C:/Users/…`.
 
 ### Step 1: the dry run
 
