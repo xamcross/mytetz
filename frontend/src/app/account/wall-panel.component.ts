@@ -10,7 +10,9 @@ export type WallCode = 'TRIAL_EXHAUSTED' | 'SUBSCRIPTION_REQUIRED';
  * worked and ran out. `SUBSCRIPTION_REQUIRED` addresses a learner whose access has lapsed or never
  * started, so it must not name a trial that learner may never have had. */
 const HEADLINES: Readonly<Record<WallCode, string>> = {
-  TRIAL_EXHAUSTED: 'Your trial ran out of explanations.',
+  // Issue #139. The owner named the allowance unit a token: "36 of 40 left in your trial" named
+  // no unit. This headline follows the same word.
+  TRIAL_EXHAUSTED: 'Your trial ran out of tokens.',
   SUBSCRIPTION_REQUIRED: 'You need a subscription to keep reading.',
 };
 

@@ -87,8 +87,12 @@ internal fun faqEntries(billingConfig: BillingConfig): List<FaqEntry> = listOf(
     FaqEntry(
         id = "is-mytetz-free",
         question = "Is mytetz free? What does the trial include?",
+        // Issue #139. The owner named the allowance unit a token, so the count reads "tokens"
+        // here too, and not "explanations" — the header and the account page already changed.
+        // The one joined sentence keeps "explanation" for what a token actually buys.
         answer = "A new reader gets a free trial with no credit card: " +
-            "${billingConfig.trialGenerations} explanations over ${billingConfig.trialDays} days.",
+            "${billingConfig.trialGenerations} tokens over ${billingConfig.trialDays} days. " +
+            "One token pays for one new explanation or one quiz.",
     ),
     FaqEntry(
         id = "how-much-does-mytetz-cost",
@@ -104,8 +108,10 @@ internal fun faqEntries(billingConfig: BillingConfig): List<FaqEntry> = listOf(
     FaqEntry(
         id = "how-many-explanations-does-a-subscriber-get",
         question = "How many explanations does a subscriber get?",
-        answer = "A subscriber gets ${billingConfig.subscriberDailyExplains} explanations each " +
-            "day. The count resets every day.",
+        // Issue #139. Same change as the trial answer above: the count reads "tokens", and the
+        // one joined sentence keeps "explanation" for what a token buys.
+        answer = "A subscriber gets ${billingConfig.subscriberDailyExplains} tokens each day. " +
+            "The count resets every day. One token pays for one new explanation or one quiz.",
     ),
     FaqEntry(
         id = "how-does-a-learner-cancel",
