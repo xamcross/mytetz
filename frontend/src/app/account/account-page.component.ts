@@ -12,26 +12,43 @@ const POLL_INTERVAL_MILLIS = 2000;
 const POLL_TIMEOUT_MILLIS = 30000;
 
 /**
- * Finding F15. The row once printed the raw enum value, for example `PAST_DUE`. A learner reads
- * a plain sentence now. Each sentence states a fact about the account and never a promise or a
- * price — a subscription's terms belong to Freemius, and not to this page.
+ * What the "Status" row shows for one backend status: a short [label], and an optional
+ * [secondLine] below it. [tone] picks the colour of [secondLine] — "error" for a payment
+ * problem, "muted" for a plain fact. A status with no second line carries neither field.
+ */
+interface StatusPresentation {
+  readonly label: string;
+  readonly secondLine?: string;
+  readonly tone?: 'error' | 'muted';
+}
+
+/**
+ * Issue #138. The row once printed a sentence, for example "Your payment is overdue." A status
+ * is a short label, and not a sentence: the owner asks for "TRIAL" or "PREMIUM". The owner named
+ * these two labels on 2026-09-20, and "FREE" for an account with no paid access. `CANCELLED` and
+ * `PAST_DUE` keep "PREMIUM": `Entitlement.resolve` gives them the subscriber allowance until the
+ * period end or the grace end, so "FREE" would contradict the count that the page shows.
  *
  * The five keys mirror the backend's own `SubscriptionStatus` enum
- * (`backend/billing/src/main/kotlin/com/mytetz/billing/Subscription.kt`). [statusSentence] falls
- * back to a neutral sentence for any other value, so a status this client does not yet know never
- * reaches the learner as a raw code.
+ * (`backend/billing/src/main/kotlin/com/mytetz/billing/Subscription.kt`).
+ * [presentationForStatus] falls back to `FREE_PRESENTATION` for any other value, so a status
+ * this client does not yet know never reaches the learner as a raw code.
  */
-const STATUS_SENTENCES: Readonly<Record<string, string>> = {
-  TRIALING: 'Your trial is active.',
-  ACTIVE: 'Your subscription is active.',
-  PAST_DUE: 'Your payment is overdue.',
-  CANCELLED: 'Your subscription is cancelled.',
-  EXPIRED: 'Your subscription has expired.',
+const STATUS_PRESENTATIONS: Readonly<Record<string, StatusPresentation>> = {
+  TRIALING: { label: 'TRIAL' },
+  ACTIVE: { label: 'PREMIUM' },
+  PAST_DUE: { label: 'PREMIUM', secondLine: 'Payment overdue.', tone: 'error' },
+  CANCELLED: { label: 'PREMIUM', secondLine: 'Cancelled.', tone: 'muted' },
+  EXPIRED: { label: 'FREE' },
 };
 
-/** The sentence for [status]. See [STATUS_SENTENCES]. */
-function sentenceForStatus(status: string): string {
-  return STATUS_SENTENCES[status] ?? 'We do not recognize this account status.';
+/** The fallback for `EXPIRED`, and for a status this client does not yet know. Issue #137 names
+ * this same label "Free" for its own plan screen. */
+const FREE_PRESENTATION: StatusPresentation = { label: 'FREE' };
+
+/** The presentation for [status]. See [STATUS_PRESENTATIONS]. */
+function presentationForStatus(status: string): StatusPresentation {
+  return STATUS_PRESENTATIONS[status] ?? FREE_PRESENTATION;
 }
 
 /**
@@ -105,10 +122,22 @@ function sentenceForStatus(status: string): string {
             <span class="account-page__label">Email</span>
             <span class="account-page__value">{{ account.email }}</span>
           </div>
-          <div class="account-page__row">
-            <span class="account-page__label">Status</span>
-            <span class="account-page__value">{{ statusSentence(account.status) }}</span>
-          </div>
+          @if (statusPresentation(account.status); as status) {
+            <div class="account-page__row account-page__row--status">
+              <span class="account-page__label">Status</span>
+              <span class="mt-chip mt-chip--teal account-page__status-badge">{{
+                status.label
+              }}</span>
+            </div>
+            @if (status.secondLine) {
+              <p
+                class="account-page__status-detail"
+                [class.account-page__status-detail--error]="status.tone === 'error'"
+              >
+                {{ status.secondLine }}
+              </p>
+            }
+          }
           @if (periodEndText(account.currentPeriodEndsAtEpochMillis); as periodEnd) {
             <div class="account-page__row">
               <span class="account-page__label">Current period ends</span>
@@ -133,10 +162,17 @@ function sentenceForStatus(status: string): string {
             <p class="account-page__error" role="alert">{{ message }}</p>
           }
 
-          <!-- Finding F15. The primary row holds the two controls a learner reaches for most
-               often. "Terms" is a plain link, and not a pill: it is a wayfinding link, not an
-               action on this account. -->
+          <!-- Finding F15. The primary row holds the controls a learner reaches for most often.
+               "Terms" is a plain link, and not a pill: it is a wayfinding link, not an action on
+               this account. Issue #137: "Subscribe" opens the plan screen, and it never shows
+               together with "Manage subscription" — one control names a way to pay, and the
+               other names a subscription that already exists. -->
           <div class="account-page__actions">
+            @if (subscribeVisible()) {
+              <a class="mt-pill mt-pill--coral" data-action="subscribe" routerLink="/subscribe"
+                >Subscribe</a
+              >
+            }
             @if (manageVisible()) {
               <button
                 type="button"
@@ -161,10 +197,11 @@ function sentenceForStatus(status: string): string {
           </div>
 
           <!-- Finding F15. A destructive control once stood beside a navigation link at the same
-               weight. It now sits below a divider, in its own block, under its own heading. -->
+               weight. It now sits below a divider, in its own block. Issue #140 removes the
+               block's own heading: the button below already names the action, and a heading
+               above it only repeats that name. -->
           <hr class="account-page__divider" />
           <div class="account-page__danger">
-            <h2 class="account-page__danger-heading">Close your account</h2>
             @if (!confirmingDelete()) {
               <button
                 type="button"
@@ -180,7 +217,7 @@ function sentenceForStatus(status: string): string {
               <div class="mt-card mt-card--dashed account-page__confirm" role="alertdialog">
                 <p class="account-page__confirm-text">
                   This permanently deletes your account, every reading session and the allowance
-                  meter. It does not delete any explanation — those stay in the catalogue for other
+                  meter. It does not delete any explanation — those stay on the site for other
                   learners. This cannot be undone.
                 </p>
                 <div class="account-page__actions">
@@ -267,6 +304,23 @@ function sentenceForStatus(status: string): string {
       .account-page__value {
         font-weight: 600;
       }
+      /* Issue #138. The badge sits taller than the plain "Status" text next to it, so this row
+         centres both on the cross axis, instead of the plain top alignment the other rows keep. */
+      .account-page__row--status {
+        align-items: center;
+      }
+      /* Issue #138. The second line under a status badge, for example "Payment overdue." The
+         muted colour is the default; the --error modifier switches to the page's own
+         error-text colour, for a status that needs the learner's attention. */
+      .account-page__status-detail {
+        margin: 0;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--mt-muted);
+      }
+      .account-page__status-detail--error {
+        color: var(--mt-err-ink);
+      }
       .account-page__error {
         margin: 0;
         font-size: 13px;
@@ -290,7 +344,7 @@ function sentenceForStatus(status: string): string {
         font-size: 14px;
         font-weight: 600;
       }
-      /* Finding F15. The divider above "Close your account" — the same rule used between the
+      /* Finding F15. The divider above the delete-account block — the same rule used between the
          header and the footer. See app-shell.component.ts. */
       .account-page__divider {
         width: 100%;
@@ -304,12 +358,6 @@ function sentenceForStatus(status: string): string {
         flex-direction: column;
         align-items: flex-start;
         gap: 12px;
-      }
-      .account-page__danger-heading {
-        margin: 0;
-        font-size: 15px;
-        font-weight: 700;
-        color: var(--mt-ink);
       }
       .account-page__confirm {
         width: 100%;
@@ -360,6 +408,11 @@ export class AccountPageComponent implements OnInit {
     const status = this.view()?.status;
     return status === 'ACTIVE' || status === 'PAST_DUE' || status === 'CANCELLED';
   });
+
+  /** True for every status [manageVisible] does not cover: `TRIALING`, `NONE`, `EXPIRED`, and a
+   * status this client does not yet know. A signed-in learner with no live subscription always
+   * has a path to the plan screen (issue #137) — never a status with neither control. */
+  readonly subscribeVisible = computed(() => this.view() !== null && !this.manageVisible());
 
   /** True while a portal-link request is in flight. The button disables on this. A second click
    * before the redirect happens must not send a second request. */
@@ -456,9 +509,10 @@ export class AccountPageComponent implements OnInit {
     return epochMillis == null ? null : formatDate(epochMillis);
   }
 
-  /** The sentence for a status, for the template. See [sentenceForStatus]. */
-  statusSentence(status: string): string {
-    return sentenceForStatus(status);
+  /** The label and the optional second line for a status, for the template. See
+   * [presentationForStatus]. */
+  statusPresentation(status: string): StatusPresentation {
+    return presentationForStatus(status);
   }
 
   /**

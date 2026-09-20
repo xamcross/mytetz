@@ -40,12 +40,15 @@ class GlossaryHtmlTest {
     }
 
     @Test
-    fun `an empty glossary links to the catalogue`() {
+    fun `an empty glossary links to the dashboard`() {
         val html = render(emptyList())
 
         assertTrue("no entry yet" in html, "the empty state must say there is no entry yet")
         assertTrue("review" in html, "the empty state must say entries come after a review")
-        assertTrue("""<a href="/">""" in html, "the empty state must link to the catalogue")
+        assertTrue(
+            """<a href="/">dashboard</a>""" in html,
+            "the empty state must link to the dashboard, by that word",
+        )
     }
 
     @Test
@@ -68,16 +71,23 @@ class GlossaryHtmlTest {
         val html = render(emptyList())
 
         assertTrue("""<meta name="viewport" content="width=device-width, initial-scale=1">""" in html)
-        assertTrue("""<link href="/guides/guides.css" rel="stylesheet">""" in html)
+        assertTrue("""<link href="$GUIDES_STYLESHEET" rel="stylesheet">""" in html)
         assertTrue("""class="bar"""" in html)
         assertTrue("""class="foot"""" in html)
     }
 
+    /**
+     * Issue #144 gives this link the class `foot__link`, the same class `AppShellComponent`'s
+     * own footer link carries. The assertion below changed from
+     * `<a href="/how-it-works">How it works</a>` (no class) to the string below, to match —
+     * `kotlinx.html` writes the `href` `a(...)` sets by name before the `class` its `classes`
+     * parameter adds.
+     */
     @Test
     fun `the footer holds the how-it-works link, the same shared footer the topic page uses`() {
         val html = render(emptyList())
 
-        assertTrue("""<a href="/how-it-works">How it works</a>""" in html)
+        assertTrue("""<a href="/how-it-works" class="foot__link">How it works</a>""" in html)
     }
 
     // ------------------------------------------------------------- hostile input

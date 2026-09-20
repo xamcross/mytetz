@@ -166,6 +166,10 @@ fun Application.module(components: Components = Components()) {
         billingRoutes(
             account = components.account,
             billing = components.billing,
+            // Read plainly, and not through a factory: `components.billingConfig` is eager and
+            // never throws — see `Components.billingConfig`'s own KDoc. `GET /api/billing/plans`
+            // needs this value before a learner signs in.
+            billingConfig = components.billingConfig,
             // A factory, not the built config, for the same reason `magicLink` and `google` are
             // above: `Components.freemiusConfig` is `by lazy` on a chain that throws when a
             // Freemius variable is missing, and reading it here would force that chain while this

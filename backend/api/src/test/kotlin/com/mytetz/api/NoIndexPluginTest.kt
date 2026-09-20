@@ -21,6 +21,7 @@ private fun Route.wireUp() {
     get("/learn/{sessionId}") { call.respond(HttpStatusCode.OK, "shell") }
     get("/account") { call.respond(HttpStatusCode.OK, "shell") }
     get("/auth") { call.respond(HttpStatusCode.OK, "shell") }
+    get("/subscribe") { call.respond(HttpStatusCode.OK, "shell") }
     get("/") { call.respond(HttpStatusCode.OK, "shell") }
     get("/privacy") { call.respond(HttpStatusCode.OK, "shell") }
 }
@@ -55,6 +56,18 @@ class NoIndexPluginTest {
         }
 
         assertEquals(NOINDEX, client.get("/auth").headers[X_ROBOTS_TAG])
+    }
+
+    @Test
+    fun `the plan screen carries noindex`() = testApplication {
+        // Issue #137. The plan screen is for a signed-in learner, the same reason `/account`
+        // carries this header.
+        application {
+            installNoIndex()
+            routing { wireUp() }
+        }
+
+        assertEquals(NOINDEX, client.get("/subscribe").headers[X_ROBOTS_TAG])
     }
 
     @Test

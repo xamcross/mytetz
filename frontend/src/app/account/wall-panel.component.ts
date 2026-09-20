@@ -1,5 +1,5 @@
-import { Component, computed, inject, input, signal } from '@angular/core';
-import { ApiService } from '../core/api.service';
+import { Component, computed, input } from '@angular/core';
+import { RouterLink } from '@angular/router';
 
 /** The two refusals that share this wall. Every other refusal — a bad span, a quota, a broken
  * stream — keeps its own banner and never reaches this component; see
@@ -28,29 +28,17 @@ const HEADLINES: Readonly<Record<WallCode, string>> = {
  * waiting for a reset that never comes. See `ReaderPageComponent.bannerError`, which keeps both
  * codes here out of the banner for the same reason.
  *
- * The Subscribe button asks the backend for a checkout URL. The button then sends the browser to
- * that URL. The server builds the URL and adds the learner's email. The browser never builds the
- * URL, and the browser never holds a checkout secret.
+ * The Subscribe control opens the plan screen at `/subscribe` (issue #137). That page holds the
+ * price, the free option and the checkout call. This panel starts no checkout call itself.
  */
 @Component({
   selector: 'app-wall-panel',
-  imports: [],
+  imports: [RouterLink],
   template: `
     <div class="wall-panel mt-card mt-card--raised">
       <p class="wall-panel__lead">{{ headline() }}</p>
       <p class="wall-panel__body">A subscription opens the reader and keeps it open.</p>
-      @if (subscribeError(); as message) {
-        <p class="wall-panel__error" role="alert">{{ message }}</p>
-      }
-      <button
-        type="button"
-        class="mt-pill mt-pill--coral wall-panel__subscribe"
-        [disabled]="subscribing()"
-        [attr.aria-busy]="subscribing() ? 'true' : null"
-        (click)="subscribe()"
-      >
-        {{ subscribing() ? 'Opening checkout…' : 'Subscribe' }}
-      </button>
+      <a class="mt-pill mt-pill--coral wall-panel__subscribe" routerLink="/subscribe">Subscribe</a>
     </div>
   `,
   styles: [
@@ -78,46 +66,10 @@ const HEADLINES: Readonly<Record<WallCode, string>> = {
         color: var(--mt-muted);
         max-width: 48ch;
       }
-      .wall-panel__error {
-        margin: 0;
-        font-size: 13px;
-        font-weight: 700;
-        color: var(--mt-err-ink);
-      }
     `,
   ],
 })
 export class WallPanelComponent {
-  private readonly api = inject(ApiService);
-
   readonly code = input.required<WallCode>();
   readonly headline = computed(() => HEADLINES[this.code()]);
-
-  /** True while a checkout request is in flight. The button stays disabled during this time.
-   * This stops a second click from sending a second request before the redirect happens. */
-  readonly subscribing = signal(false);
-  /** The message for a failed checkout request, or `null` when there is no failure. */
-  readonly subscribeError = signal<string | null>(null);
-
-  async subscribe(): Promise<void> {
-    if (this.subscribing()) return;
-    this.subscribing.set(true);
-    this.subscribeError.set(null);
-    try {
-      const { url } = await this.api.checkout();
-      this.redirect(url);
-      // This method leaves `subscribing` set to true after success. The browser is about to
-      // leave this page, so there is nothing left to re-enable. See
-      // `CatalogPageComponent.goToSession` for the same reason.
-    } catch {
-      this.subscribeError.set('Could not start checkout. Check your connection and try again.');
-      this.subscribing.set(false);
-    }
-  }
-
-  /** Sends the browser to [url]. This method stays separate so a test can replace it. jsdom does
-   * not implement real navigation, so a test cannot check `window.location` directly. */
-  redirect(url: string): void {
-    window.location.href = url;
-  }
 }

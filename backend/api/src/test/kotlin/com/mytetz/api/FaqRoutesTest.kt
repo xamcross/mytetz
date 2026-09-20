@@ -44,6 +44,20 @@ class FaqRoutesTest {
         assertTrue(!html.contains("€"), "the page still holds a euro sign")
     }
 
+    /** Issue #145: the page names the page at `/` the "dashboard", and holds no "catalogue". */
+    @Test
+    fun `the reader-access answer names the dashboard, and holds no catalogue`() = testApplication {
+        application { routing { faqRoutes(billingConfig = BillingConfig()) } }
+
+        val html = client.get("/faq").bodyAsText()
+
+        assertTrue(
+            "A reader reads the dashboard, a topic page and its seed text" in html,
+            "the answer must name the dashboard",
+        )
+        assertTrue("catalogue" !in html, "the page must hold no word \"catalogue\"")
+    }
+
     @Test
     fun `the html element states the language of the page`() = testApplication {
         application { routing { faqRoutes(billingConfig = BillingConfig()) } }
@@ -67,9 +81,14 @@ class FaqRoutesTest {
                 )
                 assertTrue(entry.answer in body, "expected the answer for \"${entry.question}\": $body")
             }
-            // The only script tag on this page is the JSON-LD block.
+            // Issue #143 adds site-header.js in commonHeadTags, so this page's script-tag count
+            // changed from 1 (the JSON-LD block) to 2 (the JSON-LD block and site-header.js).
             val scriptTags = Regex("<script[ >]").findAll(body).count()
-            assertEquals(1, scriptTags, "expected exactly one <script> tag (the JSON-LD block): $body")
+            assertEquals(
+                2,
+                scriptTags,
+                "expected exactly two <script> tags (the JSON-LD block and site-header.js): $body",
+            )
         }
 
     /**
@@ -141,13 +160,19 @@ class FaqRoutesTest {
         assertTrue("""<meta property="og:url" content="https://mytetz.com/faq">""" in body, body)
     }
 
+    /**
+     * Issue #144 gives this link the class `foot__link`, the same class `AppShellComponent`'s
+     * own footer link carries. The assertion below changed from `<a href="/faq">FAQ</a>` (no
+     * class) to the string below, to match — `kotlinx.html` writes the `href` `a(...)` sets by
+     * name before the `class` its `classes` parameter adds.
+     */
     @Test
     fun `the footer links to the FAQ page, the same as every other page`() = testApplication {
         application { routing { faqRoutes(billingConfig = BillingConfig()) } }
 
         val body = client.get("/faq").bodyAsText()
 
-        assertTrue("""<a href="/faq">FAQ</a>""" in body, body)
+        assertTrue("""<a href="/faq" class="foot__link">FAQ</a>""" in body, body)
     }
 
     @Test

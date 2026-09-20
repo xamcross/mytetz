@@ -97,6 +97,22 @@ export interface AccountView {
 }
 
 /**
+ * The body of `GET /api/billing/plans` — mirrors the backend's `BillingPlansResponse`, field for
+ * field.
+ *
+ * `priceUsdPerMonth` is one whole number of US dollars, and never a fraction. `trialDays` and
+ * `trialGenerations` describe the free trial. `subscriberDailyExplains` is the daily allowance a
+ * paid plan gives. `SubscribePageComponent` reads every field; none has a default here, because
+ * the backend's own response class has none — see `BillingPlansResponse`'s own KDoc.
+ */
+export interface BillingPlansView {
+  priceUsdPerMonth: number;
+  trialDays: number;
+  trialGenerations: number;
+  subscriberDailyExplains: number;
+}
+
+/**
  * The body of `GET /api/auth/config`. It mirrors the backend's `AuthConfigView`, field for field.
  *
  * `SignInPanelComponent` reads `turnstileSiteKey` to decide whether to load the Turnstile widget.

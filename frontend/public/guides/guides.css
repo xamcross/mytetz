@@ -68,6 +68,7 @@
   --mt-ink: #12312a;
   --mt-prose: #1b3d36;
   --mt-muted: #4c6b64;
+  --mt-faint: #7ba49b;
 
   --mt-coral: #ff5d5d;
   --mt-coral-deep: #d63f3f;
@@ -81,6 +82,8 @@
   --mt-amber-deep: #f0c256;
   --mt-amber-bg: #fff8e6;
   --mt-amber-ink: #6b4c00;
+
+  --mt-err-ink: #b83232;
 
   --mt-r-card: 26px;
   --mt-r-panel: 22px;
@@ -135,45 +138,174 @@ a:hover {
 
 /* ── The page header ───────────────────────────────────────────────────────── */
 /* A guide leaves the Angular application, so it carries its own bar. The bar
-   always offers a way back into the application. */
+   always offers a way back into the application, and, since issue #143, the
+   same look and the same links as AppShellComponent's own bar in
+   frontend/src/app/ui/app-shell.component.ts — copy a value change there to
+   here, and here to there. */
 
 .bar {
+  height: 64px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  min-height: 64px;
-  padding: 10px 16px;
+  padding: 0 32px;
   background: var(--mt-surface);
   border-bottom: var(--mt-border-w) solid var(--mt-rule);
-  flex-wrap: wrap;
+}
+.bar__left {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  min-width: 0;
 }
 .bar__mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
   font-family: var(--mt-display);
-  font-size: 22px;
+  font-size: 24px;
   font-weight: 600;
-  color: var(--mt-ink);
+  color: var(--mt-coral);
   text-decoration: none;
+}
+/* The inline logo mark, copied from logo-mark.component.ts. The host there carries the size, so
+   this one rule does the same job here. */
+.bar__mark-icon {
+  display: block;
+  width: 28px;
+  height: 28px;
+  flex: none;
 }
 .bar__nav {
   display: flex;
+  gap: 20px;
+}
+.bar__right {
+  display: flex;
   align-items: center;
   gap: 16px;
-  font-size: 15px;
 }
-.bar__cta {
-  padding: 9px 16px;
-  border: var(--mt-border-w) solid var(--mt-coral-press);
-  border-radius: var(--mt-r-row);
-  background: var(--mt-coral-press);
-  box-shadow: 0 4px 0 var(--mt-coral-deep);
-  color: var(--mt-surface);
+/* Issue #143: no padding and no border on one side only. Issue #141 found that AppShellComponent's
+   own .bar__link reserves 3px of padding plus a 3px transparent border below the text and none
+   above it, which moves the text 3px above the vertical centre of the 64px bar. This rule reserves
+   no space on either side, so the text sits on the flex row's own centre line instead. */
+.bar__link {
+  font-size: 15px;
   font-weight: 700;
+  color: var(--mt-muted);
   text-decoration: none;
 }
-.bar__cta:active {
-  transform: translateY(2px);
-  box-shadow: 0 2px 0 var(--mt-coral-deep);
+.bar__link:hover {
+  color: var(--mt-teal);
+}
+.bar__account {
+  white-space: nowrap;
+}
+/* The allowance count site-header.js fills in next to the account link, in the same words
+   allowance-meter.component.ts renders. This span stays in the row even while it is empty — a
+   visitor with no account, or before the script's own answer arrives — because
+   AppShellComponent's own empty meter host does the same: it is an inline-flex element with no
+   content, and it still takes up one gap of .bar__right on each side. Hiding this span with
+   `display: none` would close that gap and move the account link and the dot out of line with
+   the application header (issue #143's own review). */
+.bar__count {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--mt-muted);
+  white-space: nowrap;
+}
+/* Issue #143's own review: the period word ("today", "in your trial") follows
+   allowance-meter.component.ts's own rule — hidden below 768px, because the full sentence ran
+   into the account link at a phone width, the same overlap issue #133 already fixed once. The
+   digits stay visible at every width. */
+@media (max-width: 767px) {
+  .bar__count-period {
+    display: none;
+  }
+}
+/* The one true sentence a screen reader announces, at every width — the same role
+   allowance-meter.component.ts's own .mt-sr-only span plays. guides.css carries its own copy,
+   because it is a plain stylesheet with no import from styles.css (see this file's own header
+   comment). */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+/* The status dot, the same markup and the same four states as status-dot.component.ts. The
+   server always renders "checking": a Ktor page is a pure read (issue #45), so it cannot know
+   the backend's own health before the page ships. site-header.js reads GET /api/health once the
+   page loads and sets the true state — see that file's own header comment. */
+.dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  border: 2px solid var(--mt-surface);
+  outline: 2px solid var(--mt-border);
+  flex: none;
+}
+.dot--ok {
+  background: var(--mt-teal);
+}
+.dot--checking {
+  background: radial-gradient(circle, transparent 45%, var(--mt-faint) 46% 100%);
+}
+.dot--degraded {
+  background: var(--mt-amber);
+  border-radius: 0;
+  clip-path: polygon(50% 0%, 100% 100%, 0% 100%);
+}
+.dot--unreachable {
+  position: relative;
+  background: transparent;
+}
+.dot--unreachable::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 100%;
+  height: 2px;
+  background: var(--mt-err-ink);
+  transform: rotate(45deg);
+}
+.dot--unreachable::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 100%;
+  height: 2px;
+  background: var(--mt-err-ink);
+  transform: rotate(-45deg);
+}
+@media (max-width: 767px) {
+  .bar {
+    padding: 0 20px;
+  }
+  .bar__nav {
+    display: none;
+  }
+}
+/* Issue #133: the bar's own side padding stays 20px at every phone width, and only the gap
+   inside the right-hand group narrows, for the two rare widths, 320px and 360px, where the
+   wordmark, the account link and the count still crowd each other. */
+@media (max-width: 479px) {
+  .bar__right {
+    gap: 12px;
+  }
+}
+/* Issue #133: below 360px the text of the wordmark takes more width than the row has. The text
+   goes out of view, and the logo mark alone shows the link; the link's own aria-label keeps its
+   name for a screen reader at every width. */
+@media (max-width: 359px) {
+  .bar__mark-text {
+    display: none;
+  }
 }
 
 /* ── Layout ────────────────────────────────────────────────────────────────── */
@@ -501,34 +633,56 @@ tbody tr:last-child td {
 }
 
 /* ── The page footer ───────────────────────────────────────────────────────── */
+/* Issue #144: the same look as AppShellComponent's own .foot and .foot__link in
+   frontend/src/app/ui/app-shell.component.ts, with the corrections issue #132 already made
+   there — copy a value change in one file to the other. One centred row, flush with .foot
+   itself and with no .foot__inner wrapper, so the row's own centre line lands on the same
+   vertical line as .wrap, the main column, at every width. */
 
 .foot {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 20px;
+  padding: 24px 32px;
   border-top: var(--mt-border-w) solid var(--mt-rule);
-  background: var(--mt-surface);
-  padding: 24px 16px 32px;
 }
-.foot__inner {
-  max-width: 760px;
-  margin: 0 auto;
-}
+/* Issue #144 step 5: the publisher line and the review date a guide page's footer held before
+   this change now sit inside <main>, after the last section, and keep this class and its look. */
 .foot__meta {
   font-size: 14px;
   color: var(--mt-muted);
-  margin: 0 0 12px;
+  margin: 40px 0 0;
 }
-.foot__links {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 16px;
-  font-size: 14px;
+.foot__link {
+  font-size: 13px;
+  font-weight: 700;
+  /* A fixed line-height, and not the browser default, so a wrapped link is always taller than a
+     one-line link by a clear margin — the same rule AppShellComponent's own .foot__link states. */
+  line-height: 20px;
+  color: var(--mt-muted);
+  text-decoration: none;
+  /* Issue #132: a link keeps its own text on one line; flex-wrap on .foot then moves a whole link
+     to the next row, rather than shrinking the link and wrapping its words. */
+  white-space: nowrap;
+}
+.foot__link:hover {
+  color: var(--mt-teal);
+}
+/* Issue #132: six links do not fit in one row below about 480px. flex-wrap on .foot moves a link
+   to a new row, and the smaller side padding matches the phone padding of .bar. This block stands
+   after the .foot rule on purpose: the two rules have the same specificity, so the later one
+   wins. */
+@media (max-width: 767px) {
+  .foot {
+    padding: 24px 20px;
+    gap: 12px 20px;
+  }
 }
 
 @media (min-width: 640px) {
   .wrap {
     padding: 44px 24px 80px;
-  }
-  .bar {
-    padding: 10px 32px;
   }
   .start__list {
     grid-template-columns: repeat(3, 1fr);

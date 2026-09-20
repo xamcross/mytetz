@@ -1,5 +1,5 @@
 import { Component, inject, input } from '@angular/core';
-import { RouterLink, RouterLinkActive } from '@angular/router';
+import { RouterLink } from '@angular/router';
 import { AllowanceMeterComponent } from '../account/allowance-meter.component';
 import { AccountStore } from '../core/account.store';
 import { LogoMarkComponent } from './logo-mark.component';
@@ -8,11 +8,14 @@ import { BackendState, StatusDotComponent } from './status-dot.component';
 /**
  * The 64px top bar, and the frame every page sits in.
  *
- * The design draws three nav items: Topics, Sessions and Glossary. Sessions needs a backend that
- * does not exist yet, and a link to a dead end is worse than no link, so it stays out. Glossary now
- * has a route — a Ktor page at `/glossary`, not an Angular one (issue #48) — so it gets a plain
- * `href`, not a `routerLink`: see the "Guides" footer link below for why a static page outside
- * `app.routes.ts` needs a full document load and not a router navigation.
+ * Issue #143: the nav holds Glossary and Guides, and no Topics link. The wordmark already opens
+ * `/`, the same page the removed Topics link opened, so the owner's decision on 2026-09-20 drops
+ * it as a duplicate. Glossary is a Ktor page at `/glossary` (issue #48), and Guides is a static
+ * file under `frontend/public/guides` (issue #63); both need a plain `href` and not a
+ * `routerLink` — see the "Guides" footer link below for why a page outside `app.routes.ts` needs
+ * a full document load and not a router navigation. `RouterLinkActive` left with the removed
+ * Topics link: no nav item routes inside the Angular application any more, so none can be marked
+ * active.
  *
  * Below 768px the nav item goes. The wordmark already routes to the catalog.
  *
@@ -22,13 +25,7 @@ import { BackendState, StatusDotComponent } from './status-dot.component';
  */
 @Component({
   selector: 'app-shell',
-  imports: [
-    RouterLink,
-    RouterLinkActive,
-    LogoMarkComponent,
-    StatusDotComponent,
-    AllowanceMeterComponent,
-  ],
+  imports: [RouterLink, LogoMarkComponent, StatusDotComponent, AllowanceMeterComponent],
   template: `
     <header class="bar">
       <div class="bar__left">
@@ -37,15 +34,13 @@ import { BackendState, StatusDotComponent } from './status-dot.component';
           <span class="bar__mark-text">mytetz</span>
         </a>
         <nav class="bar__nav" aria-label="Sections">
-          <a
-            class="bar__link"
-            routerLink="/"
-            routerLinkActive="bar__link--active"
-            ariaCurrentWhenActive="page"
-            [routerLinkActiveOptions]="{ exact: true }"
-            >Topics</a
-          >
           <a class="bar__link" href="/glossary">Glossary</a>
+          <!--
+            A plain href, and not a routerLink. /guides is a static HTML file under
+            frontend/public/guides, and app.routes.ts has no 'guides' path, the same reason the
+            Guides footer link below states.
+          -->
+          <a class="bar__link" href="/guides">Guides</a>
         </nav>
       </div>
       <div class="bar__right">

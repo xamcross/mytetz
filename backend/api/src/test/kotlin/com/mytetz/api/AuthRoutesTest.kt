@@ -553,6 +553,21 @@ class AuthRoutesTest {
         assertEquals("SIGN_IN_REQUIRED", wireJson.decodeFromString<ApiError>(response.bodyAsText()).code)
     }
 
+    /**
+     * Issue #143's own step 4: `frontend/public/site-header.js` calls `GET /api/account` from
+     * every public page, including a Ktor page that must stay a pure read (issue #45). This route
+     * calls `Principals.readSessionId` and `account.resolveSession` only, and never
+     * `Principals.setSessionCookie` — confirmed by reading `AuthRoutes.kt`'s own `/api/account`
+     * handler — so a visitor with no session cookie gets no cookie from this call either.
+     */
+    @Test
+    fun `the account route sets no cookie for a visitor with no session`() = authApp {
+        val response = client.get("/api/account")
+
+        assertEquals(HttpStatusCode.Unauthorized, response.status)
+        assertNull(response.headers[HttpHeaders.SetCookie], "GET /api/account minted a cookie for a visitor with no account")
+    }
+
     @Test
     fun `the account route answers the view when signed in`() = authApp {
         val email = signIn()

@@ -38,6 +38,17 @@ const signedOut = {
   message: 'sign in to continue',
 };
 
+// Issue #106's own sentences (pull request #134). Issue #138 replaces every one of them with a
+// short label. A test below proves none of these six strings ever shows again.
+const OLD_STATUS_SENTENCES = [
+  'Your trial is active.',
+  'Your subscription is active.',
+  'Your payment is overdue.',
+  'Your subscription is cancelled.',
+  'Your subscription has expired.',
+  'We do not recognize this account status.',
+];
+
 describe('AccountPageComponent', () => {
   let fixture: ComponentFixture<AccountPageComponent>;
   let store: AccountStore;
@@ -126,12 +137,15 @@ describe('AccountPageComponent', () => {
     expect(text()).toContain('learner@example.com');
   });
 
-  it('the account page shows a sentence for the status, and the period end', async () => {
-    // Finding F15. The row once printed the raw enum, for example "ACTIVE". A learner reads a
-    // sentence now, and never the wire value — see the describe block below for every status.
+  it('the account page shows the status label, and the period end', async () => {
+    // Issue #138. The owner decided on 2026-09-20 that a status is a short label, not a
+    // sentence. The row shows "PREMIUM" for an active learner, and never the wire value — see
+    // the describe block below for every status.
     await mount((req) => req.flush(active));
 
-    expect(text()).toContain('Your subscription is active.');
+    const badge = fixture.nativeElement.querySelector('.account-page__status-badge');
+    expect(badge?.textContent?.trim()).toBe('PREMIUM');
+    expect(text()).not.toContain('Your subscription is active.');
     expect(text()).not.toContain('ACTIVE');
     expect(text()).toContain('August 7, 2024');
   });
@@ -149,27 +163,40 @@ describe('AccountPageComponent', () => {
     expect(text()).not.toContain('1970');
   });
 
-  it('the account page shows a sentence for the status of a trial learner', async () => {
+  it('the account page shows the status label for a trial learner', async () => {
     await mount((req) => req.flush(trialing));
 
-    expect(text()).toContain('Your trial is active.');
+    const badge = fixture.nativeElement.querySelector('.account-page__status-badge');
+    expect(badge?.textContent?.trim()).toBe('TRIAL');
+    expect(text()).not.toContain('Your trial is active.');
     expect(text()).not.toContain('TRIALING');
   });
 
   it.each([
-    ['TRIALING', 'Your trial is active.'],
-    ['ACTIVE', 'Your subscription is active.'],
-    ['PAST_DUE', 'Your payment is overdue.'],
-    ['CANCELLED', 'Your subscription is cancelled.'],
-    ['EXPIRED', 'Your subscription has expired.'],
-    ['SOME_FUTURE_STATUS', 'We do not recognize this account status.'],
+    ['TRIALING', 'TRIAL', null],
+    ['ACTIVE', 'PREMIUM', null],
+    ['PAST_DUE', 'PREMIUM', 'Payment overdue.'],
+    ['CANCELLED', 'PREMIUM', 'Cancelled.'],
+    ['EXPIRED', 'FREE', null],
+    ['SOME_FUTURE_STATUS', 'FREE', null],
   ])(
-    'finding F15: status %s shows the sentence %j, never the raw value',
-    async (status, sentence) => {
+    'issue #138: status %s shows the label %j, never a sentence or the raw value',
+    async (status, label, secondLine) => {
       await mount((req) => req.flush({ ...active, status }));
 
-      expect(text()).toContain(sentence);
+      const badge = fixture.nativeElement.querySelector('.account-page__status-badge');
+      expect(badge?.textContent?.trim()).toBe(label);
       expect(text()).not.toContain(status);
+      for (const oldSentence of OLD_STATUS_SENTENCES) {
+        expect(text()).not.toContain(oldSentence);
+      }
+
+      const detail = fixture.nativeElement.querySelector('.account-page__status-detail');
+      if (secondLine === null) {
+        expect(detail).toBeNull();
+      } else {
+        expect(detail?.textContent?.trim()).toBe(secondLine);
+      }
     },
   );
 
@@ -288,6 +315,32 @@ describe('AccountPageComponent', () => {
     expect(fixture.nativeElement.querySelector('[data-action="manage-subscription"]')).toBeNull();
   });
 
+  /**
+   * Issue #137. A signed-in learner with no live subscription always has a path to the plan
+   * screen. `subscribeVisible` is the exact complement of `manageVisible` (see its own KDoc), so
+   * this covers `TRIALING`, `NONE`, `EXPIRED` and an unknown status in one pass.
+   */
+  it.each(['TRIALING', 'NONE', 'EXPIRED', 'SOME_UNKNOWN_STATUS'])(
+    'subscribe is present for %s, and links to /subscribe',
+    async (status) => {
+      await mount((req) => req.flush({ ...active, status }));
+
+      const subscribe = fixture.nativeElement.querySelector(
+        '[data-action="subscribe"]',
+      ) as HTMLAnchorElement;
+      expect(subscribe).toBeTruthy();
+      expect(subscribe.getAttribute('href')).toBe('/subscribe');
+      // Never both at once: a subscriber must not read a control that offers a second checkout.
+      expect(fixture.nativeElement.querySelector('[data-action="manage-subscription"]')).toBeNull();
+    },
+  );
+
+  it.each(['ACTIVE', 'PAST_DUE', 'CANCELLED'])('subscribe is absent for %s', async (status) => {
+    await mount((req) => req.flush({ ...active, status }));
+
+    expect(fixture.nativeElement.querySelector('[data-action="subscribe"]')).toBeNull();
+  });
+
   it('a failed portal request shows a message and keeps the learner on the page', async () => {
     await mount((req) => req.flush(active));
 
@@ -348,28 +401,25 @@ describe('AccountPageComponent', () => {
     expect(terms.classList).not.toContain('mt-pill--ghost');
   });
 
-  it('puts delete account in its own block, below a divider, under its own heading', async () => {
-    // Finding F15. "Delete account" once sat in the same row as "Sign out", "Manage subscription"
-    // and "Terms", at one visual weight. It now sits in its own block, below a divider, under the
-    // heading "Close your account" — and the DOM order proves the block comes after the primary
-    // row and not before it.
+  it('puts delete account in its own block, below a divider, with no heading', async () => {
+    // Finding F15 put "Delete account" in its own block, below a divider, under the heading
+    // "Close your account". Issue #140 removes the heading: the button already names the action,
+    // so a heading above it repeats the same words. The DOM order still proves the block comes
+    // after the primary row and not before it.
     await mount((req) => req.flush(active));
 
     const actions = fixture.nativeElement.querySelector('.account-page__actions');
     const signOut = fixture.nativeElement.querySelector('[data-action="sign-out"]');
     const divider = fixture.nativeElement.querySelector('.account-page__divider');
-    const heading = fixture.nativeElement.querySelector('.account-page__danger-heading');
     const del = fixture.nativeElement.querySelector('[data-action="delete-account"]');
 
     expect(actions.querySelector('[data-action="delete-account"]')).toBeNull();
-    expect(heading?.textContent).toContain('Close your account');
+    expect(text()).not.toContain('Close your account');
+    expect(fixture.nativeElement.querySelector('.account-page__danger-heading')).toBeNull();
     expect(
       signOut.compareDocumentPosition(divider) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
-    expect(
-      divider.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
-    expect(heading.compareDocumentPosition(del) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(divider.compareDocumentPosition(del) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('delete account opens a confirmation panel instead of sending a request at once', async () => {
@@ -386,6 +436,20 @@ describe('AccountPageComponent', () => {
       fixture.nativeElement.querySelector('[data-action="delete-account-confirm"]'),
     ).not.toBeNull();
     expect(text()).toContain('This cannot be undone');
+  });
+
+  // Issue #145. The page at `/` is the "dashboard" in every text a learner reads, and never the
+  // "catalogue".
+  it('the confirmation panel names the dashboard, not the catalogue', async () => {
+    await mount((req) => req.flush(active));
+
+    (
+      fixture.nativeElement.querySelector('[data-action="delete-account"]') as HTMLButtonElement
+    ).click();
+    fixture.detectChanges();
+
+    expect(text()).toContain('those stay on the site for other learners');
+    expect(text()).not.toContain('catalogue');
   });
 
   it('cancelling the confirmation panel sends no request and closes it', async () => {
@@ -610,7 +674,8 @@ describe('AccountPageComponent — the post-purchase poll', () => {
     fixture.detectChanges();
 
     expect(store.view()).toEqual(active);
-    expect(text()).toContain('Your subscription is active.');
+    const badge = fixture.nativeElement.querySelector('.account-page__status-badge');
+    expect(badge?.textContent?.trim()).toBe('PREMIUM');
   });
 
   it('stops the poll once the status changes, and asks the server no more', async () => {
@@ -741,5 +806,57 @@ describe('AccountPageComponent — with the real router', () => {
     // `route.snapshot` again, after the swap, finds no `action` parameter, and never starts the
     // poll — so this second request never appears.
     http.expectOne('/api/account').flush(active);
+  });
+});
+
+/**
+ * Its own describe block, with the real clock: the block above runs under `vi.useFakeTimers()`
+ * for its poll-timing tests, and a real navigation triggered by a DOM click — rather than by
+ * `RouterTestingHarness.navigateByUrl` directly — needs the real clock's own microtask queue to
+ * settle. Issue #137's Subscribe control is a plain `routerLink`, so this is the same proof
+ * `AllowanceMeterComponent`'s own "with the real router" block gives its Subscribe link.
+ */
+describe('AccountPageComponent — Subscribe, with the real router', () => {
+  let harness: RouterTestingHarness;
+  let http: HttpTestingController;
+  let router: Router;
+
+  beforeEach(async () => {
+    TestBed.configureTestingModule({
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        provideRouter([
+          { path: 'account', component: AccountPageComponent },
+          { path: 'subscribe', component: AccountPageComponent },
+        ]),
+      ],
+    });
+    http = TestBed.inject(HttpTestingController);
+    router = TestBed.inject(Router);
+    harness = await RouterTestingHarness.create();
+  });
+
+  afterEach(() => http.verify());
+
+  it('a click on Subscribe opens /subscribe, for a learner in trial', async () => {
+    await harness.navigateByUrl('/account', AccountPageComponent);
+    http.expectOne('/api/account').flush(trialing);
+    await harness.fixture.whenStable();
+    harness.detectChanges();
+
+    const subscribe = harness.routeNativeElement?.querySelector(
+      '[data-action="subscribe"]',
+    ) as HTMLAnchorElement;
+    subscribe.click();
+    await harness.fixture.whenStable();
+
+    expect(router.url).toBe('/subscribe');
+    // The route table reuses AccountPageComponent for both paths, so landing on "/subscribe"
+    // fires its own GET /api/account in turn — this flush is that request, and not evidence that
+    // the click itself sent one. http.verify() in afterEach proves the click sent no other
+    // request of its own.
+    http.expectOne('/api/account').flush(active);
+    await harness.fixture.whenStable();
   });
 });

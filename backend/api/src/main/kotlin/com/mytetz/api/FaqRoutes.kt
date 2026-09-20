@@ -28,17 +28,6 @@ private const val FAQ_DESCRIPTION =
         "reader can read with no account."
 
 /**
- * The monthly subscription price, in US dollars, for one reader.
- *
- * No configuration value holds this number. The price lives in the Freemius dashboard. The owner
- * set it on 2026-09-19, in pull request #130 of issue #121: "the price should be $12". The design
- * document `docs/superpowers/specs/2026-08-07-monetization-design.md:31` planned "€10 each month"
- * before that, and it carries a dated note on the change. One named constant, next to the
- * renderer that uses it, so a later price change touches one line.
- */
-internal const val FAQ_PRICE_USD_PER_MONTH: Int = 12
-
-/**
  * One "See ..." link placed under an answer paragraph, kept apart from [FaqEntry.answer] so the
  * visible paragraph and the JSON-LD `Answer.text` stay one string, with no risk that a link's own
  * words drift into one copy and not the other.
@@ -63,7 +52,9 @@ data class FaqEntry(val id: String, val question: String, val answer: String, va
  * [billingConfig] is the same [BillingConfig] instance [Components.billing] reads — see
  * `Components.billingConfig`'s own KDoc — so the trial length, the trial pool and the subscriber
  * allowance stated here can never disagree with the values the product actually enforces. This
- * function reads [billingConfig] once and computes no fallback of its own.
+ * function reads [billingConfig] once and computes no fallback of its own. The price answer reads
+ * `SUBSCRIPTION_PRICE_USD_PER_MONTH`, declared in `BillingRoutes.kt` and shared with
+ * `GET /api/billing/plans` (issue #137), so the price can never disagree between the two pages.
  *
  * Issue #121's own evidence table lists an eleventh question, "Which topics exist, and how does a
  * learner ask for a topic?" No control in
@@ -101,8 +92,9 @@ internal fun faqEntries(billingConfig: BillingConfig): List<FaqEntry> = listOf(
         // subscribes through the checkout link of `POST /api/billing/checkout`. An earlier text
         // said that Freemius bills the subscriber "once the trial ends", which a reader takes as
         // an automatic payment. The review of issue #121 corrected it.
-        answer = "Mytetz costs \$$FAQ_PRICE_USD_PER_MONTH each month. A learner subscribes through " +
-            "the Freemius checkout. The trial needs no card, so no payment starts when the trial ends.",
+        answer = "Mytetz costs \$$SUBSCRIPTION_PRICE_USD_PER_MONTH each month. A learner subscribes " +
+            "through the Freemius checkout. The trial needs no card, so no payment starts when the " +
+            "trial ends.",
         link = FaqLink(href = "/terms", label = "Terms"),
     ),
     FaqEntry(
@@ -122,7 +114,7 @@ internal fun faqEntries(billingConfig: BillingConfig): List<FaqEntry> = listOf(
     FaqEntry(
         id = "does-a-reader-need-an-account",
         question = "Does a reader need an account?",
-        answer = "A reader reads the catalogue, a topic page and its seed text with no " +
+        answer = "A reader reads the dashboard, a topic page and its seed text with no " +
             "account. A highlight in the reader needs a sign-in. A learner signs in with an " +
             "email magic link or with Google.",
     ),

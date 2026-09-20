@@ -74,6 +74,19 @@ describe('app.routes titles', () => {
     expect(title.getTitle()).toBe('Your account | mytetz');
   });
 
+  it('/subscribe carries the page name', async () => {
+    await harness.navigateByUrl('/subscribe');
+    http.expectOne('/api/billing/plans').flush({
+      priceUsdPerMonth: 12,
+      trialDays: 7,
+      trialGenerations: 40,
+      subscriberDailyExplains: 25,
+    });
+    await harness.fixture.whenStable();
+
+    expect(title.getTitle()).toBe('Subscribe | mytetz');
+  });
+
   it('/auth carries the page name', async () => {
     // A visit with no `auth` reason navigates straight back to `/`, so this test picks one of the
     // three reasons the route actually shows — see `AuthLandingComponent.message`.

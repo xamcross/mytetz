@@ -1730,135 +1730,67 @@ function overlaps(
 }
 
 /**
- * Issue #91 adds a checkout error to the meter, for an account with no active allowance. That
- * text also renders in the header bar, so a failed checkout at a phone width needs its own proof
- * that the bar stays one line and the page stays inside its own width.
- *
- * A bar that stays 64px tall and a page that does not scroll sideways are not, by themselves,
- * proof that the error text sits inside the header row: `.bar` has a fixed height, so a tall
- * child does not grow it — the child simply overflows, over the wordmark or over the page below.
- * A first, failing run of this test measured exactly that: the error box ran from y=-16 to y=89,
- * well outside the bar's own 0-to-64 range, even though the bar height and the scroll width both
- * read as correct. The fix takes the error out of the row and fixes it just below the bar. This
- * test now also reads the error's own box, and the boxes of the wordmark and the Account link, so
- * that kind of overflow fails the test even when the bar height and the scroll width do not
- * catch it.
+ * Issue #91 gave the meter's own Subscribe control a checkout error, for an account with no
+ * active allowance. Issue #137 moves the checkout call itself out of the meter, onto the plan
+ * screen at `/subscribe` — the header's own Subscribe control is now a plain link, and it can no
+ * longer fail a checkout call, because it never makes one. These two tests replace #91's own pair
+ * (`the header stays inside the page width when Subscribe fails for an expired learner at 390px`
+ * and `the header still fits at 1360px when Subscribe fails, with the error inside the row`),
+ * which asserted a `.allowance-meter__error` box below or inside the bar that this control no
+ * longer ever renders. The claim that still matters — a real click leads to the one place a
+ * checkout can now fail — moves to `subscribe.spec.ts`'s own busy- and error-state tests; what is
+ * left here is the header's own layout, at the same two widths.
  */
-test('the header stays inside the page width when Subscribe fails for an expired learner at 390px', async ({
-  page,
-}) => {
-  await stubCatalogueAndSession(page);
-  await stubAccount(page, accountView({ status: 'EXPIRED', remaining: 0 }));
-  await page.route('**/api/billing/checkout', (route) => route.fulfill({ status: 500, body: '' }));
-  await page.setViewportSize({ width: 390, height: 900 });
-  await page.goto('/');
-  await page.locator('.topic__tile').first().waitFor();
+for (const size of [
+  { label: '390px', viewport: { width: 390, height: 900 } },
+  { label: '1360px', viewport: WIDTHS.wide },
+]) {
+  test(`the header's Subscribe link opens /subscribe for an expired learner at ${size.label}`, async ({
+    page,
+  }) => {
+    await stubCatalogueAndSession(page);
+    await stubAccount(page, accountView({ status: 'EXPIRED', remaining: 0 }));
+    await page.route('**/api/billing/plans', (route) =>
+      route.fulfill({
+        json: {
+          priceUsdPerMonth: 12,
+          trialDays: 7,
+          trialGenerations: 40,
+          subscriberDailyExplains: 25,
+        },
+      }),
+    );
+    await page.setViewportSize(size.viewport);
+    await page.goto('/');
+    await page.locator('.topic__tile').first().waitFor();
 
-  await page.getByRole('button', { name: 'Subscribe' }).click();
+    const link = page.getByRole('link', { name: 'Subscribe' });
+    await expect(link).toHaveAttribute('href', '/subscribe');
 
-  const error = page.locator('.allowance-meter__error');
-  await expect(error).toBeVisible();
-  await expect(error).toContainText(
-    'Could not start checkout. Check your connection and try again.',
-  );
-  await expect(error).toHaveAttribute('role', 'alert');
+    await link.click();
 
-  const bar = (await page.locator('.bar').boundingBox())!;
-  const errorBox = (await error.boundingBox())!;
-  const mark = (await page.locator('.bar__mark').boundingBox())!;
-  const account = (await page.locator('a.bar__account').boundingBox())!;
-  const doc = await page.evaluate(() => ({
-    scroll: document.documentElement.scrollWidth,
-    client: document.documentElement.clientWidth,
-  }));
-
-  // Printed so the issue's own record of the measurement quotes a real run, not an estimate.
-  console.log(
-    `[issue-100] checkout-error width=390 bar=${JSON.stringify(bar)} error=${JSON.stringify(errorBox)} ` +
-      `mark=${JSON.stringify(mark)} account=${JSON.stringify(account)} doc=${JSON.stringify(doc)}`,
-  );
-
-  expect(bar.height, 'the bar stays 64px tall while the error shows').toBe(64);
-  // The error is now a small card below the bar, not a row item — its top sits at or past
-  // the bar's own bottom edge, and never inside the bar's 0-to-64 range.
-  expect(errorBox.y, 'the error card sits below the bar, not on top of it').toBeGreaterThanOrEqual(
-    bar.y + bar.height,
-  );
-  expect(errorBox.x, 'the error card starts inside the window').toBeGreaterThanOrEqual(0);
-  expect(errorBox.x + errorBox.width, 'the error card ends inside the window').toBeLessThanOrEqual(
-    doc.client,
-  );
-  expect(overlaps(errorBox, mark), 'the error does not cover the wordmark').toBe(false);
-  expect(overlaps(errorBox, account), 'the error does not cover the Account link').toBe(false);
-  expect(doc.scroll, 'the page does not scroll sideways while the error shows').toBeLessThanOrEqual(
-    doc.client,
-  );
-});
+    await expect(page).toHaveURL('/subscribe');
+  });
+}
 
 /**
- * The fix above only applies below 768px. This proves the desktop header did not change for the
- * worse: at 1360px there is room for the error on one line inside the row, exactly as before
- * issue #100's second round.
+ * The EXPIRED state, with only the Subscribe link in the header. The link alone must not push
+ * the header past the phone width, and it must not cover the wordmark or the Account link. Issue
+ * #137 turns this control from a `<button>` into an `<a>`, so this test's own role query moves
+ * from `button` to `link`; every box assertion below is unchanged.
  */
-test('the header still fits at 1360px when Subscribe fails, with the error inside the row', async ({
-  page,
-}) => {
-  await stubCatalogueAndSession(page);
-  await stubAccount(page, accountView({ status: 'EXPIRED', remaining: 0 }));
-  await page.route('**/api/billing/checkout', (route) => route.fulfill({ status: 500, body: '' }));
-  await page.setViewportSize(WIDTHS.wide);
-  await page.goto('/');
-  await page.locator('.topic__tile').first().waitFor();
-
-  await page.getByRole('button', { name: 'Subscribe' }).click();
-
-  const error = page.locator('.allowance-meter__error');
-  await expect(error).toBeVisible();
-  await expect(error).toContainText(
-    'Could not start checkout. Check your connection and try again.',
-  );
-
-  const bar = (await page.locator('.bar').boundingBox())!;
-  const errorBox = (await error.boundingBox())!;
-  const doc = await page.evaluate(() => ({
-    scroll: document.documentElement.scrollWidth,
-    client: document.documentElement.clientWidth,
-  }));
-
-  console.log(
-    `[issue-100] checkout-error width=1360 bar=${JSON.stringify(bar)} error=${JSON.stringify(errorBox)} doc=${JSON.stringify(doc)}`,
-  );
-
-  expect(bar.height, 'the bar stays 64px tall on desktop').toBe(64);
-  expect(errorBox.y, 'the error box stays inside the bar on desktop').toBeGreaterThanOrEqual(bar.y);
-  expect(
-    errorBox.y + errorBox.height,
-    'the error box stays inside the bar on desktop',
-  ).toBeLessThanOrEqual(bar.y + bar.height);
-  expect(doc.scroll, 'the page does not scroll sideways on desktop').toBeLessThanOrEqual(
-    doc.client,
-  );
-});
-
-/**
- * The EXPIRED state without a failed checkout call: only the Subscribe button shows. The button
- * alone must not push the header past the phone width either, and it must not cover the wordmark
- * or the Account link.
- */
-test('the header stays inside the page width for an expired learner with no error at 390px', async ({
-  page,
-}) => {
+test('the header stays inside the page width for an expired learner at 390px', async ({ page }) => {
   await stubCatalogueAndSession(page);
   await stubAccount(page, accountView({ status: 'EXPIRED', remaining: 0 }));
   await page.setViewportSize({ width: 390, height: 900 });
   await page.goto('/');
   await page.locator('.topic__tile').first().waitFor();
 
-  const button = page.getByRole('button', { name: 'Subscribe' });
-  await expect(button).toBeVisible();
+  const link = page.getByRole('link', { name: 'Subscribe' });
+  await expect(link).toBeVisible();
 
   const bar = (await page.locator('.bar').boundingBox())!;
-  const buttonBox = (await button.boundingBox())!;
+  const linkBox = (await link.boundingBox())!;
   const mark = (await page.locator('.bar__mark').boundingBox())!;
   const account = (await page.locator('a.bar__account').boundingBox())!;
   const doc = await page.evaluate(() => ({
@@ -1867,25 +1799,25 @@ test('the header stays inside the page width for an expired learner with no erro
   }));
 
   console.log(
-    `[issue-100] expired-no-error width=390 bar=${JSON.stringify(bar)} button=${JSON.stringify(buttonBox)} ` +
+    `[issue-100] expired-no-error width=390 bar=${JSON.stringify(bar)} link=${JSON.stringify(linkBox)} ` +
       `mark=${JSON.stringify(mark)} account=${JSON.stringify(account)} doc=${JSON.stringify(doc)}`,
   );
 
-  expect(bar.height, 'the bar stays 64px tall with only the Subscribe button').toBe(64);
-  expect(buttonBox.y, 'the Subscribe button does not start above the bar').toBeGreaterThanOrEqual(
+  expect(bar.height, 'the bar stays 64px tall with only the Subscribe link').toBe(64);
+  expect(linkBox.y, 'the Subscribe link does not start above the bar').toBeGreaterThanOrEqual(
     bar.y,
   );
   expect(
-    buttonBox.y + buttonBox.height,
-    'the Subscribe button does not extend below the bar',
+    linkBox.y + linkBox.height,
+    'the Subscribe link does not extend below the bar',
   ).toBeLessThanOrEqual(bar.y + bar.height);
-  expect(overlaps(buttonBox, mark), 'the Subscribe button does not cover the wordmark').toBe(false);
-  expect(overlaps(buttonBox, account), 'the Subscribe button does not cover the Account link').toBe(
+  expect(overlaps(linkBox, mark), 'the Subscribe link does not cover the wordmark').toBe(false);
+  expect(overlaps(linkBox, account), 'the Subscribe link does not cover the Account link').toBe(
     false,
   );
   expect(
     doc.scroll,
-    'the page does not scroll sideways with only the Subscribe button',
+    'the page does not scroll sideways with only the Subscribe link',
   ).toBeLessThanOrEqual(doc.client);
 });
 
