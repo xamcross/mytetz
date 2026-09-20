@@ -1,6 +1,6 @@
 # Mytetz
 
-> Mytetz is a learning app. A reader picks a topic from the curated dashboard and studies it in a focused, guided reader.
+> Mytetz is a learning app. A reader picks a topic on the dashboard, a curated list of topics, and studies it in a focused, guided reader.
 
 The dashboard lists topics by title, category and summary. A reader can search, filter, then start a session that opens the topic in the reader.
 

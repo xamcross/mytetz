@@ -398,7 +398,7 @@ describe('AccountPageComponent', () => {
     ).click();
     fixture.detectChanges();
 
-    expect(text()).toContain('those stay in the dashboard for other learners');
+    expect(text()).toContain('those stay on the site for other learners');
     expect(text()).not.toContain('catalogue');
   });
 

@@ -199,7 +199,7 @@ describe('CatalogPageComponent', () => {
     // dashboard is, so the check moves to that wording rather than the old one.
     const text = fixture.nativeElement.textContent as string;
     expect(text).toContain('Nothing under that name yet.');
-    expect(text).toContain('The dashboard is');
+    expect(text).toContain('The dashboard holds');
     expect(text).not.toContain('catalogue');
   });
 

@@ -134,7 +134,7 @@ import { TopicSummary } from '../core/models';
                 @if (query() || category() !== null) {
                   <h2 class="topics__empty-title">Nothing under that name yet.</h2>
                   <p class="topics__empty-body">
-                    The dashboard is {{ topics().length }} hand-written topics for now. Try a
+                    The dashboard holds {{ topics().length }} hand-written topics for now. Try a
                     shorter word, or clear the category.
                   </p>
                   <button type="button" class="mt-pill mt-pill--ghost" (click)="clearFilters()">
