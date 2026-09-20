@@ -239,10 +239,19 @@ internal fun BODY.siteFooter() {
  * this page from a catalogue tile sees a real page and not bare browser text. See
  * `frontend/public/guides/index.html` for the page this layout is read from.
  *
- * The "Start with this topic" control is a `<button>`, an empty alert paragraph, and a `<noscript>`
- * sentence, all rendered here through the normal escaped DSL calls. Its behaviour lives in one
- * external file, `frontend/public/topic-start.js`, loaded with `defer` — never an inline `<script>`
- * — so the one `unsafe { }` block on this page stays the JSON-LD block alone.
+ * The "Start with this topic" control is a `<button>`, an empty alert paragraph, a hidden script
+ * hint paragraph, and a `<noscript>` sentence, all rendered here through the normal escaped DSL
+ * calls. Its behaviour lives in one external file, `frontend/public/topic-start.js`, loaded with
+ * `defer` — never an inline `<script>` — so the one `unsafe { }` block on this page stays the
+ * JSON-LD block alone.
+ *
+ * Issue #161: the button ships `disabled`. A learner cannot click it before `topic-start.js`
+ * attaches its own click handler, so a click during that gap — a slow connection, or a script
+ * request that never finishes — starts nothing, rather than reaching a dead handler. The script
+ * hint paragraph carries a fixed sentence for the case the script never runs at all: `guides.css`'s
+ * own `.start__script-hint` rule keeps it out of sight for a few seconds, with no script of any
+ * kind, and reveals it only if nothing has hidden it by then. `topic-start.js` hides it, and enables
+ * the button, the moment its own click handler is live — see that file's own header comment.
  */
 fun HTML.topicPageHtml(view: TopicPageView) {
     // Set before the first child. The stream writer of `kotlinx.html` writes the `<html>` start
@@ -287,12 +296,19 @@ fun HTML.topicPageHtml(view: TopicPageView) {
                     attributes["id"] = "topic-start-button"
                     attributes["class"] = "start__cta"
                     attributes["data-topic-slug"] = view.slug
+                    attributes["disabled"] = "disabled"
                     +"Start with this topic"
                 }
                 p {
                     attributes["id"] = "topic-start-error"
                     attributes["class"] = "start__error"
                     attributes["role"] = "alert"
+                }
+                p {
+                    attributes["id"] = "topic-start-script-hint"
+                    attributes["class"] = "start__script-hint"
+                    attributes["role"] = "status"
+                    +"This button needs a script that did not load. Load the page again."
                 }
                 noScript {
                     p { +"The Start with this topic button needs JavaScript." }
