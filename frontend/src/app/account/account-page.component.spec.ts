@@ -38,6 +38,17 @@ const signedOut = {
   message: 'sign in to continue',
 };
 
+// Issue #106's own sentences (pull request #134). Issue #138 replaces every one of them with a
+// short label. A test below proves none of these six strings ever shows again.
+const OLD_STATUS_SENTENCES = [
+  'Your trial is active.',
+  'Your subscription is active.',
+  'Your payment is overdue.',
+  'Your subscription is cancelled.',
+  'Your subscription has expired.',
+  'We do not recognize this account status.',
+];
+
 describe('AccountPageComponent', () => {
   let fixture: ComponentFixture<AccountPageComponent>;
   let store: AccountStore;
@@ -126,12 +137,15 @@ describe('AccountPageComponent', () => {
     expect(text()).toContain('learner@example.com');
   });
 
-  it('the account page shows a sentence for the status, and the period end', async () => {
-    // Finding F15. The row once printed the raw enum, for example "ACTIVE". A learner reads a
-    // sentence now, and never the wire value — see the describe block below for every status.
+  it('the account page shows the status label, and the period end', async () => {
+    // Issue #138. The owner decided on 2026-09-20 that a status is a short label, not a
+    // sentence. The row shows "PREMIUM" for an active learner, and never the wire value — see
+    // the describe block below for every status.
     await mount((req) => req.flush(active));
 
-    expect(text()).toContain('Your subscription is active.');
+    const badge = fixture.nativeElement.querySelector('.account-page__status-badge');
+    expect(badge?.textContent?.trim()).toBe('PREMIUM');
+    expect(text()).not.toContain('Your subscription is active.');
     expect(text()).not.toContain('ACTIVE');
     expect(text()).toContain('August 7, 2024');
   });
@@ -149,27 +163,40 @@ describe('AccountPageComponent', () => {
     expect(text()).not.toContain('1970');
   });
 
-  it('the account page shows a sentence for the status of a trial learner', async () => {
+  it('the account page shows the status label for a trial learner', async () => {
     await mount((req) => req.flush(trialing));
 
-    expect(text()).toContain('Your trial is active.');
+    const badge = fixture.nativeElement.querySelector('.account-page__status-badge');
+    expect(badge?.textContent?.trim()).toBe('TRIAL');
+    expect(text()).not.toContain('Your trial is active.');
     expect(text()).not.toContain('TRIALING');
   });
 
   it.each([
-    ['TRIALING', 'Your trial is active.'],
-    ['ACTIVE', 'Your subscription is active.'],
-    ['PAST_DUE', 'Your payment is overdue.'],
-    ['CANCELLED', 'Your subscription is cancelled.'],
-    ['EXPIRED', 'Your subscription has expired.'],
-    ['SOME_FUTURE_STATUS', 'We do not recognize this account status.'],
+    ['TRIALING', 'TRIAL', null],
+    ['ACTIVE', 'PREMIUM', null],
+    ['PAST_DUE', 'PREMIUM', 'Payment overdue.'],
+    ['CANCELLED', 'PREMIUM', 'Cancelled.'],
+    ['EXPIRED', 'FREE', null],
+    ['SOME_FUTURE_STATUS', 'FREE', null],
   ])(
-    'finding F15: status %s shows the sentence %j, never the raw value',
-    async (status, sentence) => {
+    'issue #138: status %s shows the label %j, never a sentence or the raw value',
+    async (status, label, secondLine) => {
       await mount((req) => req.flush({ ...active, status }));
 
-      expect(text()).toContain(sentence);
+      const badge = fixture.nativeElement.querySelector('.account-page__status-badge');
+      expect(badge?.textContent?.trim()).toBe(label);
       expect(text()).not.toContain(status);
+      for (const oldSentence of OLD_STATUS_SENTENCES) {
+        expect(text()).not.toContain(oldSentence);
+      }
+
+      const detail = fixture.nativeElement.querySelector('.account-page__status-detail');
+      if (secondLine === null) {
+        expect(detail).toBeNull();
+      } else {
+        expect(detail?.textContent?.trim()).toBe(secondLine);
+      }
     },
   );
 
@@ -348,28 +375,25 @@ describe('AccountPageComponent', () => {
     expect(terms.classList).not.toContain('mt-pill--ghost');
   });
 
-  it('puts delete account in its own block, below a divider, under its own heading', async () => {
-    // Finding F15. "Delete account" once sat in the same row as "Sign out", "Manage subscription"
-    // and "Terms", at one visual weight. It now sits in its own block, below a divider, under the
-    // heading "Close your account" — and the DOM order proves the block comes after the primary
-    // row and not before it.
+  it('puts delete account in its own block, below a divider, with no heading', async () => {
+    // Finding F15 put "Delete account" in its own block, below a divider, under the heading
+    // "Close your account". Issue #140 removes the heading: the button already names the action,
+    // so a heading above it repeats the same words. The DOM order still proves the block comes
+    // after the primary row and not before it.
     await mount((req) => req.flush(active));
 
     const actions = fixture.nativeElement.querySelector('.account-page__actions');
     const signOut = fixture.nativeElement.querySelector('[data-action="sign-out"]');
     const divider = fixture.nativeElement.querySelector('.account-page__divider');
-    const heading = fixture.nativeElement.querySelector('.account-page__danger-heading');
     const del = fixture.nativeElement.querySelector('[data-action="delete-account"]');
 
     expect(actions.querySelector('[data-action="delete-account"]')).toBeNull();
-    expect(heading?.textContent).toContain('Close your account');
+    expect(text()).not.toContain('Close your account');
+    expect(fixture.nativeElement.querySelector('.account-page__danger-heading')).toBeNull();
     expect(
       signOut.compareDocumentPosition(divider) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
-    expect(
-      divider.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
-    expect(heading.compareDocumentPosition(del) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(divider.compareDocumentPosition(del) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('delete account opens a confirmation panel instead of sending a request at once', async () => {
@@ -624,7 +648,8 @@ describe('AccountPageComponent — the post-purchase poll', () => {
     fixture.detectChanges();
 
     expect(store.view()).toEqual(active);
-    expect(text()).toContain('Your subscription is active.');
+    const badge = fixture.nativeElement.querySelector('.account-page__status-badge');
+    expect(badge?.textContent?.trim()).toBe('PREMIUM');
   });
 
   it('stops the poll once the status changes, and asks the server no more', async () => {
