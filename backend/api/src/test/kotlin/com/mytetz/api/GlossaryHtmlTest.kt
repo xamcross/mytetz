@@ -40,12 +40,15 @@ class GlossaryHtmlTest {
     }
 
     @Test
-    fun `an empty glossary links to the catalogue`() {
+    fun `an empty glossary links to the dashboard`() {
         val html = render(emptyList())
 
         assertTrue("no entry yet" in html, "the empty state must say there is no entry yet")
         assertTrue("review" in html, "the empty state must say entries come after a review")
-        assertTrue("""<a href="/">""" in html, "the empty state must link to the catalogue")
+        assertTrue(
+            """<a href="/">dashboard</a>""" in html,
+            "the empty state must link to the dashboard, by that word",
+        )
     }
 
     @Test

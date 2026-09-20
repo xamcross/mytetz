@@ -116,7 +116,7 @@ internal fun faqEntries(billingConfig: BillingConfig): List<FaqEntry> = listOf(
     FaqEntry(
         id = "does-a-reader-need-an-account",
         question = "Does a reader need an account?",
-        answer = "A reader reads the catalogue, a topic page and its seed text with no " +
+        answer = "A reader reads the dashboard, a topic page and its seed text with no " +
             "account. A highlight in the reader needs a sign-in. A learner signs in with an " +
             "email magic link or with Google.",
     ),
