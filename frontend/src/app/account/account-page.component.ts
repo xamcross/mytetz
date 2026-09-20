@@ -133,10 +133,17 @@ function sentenceForStatus(status: string): string {
             <p class="account-page__error" role="alert">{{ message }}</p>
           }
 
-          <!-- Finding F15. The primary row holds the two controls a learner reaches for most
-               often. "Terms" is a plain link, and not a pill: it is a wayfinding link, not an
-               action on this account. -->
+          <!-- Finding F15. The primary row holds the controls a learner reaches for most often.
+               "Terms" is a plain link, and not a pill: it is a wayfinding link, not an action on
+               this account. Issue #137: "Subscribe" opens the plan screen, and it never shows
+               together with "Manage subscription" — one control names a way to pay, and the
+               other names a subscription that already exists. -->
           <div class="account-page__actions">
+            @if (subscribeVisible()) {
+              <a class="mt-pill mt-pill--coral" data-action="subscribe" routerLink="/subscribe"
+                >Subscribe</a
+              >
+            }
             @if (manageVisible()) {
               <button
                 type="button"
@@ -360,6 +367,11 @@ export class AccountPageComponent implements OnInit {
     const status = this.view()?.status;
     return status === 'ACTIVE' || status === 'PAST_DUE' || status === 'CANCELLED';
   });
+
+  /** True for every status [manageVisible] does not cover: `TRIALING`, `NONE`, `EXPIRED`, and a
+   * status this client does not yet know. A signed-in learner with no live subscription always
+   * has a path to the plan screen (issue #137) — never a status with neither control. */
+  readonly subscribeVisible = computed(() => this.view() !== null && !this.manageVisible());
 
   /** True while a portal-link request is in flight. The button disables on this. A second click
    * before the redirect happens must not send a second request. */

@@ -1,6 +1,8 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
+import { Router, provideRouter } from '@angular/router';
+import { RouterTestingHarness } from '@angular/router/testing';
 import { AllowanceMeterComponent } from './allowance-meter.component';
 import { AccountStore } from '../core/account.store';
 import { AccountView } from '../core/models';
@@ -53,7 +55,7 @@ describe('AllowanceMeterComponent', () => {
   beforeEach(() => {
     TestBed.configureTestingModule({
       imports: [AllowanceMeterComponent],
-      providers: [provideHttpClient(), provideHttpClientTesting()],
+      providers: [provideHttpClient(), provideHttpClientTesting(), provideRouter([])],
     });
     fixture = TestBed.createComponent(AllowanceMeterComponent);
     store = TestBed.inject(AccountStore);
@@ -238,77 +240,91 @@ describe('AllowanceMeterComponent', () => {
     expect(text()).toContain('Subscribe');
   });
 
-  function subscribeButton(): HTMLButtonElement {
-    return fixture.nativeElement.querySelector('.allowance-meter__subscribe') as HTMLButtonElement;
+  /**
+   * Issue #137 moves the checkout call out of this component and onto the plan screen at
+   * `/subscribe`. Every "Subscribe" control here is now a plain link, proven with the real
+   * `Router` — through `provideRouter` for the `href` a visitor sees with no click, and through
+   * `RouterTestingHarness` for the real navigation a click runs — and never through a spy on
+   * `Router.navigate`, which hid a real defect in this repository before.
+   *
+   * These tests replace `a click on Subscribe in the meter starts the checkout`, `a second click
+   * while the checkout call runs sends no second request`, `marks Subscribe busy, with a label
+   * that names the work, while the request runs`, and `a failed checkout call shows a message and
+   * enables the button again` — every one of which asserted a `POST /api/billing/checkout` call
+   * this component no longer makes.
+   */
+  function subscribeLink(): HTMLAnchorElement {
+    return fixture.nativeElement.querySelector('.allowance-meter__subscribe') as HTMLAnchorElement;
   }
 
-  it('a click on Subscribe in the meter starts the checkout', async () => {
+  it('an EXPIRED status shows a Subscribe link to /subscribe, and sends no checkout request', () => {
     store.view.set(expired);
     fixture.detectChanges();
-    const redirect = vi.spyOn(fixture.componentInstance, 'redirect').mockImplementation(() => {});
 
-    subscribeButton().click();
+    expect(subscribeLink().getAttribute('href')).toBe('/subscribe');
+    // http.verify() in afterEach proves this renders no checkout request on its own.
+  });
 
-    const req = http.expectOne('/api/billing/checkout');
-    expect(req.request.method).toBe('POST');
-    req.flush({
-      url: 'https://checkout.freemius.com/product/1/plan/2/?user_email=a%40b.com&readonly_user=true',
+  it('a learner in trial gets a second Subscribe link, scoped to the header, next to the count', () => {
+    store.view.set(trialing);
+    fixture.detectChanges();
+
+    const trialLink = fixture.nativeElement.querySelector(
+      '.allowance-meter__subscribe--trial',
+    ) as HTMLAnchorElement;
+    expect(trialLink.getAttribute('href')).toBe('/subscribe');
+    expect(trialLink.textContent?.trim()).toBe('Subscribe');
+  });
+
+  it('an active learner gets no second Subscribe link — only a metered account in trial does', () => {
+    store.view.set(active);
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('.allowance-meter__subscribe--trial')).toBeNull();
+  });
+});
+
+/**
+ * `Router.navigate` mocked with a spy already hid a real defect in this repository once (see the
+ * class doc comment above `AccountPageComponent`'s own real-router describe block). This block
+ * drives an actual click through `RouterTestingHarness`, on the real `Router`, so a wrong
+ * `routerLink` target shows up as a real, wrong destination and not as an unexamined method call.
+ */
+describe('AllowanceMeterComponent — with the real router', () => {
+  let harness: RouterTestingHarness;
+  let http: HttpTestingController;
+  let router: Router;
+
+  beforeEach(async () => {
+    TestBed.configureTestingModule({
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        // Both paths render this component itself: the meter is the thing under test, and the
+        // destination its own link points to, so one stub component covers both without a second
+        // one.
+        provideRouter([
+          { path: '', component: AllowanceMeterComponent },
+          { path: 'subscribe', component: AllowanceMeterComponent },
+        ]),
+      ],
     });
-    await fixture.whenStable();
-
-    // The server built the URL. This component only follows the URL. It never builds one itself.
-    expect(redirect).toHaveBeenCalledWith(
-      'https://checkout.freemius.com/product/1/plan/2/?user_email=a%40b.com&readonly_user=true',
-    );
+    http = TestBed.inject(HttpTestingController);
+    router = TestBed.inject(Router);
+    TestBed.inject(AccountStore).view.set(expired);
+    harness = await RouterTestingHarness.create('/');
   });
 
-  it('a second click while the checkout call runs sends no second request', () => {
-    store.view.set(expired);
-    fixture.detectChanges();
-    vi.spyOn(fixture.componentInstance, 'redirect').mockImplementation(() => {});
+  afterEach(() => http.verify());
 
-    const button = subscribeButton();
-    button.click();
-    fixture.detectChanges();
-    button.click();
+  it('a click on Subscribe opens /subscribe, and sends no checkout request', async () => {
+    const link = harness.routeNativeElement?.querySelector(
+      '.allowance-meter__subscribe',
+    ) as HTMLAnchorElement;
+    link.click();
+    await harness.fixture.whenStable();
 
-    // One request only. The second click lands while `subscribing` is still true.
-    http.expectOne('/api/billing/checkout');
-  });
-
-  it('marks Subscribe busy, with a label that names the work, while the request runs', async () => {
-    // Finding F7, animation J.
-    store.view.set(expired);
-    fixture.detectChanges();
-    vi.spyOn(fixture.componentInstance, 'redirect').mockImplementation(() => {});
-
-    const button = subscribeButton();
-    button.click();
-    fixture.detectChanges();
-
-    expect(button.getAttribute('aria-busy')).toBe('true');
-    expect(button.textContent).toContain('Opening checkout…');
-    expect(button.disabled).toBe(true);
-
-    http.expectOne('/api/billing/checkout').flush({ url: 'https://example.com/checkout' });
-    await fixture.whenStable();
-  });
-
-  it('a failed checkout call shows a message and enables the button again', async () => {
-    store.view.set(expired);
-    fixture.detectChanges();
-    vi.spyOn(fixture.componentInstance, 'redirect').mockImplementation(() => {});
-
-    subscribeButton().click();
-
-    http
-      .expectOne('/api/billing/checkout')
-      .flush(null, { status: 500, statusText: 'Server Error' });
-    await fixture.whenStable();
-    fixture.detectChanges();
-
-    const alert = fixture.nativeElement.querySelector('[role="alert"]') as HTMLElement;
-    expect(alert.textContent).toContain('Could not start checkout');
-    expect(subscribeButton().disabled).toBe(false);
+    expect(router.url).toBe('/subscribe');
+    // http.verify() in afterEach proves the click sent no request of its own.
   });
 });
