@@ -480,6 +480,63 @@ describe('FocusCardComponent', () => {
     expect(statusEl().textContent?.trim()).toBe('The explanation is ready.');
   });
 
+  /**
+   * Issue #139. `ReaderPageComponent` binds `tokenResultText` from `SessionStore.tokenResult()`,
+   * already settled by the time `isStreaming` turns false — see `SessionStore.reportTokenResult`'s
+   * own KDoc. This component joins it into the one "ready" sentence, so a screen reader hears one
+   * message and not two: issue #99 already forbids a second live region announcing at the same
+   * moment, and a second write to this same region a moment later would read as two messages just
+   * as surely.
+   */
+  describe('the token result, joined into the one "ready" message', () => {
+    it('joins a used-token result into the one sentence', () => {
+      fixture.componentRef.setInput('isStreaming', true);
+      fixture.detectChanges();
+      fixture.componentRef.setInput('tokenResultText', '1 token used. 35 tokens left.');
+      fixture.componentRef.setInput('isStreaming', false);
+      fixture.detectChanges();
+
+      expect(statusEl().textContent?.trim()).toBe(
+        'The explanation is ready. 1 token used. 35 tokens left.',
+      );
+    });
+
+    it('joins a no-token-used result into the one sentence', () => {
+      fixture.componentRef.setInput('isStreaming', true);
+      fixture.detectChanges();
+      fixture.componentRef.setInput('tokenResultText', 'No token used. This text existed already.');
+      fixture.componentRef.setInput('isStreaming', false);
+      fixture.detectChanges();
+
+      expect(statusEl().textContent?.trim()).toBe(
+        'The explanation is ready. No token used. This text existed already.',
+      );
+    });
+
+    it('says only "ready" when there is no token result to report', () => {
+      fixture.componentRef.setInput('isStreaming', true);
+      fixture.detectChanges();
+      fixture.componentRef.setInput('isStreaming', false);
+      fixture.detectChanges();
+
+      expect(statusEl().textContent?.trim()).toBe('The explanation is ready.');
+    });
+
+    it('says nothing about a token when the stream failed, even with a result text bound', () => {
+      // Belt and braces: `ReaderPageComponent` never binds a token result on a failed explain (see
+      // `SessionStore.reportTokenResult`), but the announcement must stay silent even if it did —
+      // issue #99's own rule that a failed stream never says "ready".
+      fixture.componentRef.setInput('isStreaming', true);
+      fixture.detectChanges();
+      fixture.componentRef.setInput('tokenResultText', '1 token used. 35 tokens left.');
+      fixture.componentRef.setInput('explainFailed', true);
+      fixture.componentRef.setInput('isStreaming', false);
+      fixture.detectChanges();
+
+      expect(statusEl().textContent?.trim()).toBe('');
+    });
+  });
+
   it('announces one full stream exactly two times, and not once for every token', () => {
     // `SessionStore.isStreaming` and `SessionStore.streamingText` are the two signals the reader
     // page binds into this component's inputs. This test drives those same signals the way

@@ -411,6 +411,24 @@ export class FocusCardComponent {
    * stream must not say "The explanation is ready.", because it is not. The learner already reads
    * why, from the reader page's own error banner, sign-in panel, or subscribe wall. */
   readonly explainFailed = input.required<boolean>();
+  /**
+   * The visible token-result sentence for the action that just finished, or `''` when there is
+   * none to report yet, or nothing to report at all. Issue #139: `ReaderPageComponent` binds this
+   * from `SessionStore.tokenResult()` — a text such as "1 token used. 35 tokens left." or "No
+   * token used. This text existed already." Left `''` on a failed stream, which already says
+   * nothing at all — see [explainFailed].
+   *
+   * `SessionStore` does not await the account read this comes from before `isStreaming` turns
+   * false — an earlier version did, so this value would always be settled by the time the
+   * constructor's effect below builds "The explanation is ready.", and a real run of this
+   * project's own layout suite caught what that delay cost the card's own height. So this value
+   * can still be `''` — not yet known — at that exact moment, and the constructor's effect below
+   * appends it in a second write of the same status paragraph, once it arrives, rather than
+   * waiting for it. On an ordinary connection that second write follows within one small GET's
+   * round trip; on a slow one, a screen reader can hear "ready" before it hears the token
+   * sentence, which is this design's one acknowledged imperfection over one joined utterance.
+   */
+  readonly tokenResultText = input<string>('');
   /** The step number and the verb of the node in focus, for the eyebrow. The reader page supplies
    * both from `NodeView`. */
   readonly step = input<number | null>(null);
@@ -456,6 +474,10 @@ export class FocusCardComponent {
   private wasStreaming = false;
   /** The pending clear of "The explanation is ready.", or `null` when none is pending. */
   private readyStatusTimer: ReturnType<typeof setTimeout> | null = null;
+  /** True from the moment a successful stream ends and [tokenResultText] is still `''`, until the
+   * second effect below appends it — see that input's own KDoc for why this two-step write
+   * exists. Never true after a failed stream: there is nothing to append. */
+  private awaitingTokenResult = false;
 
   readonly canExplain = computed(
     () =>
@@ -536,13 +558,24 @@ export class FocusCardComponent {
         // transition for it.
         this.landed.set(false);
       } else if (!streaming && wasStreaming) {
+        this.awaitingTokenResult = false;
         if (this.explainFailed()) {
           // The stream ended, but it did not succeed. "Ready" would be false, so the element goes
           // quiet instead. See [explainFailed]'s own comment for where the learner reads why.
           this.streamAnnouncement.set('');
           return;
         }
-        this.streamAnnouncement.set('The explanation is ready.');
+        // Issue #139. `tokenResultText` may already hold the answer — join it in this one write —
+        // or may still be `''` because the account read has not settled yet. In the second case
+        // the next effect appends it once it does; see [tokenResultText]'s own KDoc for why this
+        // method does not wait for it here.
+        const tokenText = this.tokenResultText();
+        if (tokenText === '') {
+          this.awaitingTokenResult = true;
+          this.streamAnnouncement.set('The explanation is ready.');
+        } else {
+          this.streamAnnouncement.set(`The explanation is ready. ${tokenText}`);
+        }
         // See [READY_STATUS_MILLIS] for how long this text stays. Cleared on destroy below, so a
         // card the learner has already left never writes to a signal nobody reads any more.
         this.readyStatusTimer = setTimeout(() => {
@@ -550,6 +583,17 @@ export class FocusCardComponent {
           this.streamAnnouncement.set('');
         }, READY_STATUS_MILLIS);
       }
+    });
+
+    // Issue #139's second half: appends the token result to the sentence the effect above just
+    // wrote, the one time it arrives after that write rather than in it. Reads only
+    // [tokenResultText], so a change to it while [awaitingTokenResult] is false — the ordinary
+    // case, once this has already run once for the current answer — does nothing.
+    effect(() => {
+      const tokenText = this.tokenResultText();
+      if (!this.awaitingTokenResult || tokenText === '') return;
+      this.awaitingTokenResult = false;
+      this.streamAnnouncement.set(`The explanation is ready. ${tokenText}`);
     });
 
     inject(DestroyRef).onDestroy(() => this.clearReadyStatusTimer());

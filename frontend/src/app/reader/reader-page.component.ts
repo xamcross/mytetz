@@ -3,9 +3,11 @@ import { toSignal } from '@angular/core/rxjs-interop';
 import { Title } from '@angular/platform-browser';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { map } from 'rxjs';
+import { METERED_STATUSES } from '../account/allowance-meter.component';
 import { WallCode, WallPanelComponent } from '../account/wall-panel.component';
 import { QuizPanelComponent } from '../assess/quiz-panel.component';
 import { SignInPanelComponent } from '../auth/sign-in-panel.component';
+import { AccountStore } from '../core/account.store';
 import { ApiService } from '../core/api.service';
 import { QuizKind, SpanPayload, Verb } from '../core/models';
 import { BreadcrumbComponent } from './breadcrumb.component';
@@ -191,6 +193,7 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
                 [streamingText]="store.streamingText()"
                 [isStreaming]="store.isStreaming()"
                 [explainFailed]="store.error() !== null"
+                [tokenResultText]="tokenResultAnnouncement()"
                 [step]="step()"
                 [verbLabel]="verbLabel()"
                 [topicLabel]="topicLabel()"
@@ -204,17 +207,33 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
                 check on the node in focus.
               -->
               <div class="focus__actions">
+                <!--
+                  Issue #139. "1 token" is the maximum price: a cache hit spends nothing, but the
+                  button cannot know that before the click. aria-label keeps the accessible name
+                  "Test me" fixed, so the price joins the description aria-describedby names and
+                  not the name itself — the same split the verb picker keeps.
+                -->
                 <button
                   type="button"
                   class="mt-pill mt-pill--ghost"
+                  [class.reader__priced-pill]="showTokenPrice()"
                   data-testid="test-me"
+                  aria-label="Test me"
+                  [attr.aria-describedby]="showTokenPrice() ? 'test-me-price' : null"
                   (click)="testMe()"
                 >
                   Test me
+                  @if (showTokenPrice()) {
+                    <!-- A non-breaking space, so "1" and "token" always wrap together. -->
+                    <span class="reader__action-price" id="test-me-price">1&nbsp;token</span>
+                  }
                 </button>
                 <!-- One control at a time: a completed session offers to start a new one, and an
                      active session offers to end itself. Never both — a learner who has just
-                     completed a session has nothing left here to complete again. -->
+                     completed a session has nothing left here to complete again. Neither carries a
+                     price: completing a session spends nothing, and starting a new session on a
+                     topic this learner already read spends nothing either — its seed is already
+                     stored (see SessionService.create's content-addressed seed lookup). -->
                 @if (store.isCompleted()) {
                   <button
                     type="button"
@@ -235,6 +254,12 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
                   </button>
                 }
               </div>
+              <!--
+                Issue #139. Reserves its own line at every moment, whether or not it holds text, so
+                its own arrival and departure move nothing below it — the focus card's own body
+                sits above this row and is never affected either way.
+              -->
+              <p class="focus__token-result" role="presentation">{{ tokenResultAnnouncement() }}</p>
             }
 
             @if (quizKind(); as kind) {
@@ -253,10 +278,16 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
             <button
               type="button"
               class="mt-pill mt-pill--ghost reader__exam"
+              [class.reader__priced-pill]="showTokenPrice()"
               data-testid="exam"
+              aria-label="Exam"
+              [attr.aria-describedby]="showTokenPrice() ? 'exam-price' : null"
               (click)="exam()"
             >
               Exam
+              @if (showTokenPrice()) {
+                <span class="reader__action-price" id="exam-price">1&nbsp;token</span>
+              }
             </button>
             <app-trail-rail
               [nodes]="store.tree()"
@@ -324,9 +355,39 @@ const MINOR_WORDS: ReadonlySet<string> = new Set([
          clear of the shadow's own 5px, a margin above the 12px the criterion asks for. */
       .focus__actions {
         display: flex;
+        /* Issue #139. flex-start, not the flex default of stretch: a priced pill grows a second
+           line for its price and a plain pill next to it does not, and stretch would pull the
+           plain pill's own height up to match, leaving empty space inside it. flex-start keeps
+           every pill in the row its own natural height, aligned at the top. */
+        align-items: flex-start;
         gap: 10px;
         flex-wrap: wrap;
         margin-top: 20px;
+      }
+      /* Issue #139. A pill that carries a price grows a second, small line for it, so it turns
+         from .mt-pill's own single-line row into a two-line column: the label on top, the price
+         under it, both start-aligned so neither the label nor the price drifts sideways. */
+      .reader__priced-pill {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 2px;
+      }
+      /* Inherits its colour from the pill it sits inside — --mt-teal on --mt-surface for a ghost
+         pill (5.47:1), already above the 4.5:1 an AA small text needs, so this rule adds no new
+         colour token. */
+      .reader__action-price {
+        font-size: 11px;
+        font-weight: 800;
+      }
+      /* Issue #139. One line, reserved whether or not it holds text, so the sentence that names
+         the true result of an action moves nothing below it when it appears or clears. */
+      .focus__token-result {
+        margin: 8px 0 0;
+        min-height: 20px;
+        font-size: 14px;
+        font-weight: 700;
+        line-height: 20px;
+        color: var(--mt-muted);
       }
       .reader__centre {
         max-width: 620px;
@@ -439,7 +500,33 @@ export class ReaderPageComponent {
   private readonly router = inject(Router);
   private readonly titleService = inject(Title);
   private readonly api = inject(ApiService);
+  private readonly account = inject(AccountStore);
   readonly store = inject(SessionStore);
+
+  /** True for a signed-in learner with a live count — see [METERED_STATUSES]. Issue #139: Test me
+   * and Exam both spend a token, so their price shows only where a token could genuinely be
+   * spent. A visitor with no account, or an account with no live count, sees no price. */
+  protected readonly showTokenPrice = computed(() =>
+    METERED_STATUSES.has(this.account.view()?.status ?? ''),
+  );
+
+  /**
+   * The short, visible sentence for the control row: what the last finished explanation truly
+   * spent, from `SessionStore.tokenResult()` — the true `remaining` before and after the account
+   * read, never a guess. `''` shows nothing, and the row's own reserved height keeps that from
+   * moving anything.
+   *
+   * The same string also reaches `FocusCardComponent`, which joins it into the one message a
+   * screen reader hears alongside "The explanation is ready." — see that component's own
+   * `tokenResultText` input.
+   */
+  protected readonly tokenResultAnnouncement = computed<string>(() => {
+    const result = this.store.tokenResult();
+    if (result === null) return '';
+    if (!result.usedToken) return 'No token used. This text existed already.';
+    const word = result.remaining === 1 ? 'token' : 'tokens';
+    return `1 token used. ${result.remaining} ${word} left.`;
+  });
 
   /**
    * Read reactively rather than from `route.snapshot`. Angular reuses a component instance when only
