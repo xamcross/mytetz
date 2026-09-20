@@ -32,41 +32,52 @@ const METERED_STATUSES: ReadonlySet<string> = new Set([
     @if (view(); as account) {
       <div class="allowance-meter">
         @if (metered(account.status)) {
-          <span
-            class="allowance-meter__count"
-            [class.allowance-meter__count--tick]="ticked()"
-            (animationend)="onCountAnimationEnd($event)"
-          >
-            <span aria-hidden="true">{{ account.remaining }} of {{ account.allowance }} left</span>
-            <span aria-hidden="true" class="allowance-meter__period">{{
-              ' ' + periodWords(account.status)
-            }}</span>
-            <span class="mt-sr-only"
-              >{{ account.remaining }} of {{ account.allowance }} left
-              {{ periodWords(account.status) }}</span
+          <!-- Issue #137. The count and the detail text keep their own baseline-aligned group,
+               apart from the Subscribe link below: a coral pill is taller than a line of text, and
+               issue #141's own centre-line rule found that sharing one baseline group with the
+               pill moved the count text off the bar's true centre. This wrapper keeps that group
+               exactly as issue #141 left it, whatever else the row also holds. -->
+          <span class="allowance-meter__text">
+            <span
+              class="allowance-meter__count"
+              [class.allowance-meter__count--tick]="ticked()"
+              (animationend)="onCountAnimationEnd($event)"
             >
+              <span aria-hidden="true"
+                >{{ account.remaining }} of {{ account.allowance }} left</span
+              >
+              <span aria-hidden="true" class="allowance-meter__period">{{
+                ' ' + periodWords(account.status)
+              }}</span>
+              <span class="mt-sr-only"
+                >{{ account.remaining }} of {{ account.allowance }} left
+                {{ periodWords(account.status) }}</span
+              >
+            </span>
+            @if (account.status === 'TRIALING') {
+              @if (trialEndText(account.trialEndsAtEpochMillis); as end) {
+                <span class="allowance-meter__detail allowance-meter__detail--trial"
+                  >Trial ends {{ end }}.</span
+                >
+              }
+            } @else {
+              @if (resetText(account.resetsAtEpochMillis); as reset) {
+                <span class="allowance-meter__detail">Resets {{ reset }}.</span>
+              }
+            }
           </span>
           @if (account.status === 'TRIALING') {
-            <!-- Issue #137. A learner in trial had no path to the plan screen from the header at
-                 all: METERED_STATUSES already gives TRIALING a live count, so the plain-else
-                 Subscribe link below never rendered for this status. This link is scoped to the
-                 header alone (--trial, hidden outside :host-context(.bar)) and to a wide enough
-                 header (see the media query below): the account page carries its own primary
-                 Subscribe control instead, in AccountPageComponent's action row. -->
+            <!-- A learner in trial had no path to the plan screen from the header at all:
+                 METERED_STATUSES already gives TRIALING a live count, so the plain-else Subscribe
+                 link below never rendered for this status. This link is scoped to the header
+                 alone (--trial, hidden outside :host-context(.bar)) and to a wide enough header
+                 (see the media query below): the account page carries its own primary Subscribe
+                 control instead, in AccountPageComponent's action row. -->
             <a
               routerLink="/subscribe"
               class="mt-pill mt-pill--coral allowance-meter__subscribe allowance-meter__subscribe--trial"
               >Subscribe</a
             >
-            @if (trialEndText(account.trialEndsAtEpochMillis); as end) {
-              <span class="allowance-meter__detail allowance-meter__detail--trial"
-                >Trial ends {{ end }}.</span
-              >
-            }
-          } @else {
-            @if (resetText(account.resetsAtEpochMillis); as reset) {
-              <span class="allowance-meter__detail">Resets {{ reset }}.</span>
-            }
           }
         } @else {
           <a routerLink="/subscribe" class="mt-pill mt-pill--coral allowance-meter__subscribe"
@@ -84,10 +95,21 @@ const METERED_STATUSES: ReadonlySet<string> = new Set([
       }
       .allowance-meter {
         display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 8px;
+        font-size: 13px;
+      }
+      /* Issue #137. The count and the detail text, in their own baseline-aligned group — see the
+         template's own comment on why this stands apart from the Subscribe link. Every rule
+         .allowance-meter itself carried for these two children before this issue now lives here
+         instead, unchanged. */
+      .allowance-meter__text {
+        display: flex;
         align-items: baseline;
         flex-wrap: wrap;
         gap: 4px 8px;
-        font-size: 13px;
+        min-width: 0;
       }
       .allowance-meter__count {
         font-weight: 700;
@@ -145,7 +167,8 @@ const METERED_STATUSES: ReadonlySet<string> = new Set([
        * meter on one line, the same way it always was; the account card, outside the bar
        * element, keeps the wrap.
        */
-      :host-context(.bar) .allowance-meter {
+      :host-context(.bar) .allowance-meter,
+      :host-context(.bar) .allowance-meter__text {
         flex-wrap: nowrap;
       }
       /*
