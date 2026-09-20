@@ -45,7 +45,20 @@ frontend and the backend for "analytics", "gtag", "pixel", "doubleclick", "hotja
 | MongoDB Atlas | Holds the database, tier M0, on AWS in `eu-central-1` (Frankfurt). | `docs/deploy.md:24` |
 | Cloudflare Turnstile | Only when `MYTETZ_TURNSTILE_SECRET` is set: the site sends the widget token (and, when known, the caller's IP address) to `challenges.cloudflare.com` in front of a magic-link request and the start of a Google sign-in. When the key is not set, the check always passes and the site never contacts Cloudflare for it. | `backend/api/src/main/kotlin/com/mytetz/api/Turnstile.kt:81-146`; `docs/deploy.md:719-751` |
 | Wikimedia | Only when `MYTETZ_COMMONS_IMAGES=true` (off by default since 2026-09-19): (1) the server sends one search request to `commons.wikimedia.org`, built from the highlighted phrase or the model's own search terms, with a header that names the site and no learner IP address and no account data; (2) the learner's own browser then loads the picture directly from `upload.wikimedia.org`, with `referrerpolicy="no-referrer"`, so Wikimedia's server does not learn which mytetz page asked for it, but it does receive the browser's IP address, the same as any direct image request on the web. | `backend/api/src/main/kotlin/com/mytetz/api/CommonsClient.kt:344-367,404-426`; `frontend/src/app/reader/media-renderer.component.ts:65-70,123-131`; `docs/deploy.md:859-891` |
+| Resend | The learner's email address and the magic-link sign-in URL, in a `POST /emails` request, only while `MYTETZ_MAIL_MODE=resend`. Nothing else reaches Resend. In the alternative `log` mode (development only), no request reaches Resend at all; the link is written to the server's own log instead. | `backend/account/src/main/kotlin/com/mytetz/account/MailSender.kt:36-45,53-65,93-138` |
 | A log or alert provider | Not confirmed. No such provider is set up today. `docs/deploy.md` states plainly: "No drain, alert, or uptime check exists yet," and that once a provider is chosen, it will receive a user id (in a `BILLING_DRIFT` line) and an email address (in an `ACCOUNT_LINK_CONFLICT` line). | `docs/deploy.md:342-345,385,389,432-447` |
+
+## 3a. IP addresses: the trial cap and the rate limiter (added in review round 2)
+
+| Fact | Source |
+| --- | --- |
+| `ClientAddress.of` resolves the caller's IP address from a trusted proxy header (or the socket peer with no proxy configured), and returns the **full address**, capped at 64 characters. It is not hashed and not truncated to a prefix. | `backend/api/src/main/kotlin/com/mytetz/api/RateLimit.kt:58-107` |
+| The rate limiter (`FixedWindowRateLimiter`) keeps this address as a key in a plain in-memory map on the server process. It is never written to the database. A server restart clears it. | `backend/api/src/main/kotlin/com/mytetz/api/RateLimit.kt:215-269` |
+| The trial cap stores this same address as the `_id` of a `TrialStartCount` document in MongoDB (the `trialStarts` collection), to refuse a 4th free trial from one address inside one rolling day. `TRIAL_CAP_PER_IP_BUCKET = 3`, `TRIAL_CAP_WINDOW_MILLIS` = one day. | `backend/billing/src/main/kotlin/com/mytetz/billing/BillingService.kt:99-129,277-281`; `backend/billing/src/main/kotlin/com/mytetz/billing/Subscription.kt:111-118` |
+| The `trialStarts` collection carries a TTL index on `windowExpiresAt`, so a trial-cap record expires automatically once its rolling window ends. | `backend/billing/src/main/kotlin/com/mytetz/billing/BillingRepository.kt:56-58` |
+| A capped address is logged in plain text, at INFO level, in a `TRIAL_CAP_REACHED` line. | `backend/billing/src/main/kotlin/com/mytetz/billing/BillingService.kt:106-113` |
+| Cloudflare Turnstile, when its key is set, receives this same address as the `remoteip` field of the `siteverify` call. | `backend/api/src/main/kotlin/com/mytetz/api/AuthRoutes.kt:254,311`; `backend/api/src/main/kotlin/com/mytetz/api/Turnstile.kt:113-128` |
+| Cloudflare and fly.io each see the visitor's IP address as an ordinary part of running the network and the reverse proxy; this is a fact about the deployment architecture, not a separate application feature. | `docs/deploy.md:1-10` |
 
 ## 4. Retention
 
@@ -56,21 +69,28 @@ frontend and the backend for "analytics", "gtag", "pixel", "doubleclick", "hotja
 | Billing event record | Expires 90 days after it is received. | `backend/billing/src/main/kotlin/com/mytetz/billing/BillingRepository.kt:37,50-53` |
 | An explanation (the shared text a topic shows) | May be removed once it is old (more than 90 days by default), has never been read again, and no learner's own open session still points at it. A seed explanation is never removed this way. This store holds no personal data, so this rule is a storage rule, not a privacy rule. | `backend/api/src/main/kotlin/com/mytetz/api/EvictionConfig.kt`; `docs/deploy.md:212-238` |
 | Account deletion | Removes: the account row and every sign-in session; every reading session; every quiz attempt; the daily allowance counter. It never removes an explanation — an explanation belongs to no single learner, is shared with other learners, and holds no personal data. | `backend/api/src/main/kotlin/com/mytetz/api/AuthRoutes.kt:388-403,420-450`; `backend/account/src/main/kotlin/com/mytetz/account/AccountService.kt:171-174` |
-| The billing/subscription row after account deletion | Not confirmed. The account-deletion route does not call a delete method on the subscription store. | `backend/api/src/main/kotlin/com/mytetz/api/AuthRoutes.kt:420-450` (no call found) |
+| The billing/subscription row after account deletion | Confirmed as a gap: the account-deletion route does not call a delete method on the subscription store, and does not call Freemius to cancel a paid subscription either. Deleting an account today does not cancel a paid subscription; the learner must cancel first, through "Manage subscription." The main session tracks this as a product defect to fix separately. | `backend/api/src/main/kotlin/com/mytetz/api/AuthRoutes.kt:420-450` (no call to a subscription-delete or a Freemius-cancel method found) |
+| The account document itself | Confirmed: it has no TTL index and no other automatic-deletion rule. `AccountRepository.ensureIndexes` creates only a unique index on `email`, a sparse unique index on `googleSub`, and the two TTL indexes named above, on `magicLinkTokens` and `authSessions` — none on `users`. An account therefore stays until a learner deletes it, or until code changes this rule. | `backend/account/src/main/kotlin/com/mytetz/account/AccountRepository.kt:42-57` |
 | Logs, in general | Not confirmed. No log retention is set up today; see the log-provider row in section 3. | `docs/deploy.md:342-347` |
 | A database backup | Not confirmed. `docs/deploy.md` states no backup policy for the Atlas cluster beyond the free tier's own auto-pause after about 60 days of no use. | `docs/deploy.md:579` |
 
 ## 5. Public explanation pages
 
-A public explanation page shows the learner's own highlighted phrase as the page's
-heading, together with the explanation text, at a fixed web address. This page is
-addressable once any learner reaches that exact phrase in that exact place, before
-any review, marked so that a search engine does not index it. Once an operator
-reviews and approves the page, it also appears on the `/glossary` page and a search
-engine may index it. The page carries no name, no email address and no other detail
-that names the learner who first highlighted the phrase — but the phrase itself, in
-the learner's own words, can stay visible to the public, including a person who has
-never signed in.
+A public explanation page shows a highlighted phrase as the page's heading,
+together with the explanation text, at a fixed web address. The phrase is a span
+of the site's own topic text that a learner selected, not a sentence the learner
+wrote. This page is addressable once any learner reaches that exact phrase in
+that exact place, before any review, marked so that a search engine does not
+index it. Once an operator reviews and approves the page, it also appears on the
+`/glossary` page and a search engine may index it. The page carries no name, no
+email address and no other detail that names the learner who first reached it —
+but the words that learner highlighted can stay visible to the public, including
+a person who has never signed in.
+
+(Round 2 correction: an earlier draft of this row called the phrase "the
+learner's own words." That was wrong. A learner selects a phrase from the site's
+own text; the phrase is never something the learner wrote. The policy text uses
+"the words you highlighted" instead, which does not claim authorship.)
 
 Source: `docs/superpowers/specs/2026-09-19-public-surface-design.md`, section 7
 (lines 356-448), on the page's address, the `noindex` state before a review, and the
@@ -92,18 +112,42 @@ These numbers agree with `/faq` (`backend/api/src/main/kotlin/com/mytetz/api/Faq
 `/subscribe` (`frontend/src/app/account/subscribe-page.component.ts:76-119`), and
 `llms.txt` (`frontend/public/llms.txt:18-21`), read on 2026-09-20.
 
+## 6a. Where each recipient is established (added in review round 2)
+
+Confirmed from each company's own privacy page, read on 2026-09-20. Not a legal
+opinion on which safeguard applies to mytetz's own agreement with each one — see
+the gap list below.
+
+| Recipient | What the official page states | Source |
+| --- | --- | --- |
+| Anthropic | Anthropic PBC, at 548 Market St, PMB 90375, San Francisco, CA 94104 (United States). Anthropic Ireland, Limited (Dublin) serves EU users of Anthropic's own service. | `https://www.anthropic.com/legal/privacy` |
+| Google | Google Ireland Limited, Gordon House, Barrow Street, Dublin 4, Ireland, is the controller for a user in the EEA or Switzerland. | `https://policies.google.com/privacy` |
+| Cloudflare | Cloudflare, Inc., 101 Townsend St, San Francisco, CA 94107 (United States), with subsidiaries elsewhere. States it relies on the EU-U.S. Data Privacy Framework, the Swiss-U.S. DPF, the UK Extension, and standard contractual clauses for a transfer from the EU, UK or Switzerland. | `https://www.cloudflare.com/privacypolicy/` |
+| Freemius | Freemius Inc., 4023 Kennett Pike, Wilmington, 19807 DE (United States). | `https://freemius.com/privacy/` |
+| Resend | Operated by Plus Five Five, Inc. The policy names transfers to the United States but does not state the company's own country of establishment. Not confirmed. | `https://resend.com/legal/privacy-policy` |
+| fly.io | Not confirmed. The privacy statement names no operating entity and no country of incorporation; it states only that "information that we collect will be stored and processed in the United States," which is a statement about fly.io's own data about its own customers, not about where mytetz's own machine runs (Frankfurt — see `docs/deploy.md:16-26`). | `https://fly.io/legal/privacy-policy/` |
+| MongoDB Atlas | The policy names "MongoDB, Inc." as the controller, with a U.S. phone number and reference to U.S. arbitration rules, but does not explicitly state a country of establishment on this page. Not fully confirmed. | `https://www.mongodb.com/legal/privacy/privacy-policy` |
+
 ## Official sources read for this work
 
 | Source | Read on | What it gave |
 | --- | --- | --- |
 | `https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX:32002L0058` | 2026-09-20 | The full text of Article 5(3) of the ePrivacy Directive: a cookie needs consent, unless it is strictly necessary for a service the user asked for. |
-| `https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX%3A32011L0083` | 2026-09-20 | A partial read of Directive 2011/83/EU: Article 9's 14-day withdrawal period; Article 16(m)'s exception for digital content; the existence and purpose of the Annex I(B) model withdrawal form. |
+| `https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX%3A32011L0083` | 2026-09-20 (read a second time in review round 2) | A partial read of Directive 2011/83/EU: Article 9(1)'s 14-day withdrawal period; Article 14(3)'s proportionate-payment rule for a service already begun; Article 16(a)'s exception for a fully performed service (needs a prior express consent on a durable medium, and an acknowledgment); Article 16(m)'s exception for digital content not on a tangible medium; the existence and purpose of the Annex I(B) model withdrawal form. `docs/legal/terms.md` states only the 14-day period, and no early-termination claim, because mytetz collects no such consent or acknowledgment today — see the gap list. |
+| `https://ico.org.uk/for-organisations/uk-gdpr-guidance-and-resources/individual-rights/the-right-to-be-informed/what-privacy-information-should-we-provide/` | 2026-09-20 | The UK ICO's list of the 12 items Article 13 asks a privacy notice to cover, including a transfer to a third country, the right to withdraw a consent, the contract/statutory-requirement disclosure, and automated decision-making. Used to check `docs/legal/privacy.md` for a missing item, since the raw GDPR article text still did not load — see below. |
 | `https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX%3A32019L0770` | 2026-09-20 | A summary-level read of Directive (EU) 2019/770 on the conformity of a digital service with the contract, and the trader's duty to keep supplying it. |
 | `https://freemius.com/blog/merchant-of-record/` | 2026-09-20 | Confirms Freemius names itself the merchant of record: "the legal entity responsible for selling your product... handles taxes, global compliance, payments, and chargebacks." |
 | `https://privacy.claude.com/en/articles/7996866-how-long-do-you-retain-my-data` | 2026-09-20 | Anthropic states it deletes API inputs and outputs "within 30 days of receipt or generation." |
 | `https://www.anthropic.com/legal/commercial-terms` | 2026-09-20 | States "Anthropic may not train models on Customer Content from Services." |
 | `https://developers.google.com/terms/api-services-user-data-policy` | 2026-09-20 | States a developer's privacy policy must disclose how the application uses Google user data, and the Limited Use rules. |
 | `https://support.google.com/accounts/answer/1350409` | 2026-09-20 | States 13 years as the baseline minimum age for a Google Account, with several countries set higher, up to 16. |
+| `https://www.anthropic.com/legal/privacy` | 2026-09-20 | Anthropic PBC (United States); Anthropic Ireland, Limited serves EU users. See section 6a. |
+| `https://policies.google.com/privacy` | 2026-09-20 | Google Ireland Limited is the controller for an EEA or Swiss user. See section 6a. |
+| `https://www.cloudflare.com/privacypolicy/` | 2026-09-20 | Cloudflare, Inc. (United States); states its own transfer safeguards. See section 6a. |
+| `https://freemius.com/privacy/` | 2026-09-20 | Freemius Inc., Delaware (United States). See section 6a. |
+| `https://resend.com/legal/privacy-policy` | 2026-09-20 | Names the operating entity, Plus Five Five, Inc.; does not state its country. See section 6a. |
+| `https://fly.io/legal/privacy-policy/` | 2026-09-20 | Names no operating entity and no country. See section 6a. |
+| `https://www.mongodb.com/legal/privacy/privacy-policy` | 2026-09-20 | Names "MongoDB, Inc." as controller; does not explicitly state a country on this page. See section 6a. |
 
 ### A source this work could not read in full
 
@@ -129,8 +173,10 @@ place the law asks for more than these two values.
 | The controller's identity and address | "The identity and the contact details of the controller" | GDPR, Article 13(1)(a) |
 | A legal entity name, a postal address, and (where the operator's country asks for one) a register number, on the imprint | Most imprint laws in the EU ask for the trader's name, legal form and geographic address | Directive 2000/31/EC (the e-Commerce Directive), Article 5(1) |
 | A supervisory authority to name for a complaint | "The right to lodge a complaint with a supervisory authority" | GDPR, Article 77 |
-| A named representative and register entry, on the imprint | The existing page headings "Represented by" and "Register entry" | (page headings from issue #5, not a specific law cited here) |
+| A named representative and a commercial register entry | The imprint no longer carries a "Represented by" or a "Register entry" section (review round 2, instruction I1: a section that only says "mytetz.com discloses none of this" tells a reader nothing). The gap itself is unchanged; only its place in the page changed, to a single closing note. | (no specific article cited here beyond the e-Commerce Directive row above) |
+| A VAT identification number | The imprint no longer carries a "VAT identification number" section, for the same reason as the row above. | (a VAT-registered trader's own jurisdiction, not cited here) |
 | The country whose law governs the contract | A governing-law clause ordinarily names one country | (no specific article; Rule 3 of issue #24 asks for a neutral clause instead) |
+| The exact safeguard for a transfer of data outside the EU | Article 13(1)(f) asks a privacy notice to name the safeguard for a transfer to a country with no adequacy decision, for example standard contractual clauses. mytetz named each recipient's own stated country and, where the recipient's own page said so, the safeguard that recipient claims for itself (section 6a). mytetz has not independently confirmed that this safeguard is also the one that applies under mytetz's own data-processing agreement with that recipient. The owner should check the data processing terms of each recipient named in section 3. | GDPR, Article 13(1)(f) |
 
 The three texts below use a neutral governing-law clause instead of a named
 country, as Rule 3 of issue #24 instructs.

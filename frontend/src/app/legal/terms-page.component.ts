@@ -1,4 +1,5 @@
 import { Component } from '@angular/core';
+import { RouterLink } from '@angular/router';
 
 /**
  * `/terms` — the terms of service.
@@ -10,28 +11,34 @@ import { Component } from '@angular/core';
  */
 @Component({
   selector: 'app-terms-page',
-  imports: [],
+  imports: [RouterLink],
   template: `
     <main class="legal-page">
       <h1>Terms of service</h1>
       <p class="legal-page__meta">
-        Last updated: 2026-09-20. mytetz announces a change to these terms on this page, with a new
-        "Last updated" date. mytetz treats your first use of the service after that date as your
-        acceptance of the change.
+        Last updated: 2026-09-20. mytetz posts a change to these terms on this page, with a new
+        "Last updated" date. See "Changes to these terms" below for what a change means for you.
       </p>
 
       <section>
         <h2>The service</h2>
         <p>
           mytetz.com ("mytetz") is a web app that explains a topic in short, plain text. You pick a
-          topic and read it. A highlight on any phrase asks a language model to write more detail,
-          and a person reviews the seed text of every topic before it is published. A model-written
-          explanation can still hold an error, so it is not professional, medical, legal or
-          financial advice, and you must not rely on it as one. You must be at least 16 years old to
-          use mytetz, or the lower age your own country's law sets for a child's own consent, down
-          to a floor of 13 years. You must use mytetz only for a lawful purpose, and you must not
-          try to disrupt the service, overload it, or access an account that is not your own.
+          topic and read it. A highlight on any phrase asks a language model to write more detail. A
+          person reviews the seed text of every topic before mytetz publishes it. A model-written
+          explanation can still hold an error. It is not professional, medical, legal or financial
+          advice. Do not rely on it as one.
         </p>
+        <p>
+          You must be at least 16 years old to use mytetz. A lower age may apply, if your own
+          country's law sets one for a child's own consent, down to a floor of 13 years.
+        </p>
+        <p>Use mytetz only for a lawful purpose. Do not:</p>
+        <ul>
+          <li>disrupt the service;</li>
+          <li>overload the service;</li>
+          <li>access an account that is not your own.</li>
+        </ul>
       </section>
 
       <section>
@@ -39,33 +46,29 @@ import { Component } from '@angular/core';
         <p>
           A new reader gets a free 7-day trial, worth 40 tokens, with no credit card. One token pays
           for one new explanation or one quiz. After the trial, a new explanation or quiz needs a
-          paid subscription. mytetz costs $12 each month. A subscriber gets 25 tokens each day, and
-          the count resets every day. A subscription renews each month until you cancel it. mytetz
-          may grant a short grace period after a missed renewal payment, so a late renewal does not
-          cut off your access without warning.
+          paid subscription. mytetz costs $12 each month. A subscriber gets 25 tokens each day. The
+          count resets every day. A subscription renews each month until you cancel it. mytetz may
+          grant a short grace period after a missed renewal payment. This grace period stops a late
+          renewal from cutting off your access without warning.
         </p>
       </section>
 
       <section>
         <h2>Payment and cancellation</h2>
         <p>
-          Freemius processes every payment for mytetz, and Freemius is the merchant of record:
-          Freemius, not mytetz, is the seller toward you for a paid subscription, and Freemius
-          handles your invoice, your payment method, a chargeback and a refund request. You cancel a
-          subscription on the account page: select "Manage subscription" to open the Freemius
-          customer portal, where you can cancel, change a payment method or read an invoice.
+          Freemius processes every payment for mytetz. Freemius is the merchant of record. Freemius,
+          not mytetz, is the seller toward you for a paid subscription. Freemius handles your
+          invoice, your payment method, a chargeback and a refund request. Cancel a subscription on
+          the <a routerLink="/account">account page</a>: select "Manage subscription" to open the
+          Freemius customer portal, where you can cancel, change a payment method or read an
+          invoice.
         </p>
         <p>
           <strong>Your right of withdrawal.</strong> As a consumer in the EU, you have 14 days from
-          the day you subscribe to withdraw from the contract with no reason, under Article 9 of
-          Directive 2011/83/EU. You may use the model form in Annex I(B) of that Directive, or any
-          other clear statement, sent to support&#64;mytetz.com. This right ends early once you ask
-          mytetz to start the paid service right away and you confirm that you know this ends your
-          right of withdrawal, under Article 16(m) of the same Directive — selecting a paid feature
-          during your trial or your subscription period is such a request. Outside the withdrawal
-          period, a refund request goes through the Freemius customer portal or to
-          support&#64;mytetz.com, and Freemius decides it under its own refund process, as the
-          merchant of record.
+          the day you subscribe to withdraw from the contract, with no reason (Directive 2011/83/EU,
+          Article 9). Freemius, as the seller, handles a withdrawal and a refund. Use the Freemius
+          customer portal, or write to support&#64;mytetz.com, and mytetz passes your statement on
+          to Freemius.
         </p>
       </section>
 
@@ -73,27 +76,38 @@ import { Component } from '@angular/core';
         <h2>Your account</h2>
         <p>
           You sign in with an email magic link or with a Google account. You are responsible for
-          keeping your sign-in method secure. You may delete your account at any time on the account
-          page. Deletion removes your account, every reading session, every quiz attempt and your
-          allowance counter, and it cannot be undone. Deletion does not remove an explanation you
-          triggered: an explanation is shared with other learners and holds no personal data, so it
-          can stay on the site after your account is gone. In the same way, a phrase you highlight,
-          and the explanation mytetz writes for it, can become a public page that stays visible to
-          other visitors, including one who has never signed in, even after you delete your account.
-          mytetz, and not you, owns the explanation text a model writes; you keep no exclusive right
-          in a phrase you merely highlight.
+          keeping your sign-in method secure. You may delete your account at any time, on the
+          <a routerLink="/account">account page</a>. Deletion removes your account, every reading
+          session, every quiz attempt and your allowance counter. This cannot be undone.
+        </p>
+        <p>
+          Deletion does not remove an explanation you triggered. An explanation is shared with other
+          learners, and holds no personal data, so it can stay on the site after your account is
+          gone. In the same way, a phrase you highlight, and the explanation mytetz writes for it,
+          can stay visible to other visitors after you delete your account, including a visitor who
+          has never signed in. You get no exclusive right in an explanation or in a phrase you
+          highlight; mytetz may show each explanation to other learners and to the public.
+        </p>
+        <p>
+          Deleting your account does not cancel a paid subscription. Cancel a subscription first,
+          with "Manage subscription," before you delete your account. Your subscription record can
+          stay in the database after your account is gone, because account deletion does not remove
+          it today.
+        </p>
+        <p>
+          mytetz can suspend or close an account that breaks these terms. mytetz gives no guarantee
+          that the service runs without a break.
         </p>
       </section>
 
       <section>
         <h2>Liability</h2>
         <p>
-          mytetz gives no warranty that an explanation is correct, complete or fit for a particular
-          purpose, beyond what the law of your country makes mandatory. To the fullest extent the
-          law allows, mytetz is not liable for a loss that follows from your reliance on a
-          model-written explanation. Nothing in these terms limits a liability that the law does not
-          allow a business to limit, and nothing in these terms removes a right that the law of your
-          country gives you as a consumer.
+          mytetz gives no warranty that an explanation is correct or complete, beyond what the law
+          of your country makes mandatory. To the fullest extent the law allows, mytetz is not
+          liable for a loss that follows from your reliance on a model-written explanation. Nothing
+          in these terms limits a liability that the law does not allow a business to limit. Nothing
+          in these terms removes a right that the law of your country gives you as a consumer.
         </p>
       </section>
 
@@ -102,17 +116,18 @@ import { Component } from '@angular/core';
         <p>
           The law of the country where the operator of mytetz.com is established applies to these
           terms. If you are a consumer, the mandatory consumer-protection law of the country where
-          you live stays in force regardless of this clause.
+          you live stays in force. This clause does not change that.
         </p>
       </section>
 
       <section>
         <h2>Changes to these terms</h2>
         <p>
-          mytetz may change these terms from time to time, for example to reflect a new feature, a
-          new price or a change in the law. mytetz posts every change on this page, with a new "Last
-          updated" date. A change that reduces your rights takes effect only for a subscription
-          period that starts after the change is posted.
+          mytetz may change these terms, for example for a new feature, a new price or a change in
+          the law. mytetz posts every change on this page, with a new "Last updated" date. A change
+          that reduces your rights takes effect only for a subscription period that starts after
+          mytetz posts it. If you do not agree with a change, cancel your subscription before your
+          next period starts.
         </p>
         <p>Write to support&#64;mytetz.com for a question about these terms.</p>
       </section>
@@ -122,6 +137,22 @@ import { Component } from '@angular/core';
     `
       :host {
         display: block;
+      }
+      /* Several sections here now hold more than one paragraph, or a paragraph and a list, so each
+         one keeps a bottom margin — the same reason PrivacyPageComponent states for its own p rule.
+         The component's own attribute gives this rule the higher specificity it needs to win over
+         the shared .legal-page p rule in styles.css, which sets margin: 0 for a page with one
+         paragraph per section. */
+      .legal-page p,
+      .legal-page li {
+        margin: 0 0 8px;
+        font-size: 15px;
+        line-height: 1.6;
+        color: var(--mt-prose);
+      }
+      .legal-page ul {
+        margin: 0 0 8px;
+        padding-left: 20px;
       }
     `,
   ],

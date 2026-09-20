@@ -19,39 +19,79 @@ import { RouterLink } from '@angular/router';
     <main class="legal-page">
       <h1>Privacy policy</h1>
       <p class="legal-page__meta">
-        Last updated: 2026-09-20. mytetz announces a change to this policy on this page, with a new
-        "Last updated" date.
+        Last updated: 2026-09-20. mytetz announces a change to this policy on this page. It gives
+        the page a new "Last updated" date.
+      </p>
+      <p>
+        This policy explains what mytetz.com ("mytetz") does with your data. It uses plain language,
+        as Article 12 of the GDPR asks.
       </p>
 
       <section>
-        <h2>Who we are</h2>
+        <h2>Who mytetz is</h2>
         <p>
-          mytetz.com is the controller of your data under the GDPR, and the contact point for every
-          request in this policy. Write to
-          <a href="mailto:support@mytetz.com">support@mytetz.com</a>
-          for any question about your data or this policy.
+          mytetz.com is the controller of your data under the GDPR. mytetz.com is also the contact
+          point for every request in this policy. Write to
+          <a href="mailto:support@mytetz.com">support@mytetz.com</a> for a question about your data
+          or this policy.
         </p>
       </section>
 
       <section>
-        <h2>The cookies we set</h2>
+        <h2>The cookies mytetz sets</h2>
         <p>
-          mytetz sets two strictly necessary cookies on every visit:
-          <code>mytetz_pid</code>, which identifies your browser, and <code>mytetz_sid</code>, which
-          carries your session once you sign in. Both are <code>HttpOnly</code> and
-          <code>Secure</code>, and both carry <code>SameSite=Lax</code>.
+          mytetz sets two strictly necessary cookies on every visit.
+          <code>mytetz_pid</code> identifies your browser. <code>mytetz_sid</code> carries your
+          session once you sign in. Both cookies are <code>HttpOnly</code> and <code>Secure</code>.
+          Both cookies carry <code>SameSite=Lax</code>.
         </p>
         <p>
-          A Google sign-in sets two more cookies, both short-lived: <code>mytetz_g_state</code> and
-          <code>mytetz_g_verifier</code>. Both cookies protect the sign-in exchange, and both expire
-          10 minutes after they are set, or once the sign-in completes.
+          A Google sign-in sets two more cookies: <code>mytetz_g_state</code> and
+          <code>mytetz_g_verifier</code>. Each one is short-lived and strictly necessary. Each one
+          expires 10 minutes after mytetz sets it, or once the sign-in completes.
         </p>
         <p>
-          Every cookie above is strictly necessary for the service you ask for, so Article 5(3) of
-          the ePrivacy Directive lets mytetz set it with no banner and no consent. mytetz sets no
-          tracking cookie: no analytics cookie, and no advertising cookie. No banner asks for your
-          consent, because there is nothing on this site to consent to.
+          Every cookie above is strictly necessary for the service you ask for. Article 5(3) of the
+          ePrivacy Directive lets mytetz set such a cookie with no banner and no consent. mytetz
+          sets no tracking cookie: no analytics cookie, and no advertising cookie. No banner asks
+          for your consent, because there is nothing on this site to consent to.
         </p>
+      </section>
+
+      <section>
+        <h2>The data mytetz holds</h2>
+        <p>
+          An email address is necessary to open an account. mytetz cannot open an account with no
+          email address. mytetz stores these groups of data:
+        </p>
+        <ul>
+          <li>
+            An account: your email address, an optional Google id, and two account times. This lets
+            you sign in and keeps your place.
+          </li>
+          <li>A sign-in session: a session id and its expiry. This keeps you signed in.</li>
+          <li>
+            A learning session: the topic, each phrase you highlight, and each explanation you read.
+            This lets you continue where you left off.
+          </li>
+          <li>A quiz attempt: your answers to one quiz. This shows your own result.</li>
+          <li>
+            An allowance counter: how many tokens you used today, or in your trial. This enforces
+            the token limit.
+          </li>
+          <li>
+            A subscription record: your payment status and your billing dates. This lets mytetz
+            grant or refuse access.
+          </li>
+          <li>
+            A billing event: a record of one Freemius webhook. This guards against a duplicate
+            charge or a duplicate grant.
+          </li>
+          <li>
+            A visitor with no account: only the <code>mytetz_pid</code> cookie value. mytetz stores
+            no further data under this id until you sign in.
+          </li>
+        </ul>
       </section>
 
       <section>
@@ -61,35 +101,38 @@ import { RouterLink } from '@angular/router';
           <li>MongoDB Atlas holds the database, on AWS in eu-central-1.</li>
           <li>Cloudflare runs the sign-in challenge and the network edge.</li>
           <li>
-            Anthropic receives the highlighted span and its ancestor chain for one explanation.
+            Anthropic receives the highlighted span and its ancestor chain, for one explanation.
             Anthropic never receives your name or your email address. Anthropic states that it
-            deletes an API input and output within 30 days, and that it does not train its models on
-            this data.
+            deletes an API input and output within 30 days. Anthropic states that it does not train
+            its models on this data.
           </li>
-          <li>Resend delivers the magic-link email.</li>
+          <li>
+            Resend delivers the magic-link email, only while mytetz uses the Resend sending mode.
+            Resend receives your email address and the sign-in link, and nothing else.
+          </li>
           <li>
             Google runs the Google sign-in. mytetz asks Google for your email address only, and for
             no other Google data.
           </li>
           <li>
-            Freemius processes payment. Freemius is the merchant of record: it is the seller toward
-            you for a paid subscription, and it handles your invoice, your payment method and a
-            refund request. Your email address reaches Freemius when you open a checkout or the
-            customer portal.
+            Freemius processes payment. Freemius is the merchant of record. Freemius is the seller
+            toward you for a paid subscription. Freemius handles your invoice, your payment method
+            and a refund request. Your email address reaches Freemius when you open a checkout or
+            the customer portal.
           </li>
           <li>
             Cloudflare Turnstile checks that a sign-in request comes from a person. mytetz contacts
-            Turnstile only while this check is switched on; while it is off, no request ever reaches
+            Turnstile only while this check is switched on. While it is off, no request ever reaches
             Turnstile, and every sign-in still works.
           </li>
           <li>
-            Wikimedia receives two kinds of request, and only while the operator has switched the
+            Wikimedia receives two kinds of request, only while the operator has switched the
             diagram-image feature on. First, mytetz's own server sends the highlighted phrase to
-            commons.wikimedia.org, to search for a licensed picture; this request carries no account
-            data and no learner IP address. Second, your own browser then loads the picture directly
-            from upload.wikimedia.org; this request carries no referrer, but it does carry your
-            browser's IP address, the same as any direct picture request on the web. While this
-            feature is off, which is the default, neither request ever happens.
+            commons.wikimedia.org, to search for a licensed picture. This request carries no account
+            data and no learner IP address. Second, your own browser loads the picture directly from
+            upload.wikimedia.org. This request carries no referrer, but it does carry your browser's
+            IP address, the same as any direct picture request on the web. While this feature is
+            off, which is the default, neither request ever happens.
           </li>
         </ul>
         <p>
@@ -100,24 +143,113 @@ import { RouterLink } from '@angular/router';
       </section>
 
       <section>
-        <h2>What can become public</h2>
+        <h2>Transfers outside the EU</h2>
         <p>
-          A highlighted phrase you pick, and the explanation mytetz writes for it, can become a
-          public page at a fixed web address, together with other learners who reach the same
-          phrase. This can happen before anyone reviews the page. Once an operator reviews and
-          approves the page, it can also appear in a public list and in a search engine. This page
-          never carries your name, your email address or any other detail that names you — but the
-          words you highlighted can stay visible to the public, including a visitor who has never
-          signed in, for as long as mytetz keeps that page.
+          Some of the companies above are established outside the European Economic Area. mytetz
+          read each one's own privacy page on 2026-09-20 to confirm this:
+        </p>
+        <ul>
+          <li>
+            Anthropic: the United States. Anthropic Ireland Limited, in Ireland, serves an EU user
+            of Anthropic's own service.
+          </li>
+          <li>
+            Google: Google Ireland Limited, in Ireland, is the controller for a user in the EEA or
+            in Switzerland.
+          </li>
+          <li>
+            Cloudflare: the United States (Cloudflare, Inc.). Cloudflare's own policy names the
+            EU-U.S. Data Privacy Framework and standard contractual clauses as its transfer
+            safeguards.
+          </li>
+          <li>Freemius: the United States (Freemius Inc.).</li>
+          <li>
+            Resend: mytetz could not confirm Resend's own country of establishment from its privacy
+            policy. That policy states that data may reach the United States.
+          </li>
+          <li>
+            fly.io: mytetz could not confirm fly.io's own country of establishment from its privacy
+            policy. Your own data, in mytetz's own deployment, is processed on a machine in
+            Frankfurt, in the EU.
+          </li>
+          <li>
+            MongoDB Atlas: mytetz could not confirm the country where MongoDB, Inc. is established,
+            from its own privacy policy. Your own data, in mytetz's own deployment, is stored on a
+            database in Frankfurt, in the EU.
+          </li>
+        </ul>
+        <p>
+          mytetz has not independently confirmed that the safeguard each company states on its own
+          page applies to mytetz's own agreement with that company. Write to
+          <a href="mailto:support@mytetz.com">support@mytetz.com</a> for the details of a specific
+          transfer.
         </p>
       </section>
 
       <section>
-        <h2>How long we keep data</h2>
+        <h2>What can become public</h2>
+        <p>
+          A highlighted phrase you pick, and the explanation mytetz writes for it, can become a
+          public page at a fixed web address. Another learner who reaches the same phrase shares
+          that same page. This can happen before anyone reviews the page. Once an operator reviews
+          and approves the page, it can also appear in a public list and in a search engine. This
+          page never carries your name, your email address or any other detail that names you. But
+          the words you highlighted can stay visible to the public, including a visitor who has
+          never signed in, for as long as mytetz keeps that page.
+        </p>
+      </section>
+
+      <section>
+        <h2>Automatic checks</h2>
+        <p>
+          mytetz runs three automatic checks on a request. A rate limit slows a burst of requests
+          from one address. A trial cap refuses a fourth free trial from one address in one rolling
+          day. A bot check, Cloudflare Turnstile, blocks a sign-in that fails an automatic test,
+          only while the operator switches it on. None of these three checks makes a decision with a
+          legal effect on you, or a similarly significant effect on you. Each one only paces or
+          blocks a request. Write to <a href="mailto:support@mytetz.com">support@mytetz.com</a> if a
+          check ever blocks you in error.
+        </p>
+      </section>
+
+      <section>
+        <h2>Your IP address</h2>
+        <p>
+          mytetz reads the IP address of every request, to run the checks above and to protect the
+          service.
+        </p>
+        <ul>
+          <li>
+            The rate limit keeps your IP address in the server's own memory only, and never in the
+            database. A server restart clears it.
+          </li>
+          <li>
+            The trial cap stores your IP address in the database, to cap a new trial at 3 per
+            address in a rolling day. This record expires automatically at the end of that day.
+          </li>
+          <li>
+            Cloudflare Turnstile, only while it is switched on, sends your IP address to Cloudflare
+            for one sign-in check.
+          </li>
+          <li>
+            Cloudflare and fly.io each see your IP address as an ordinary part of running the
+            network and the server.
+          </li>
+        </ul>
+        <p>
+          Your IP address can also appear once in a technical log line,
+          <code>TRIAL_CAP_REACHED</code>, when your address reaches the trial cap.
+        </p>
+      </section>
+
+      <section>
+        <h2>How long mytetz keeps data</h2>
         <p>
           A sign-in session lasts 30 days and slides forward each time you use the site. A billing
           event lasts 90 days. mytetz may remove an old, unread explanation after 90 days or more;
-          this does not affect your own data, because an explanation holds no personal data.
+          this does not affect your own data, because an explanation holds no personal data. mytetz
+          keeps your account until you delete it. The code holds no rule that deletes an account by
+          itself.
         </p>
       </section>
 
@@ -126,8 +258,14 @@ import { RouterLink } from '@angular/router';
         <p>
           The <a routerLink="/account">account page</a> deletes your account on request. Deletion
           removes your account row, every sign-in session, every learning session, every quiz
-          attempt and your allowance counter. Deletion does not remove an explanation — an
-          explanation belongs to no one learner and holds no personal data.
+          attempt and your allowance counter. Deletion does not remove an explanation. An
+          explanation belongs to no one learner, and holds no personal data, so it can stay on the
+          site for other learners to read.
+        </p>
+        <p>
+          Deletion does not cancel a paid subscription. Cancel a subscription first, with "Manage
+          subscription" on the account page. Your subscription record stays in the database after
+          you delete your account, because deletion does not remove it today.
         </p>
       </section>
 
@@ -135,7 +273,7 @@ import { RouterLink } from '@angular/router';
         <h2>The legal basis for processing</h2>
         <p>
           mytetz processes your account data to perform the contract you enter by signing up, under
-          Article 6(1)(b) of the GDPR: this covers your sign-in, your session, your allowance and,
+          Article 6(1)(b) of the GDPR. This covers your sign-in, your session, your allowance and,
           once you subscribe, your payment. mytetz processes the strictly necessary cookies, and a
           security check such as Turnstile, under its own legitimate interest in running a working,
           fair and abuse-resistant service, under Article 6(1)(f). Where the law of your country
@@ -146,26 +284,37 @@ import { RouterLink } from '@angular/router';
 
       <section>
         <h2>Your rights</h2>
+        <p>Under the GDPR you have:</p>
+        <ul>
+          <li>a right of access to your data (Article 15);</li>
+          <li>a right to have wrong data corrected (Article 16);</li>
+          <li>
+            a right to erasure (Article 17), which the account page already gives you for your own
+            account;
+          </li>
+          <li>a right to restrict processing in some cases (Article 18);</li>
+          <li>a right to receive your data in a portable form (Article 20);</li>
+          <li>a right to object to processing based on a legitimate interest (Article 21);</li>
+          <li>
+            a right to withdraw a consent at any time, as easily as you gave it, with no effect on a
+            step already taken (Article 7(3)).
+          </li>
+        </ul>
         <p>
-          Under the GDPR you have: a right of access to your data (Article 15); a right to have
-          wrong data corrected (Article 16); a right to erasure (Article 17), which the account page
-          already gives you for your own account; a right to restrict processing in some cases
-          (Article 18); a right to receive your data in a portable form (Article 20); and a right to
-          object to processing based on a legitimate interest (Article 21). Write to
-          <a href="mailto:support@mytetz.com">support@mytetz.com</a> to exercise a right this list
-          does not already let you exercise yourself on the account page. You also have the right to
-          lodge a complaint with a data protection supervisory authority, under Article 77 of the
-          GDPR; this is ordinarily the authority of the country where you live or work.
+          Write to <a href="mailto:support@mytetz.com">support@mytetz.com</a> to exercise a right
+          this list does not already let you exercise yourself on the account page. You also have
+          the right to lodge a complaint with a data protection supervisory authority, under Article
+          77 of the GDPR. This is ordinarily the authority of the country where you live or work.
         </p>
       </section>
 
       <section>
         <h2>A minimum age</h2>
         <p>
-          You must be at least 16 years old to use mytetz, unless the law of your country sets a
-          lower age for a child's own consent to an information-society service, in which case that
-          lower age applies, down to a floor of 13 years (GDPR, Article 8). If you sign in with a
-          Google account, the age rules of that Google account also apply.
+          You must be at least 16 years old to use mytetz. A lower age may apply, if your own
+          country's law sets one for a child's own consent to an information-society service, down
+          to a floor of 13 years (GDPR, Article 8). If you sign in with a Google account, the age
+          rules of that Google account also apply.
         </p>
       </section>
 

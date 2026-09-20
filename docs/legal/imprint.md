@@ -11,20 +11,14 @@ mytetz.com operates this website and the mytetz service.
 
 Email: support@mytetz.com
 
-## Represented by
-
-This page names no representative beyond mytetz.com, the operator of this
-service.
-
-## Register entry
-
-mytetz.com discloses no commercial register entry on this page.
-
-## VAT identification number
-
-mytetz.com discloses no VAT identification number on this page.
-
 ## Responsible for content
 
 mytetz.com is responsible for the content of this website. Contact:
 support@mytetz.com.
+
+---
+
+This page names no representative, no commercial register entry and no VAT
+identification number. See the gap list in `docs/legal/README.md` for what the
+law of some countries asks for beyond this. The owner decides whether to add
+this information later.

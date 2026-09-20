@@ -10,6 +10,11 @@ import { Component } from '@angular/core';
  * a register entry, a VAT number and a named representative — because the owner gave this project
  * only two identifying values: "mytetz.com" and support&#64;mytetz.com, and Rule 3 of issue #24
  * forbids inventing anything more.
+ *
+ * The page does not carry a "Represented by", a "Register entry" or a "VAT identification number"
+ * section. A section that only says "mytetz.com discloses none of this" tells a reader nothing;
+ * the closing note below names the gap instead. `docs/legal/README.md`'s gap list still records
+ * what the law of some countries asks for.
  */
 @Component({
   selector: 'app-imprint-page',
@@ -32,27 +37,17 @@ import { Component } from '@angular/core';
       </section>
 
       <section>
-        <h2>Represented by</h2>
-        <p>This page names no representative beyond mytetz.com, the operator of this service.</p>
-      </section>
-
-      <section>
-        <h2>Register entry</h2>
-        <p>mytetz.com discloses no commercial register entry on this page.</p>
-      </section>
-
-      <section>
-        <h2>VAT identification number</h2>
-        <p>mytetz.com discloses no VAT identification number on this page.</p>
-      </section>
-
-      <section>
         <h2>Responsible for content</h2>
         <p>
           mytetz.com is responsible for the content of this website. Contact:
           <a href="mailto:support@mytetz.com">support&#64;mytetz.com</a>.
         </p>
       </section>
+
+      <p class="legal-page__meta">
+        This page names no representative, no commercial register entry and no VAT identification
+        number. The owner decides whether to add this information later.
+      </p>
     </main>
   `,
   styles: [

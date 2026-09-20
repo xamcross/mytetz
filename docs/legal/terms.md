@@ -1,85 +1,97 @@
 # Terms of service
 
-Last updated: 2026-09-20. mytetz announces a change to these terms on this page,
-with a new "Last updated" date. mytetz treats your first use of the service after
-that date as your acceptance of the change.
+Last updated: 2026-09-20. mytetz posts a change to these terms on this page, with a
+new "Last updated" date. See "Changes to these terms" below for what a change
+means for you.
 
 ## The service
 
 mytetz.com ("mytetz") is a web app that explains a topic in short, plain text. You
 pick a topic and read it. A highlight on any phrase asks a language model to write
-more detail, and a person reviews the seed text of every topic before it is
-published. A model-written explanation can still hold an error, so it is not
-professional, medical, legal or financial advice, and you must not rely on it as
-one. You must be at least 16 years old to use mytetz, or the lower age your own
-country's law sets for a child's own consent, down to a floor of 13 years. You must
-use mytetz only for a lawful purpose, and you must not try to disrupt the service,
-overload it, or access an account that is not your own.
+more detail. A person reviews the seed text of every topic before mytetz publishes
+it. A model-written explanation can still hold an error. It is not professional,
+medical, legal or financial advice. Do not rely on it as one.
+
+You must be at least 16 years old to use mytetz. A lower age may apply, if your own
+country's law sets one for a child's own consent, down to a floor of 13 years.
+
+Use mytetz only for a lawful purpose. Do not:
+
+- disrupt the service;
+- overload the service;
+- access an account that is not your own.
 
 ## The trial and the subscription
 
 A new reader gets a free 7-day trial, worth 40 tokens, with no credit card. One
 token pays for one new explanation or one quiz. After the trial, a new explanation
-or quiz needs a paid subscription. mytetz costs $12 each month. A subscriber gets 25
-tokens each day, and the count resets every day. A subscription renews each month
+or quiz needs a paid subscription. mytetz costs $12 each month. A subscriber gets
+25 tokens each day. The count resets every day. A subscription renews each month
 until you cancel it. mytetz may grant a short grace period after a missed renewal
-payment, so a late renewal does not cut off your access without warning.
+payment. This grace period stops a late renewal from cutting off your access
+without warning.
 
 ## Payment and cancellation
 
-Freemius processes every payment for mytetz, and Freemius is the merchant of
-record: Freemius, not mytetz, is the seller toward you for a paid subscription, and
-Freemius handles your invoice, your payment method, a chargeback and a refund
-request. You cancel a subscription on the [account page](/account): select "Manage
-subscription" to open the Freemius customer portal, where you can cancel, change a
-payment method or read an invoice.
+Freemius processes every payment for mytetz. Freemius is the merchant of record.
+Freemius, not mytetz, is the seller toward you for a paid subscription. Freemius
+handles your invoice, your payment method, a chargeback and a refund request.
+Cancel a subscription on the [account page](/account): select "Manage
+subscription" to open the Freemius customer portal, where you can cancel, change
+a payment method or read an invoice.
 
 **Your right of withdrawal.** As a consumer in the EU, you have 14 days from the
-day you subscribe to withdraw from the contract with no reason, under Article 9 of
-Directive 2011/83/EU. You may use the model form in Annex I(B) of that Directive,
-or any other clear statement, sent to support@mytetz.com. This right ends early
-once you ask mytetz to start the paid service right away and you confirm that you
-know this ends your right of withdrawal, under Article 16(m) of the same Directive
-— selecting a paid feature during your trial or your subscription period is such a
-request. Outside the withdrawal period, a refund request goes through the Freemius
-customer portal or to support@mytetz.com, and Freemius decides it under its own
-refund process, as the merchant of record.
+day you subscribe to withdraw from the contract, with no reason (Directive
+2011/83/EU, Article 9). Freemius, as the seller, handles a withdrawal and a
+refund. Use the Freemius customer portal, or write to support@mytetz.com, and
+mytetz passes your statement on to Freemius.
 
 ## Your account
 
-You sign in with an email magic link or with a Google account. You are responsible
-for keeping your sign-in method secure. You may delete your account at any time on
-the [account page](/account). Deletion removes your account, every reading session,
-every quiz attempt and your allowance counter, and it cannot be undone. Deletion
-does not remove an explanation you triggered: an explanation is shared with other
-learners and holds no personal data, so it can stay on the site after your account
-is gone. In the same way, a phrase you highlight, and the explanation mytetz writes
-for it, can become a public page that stays visible to other visitors, including
-one who has never signed in, even after you delete your account. mytetz, and not
-you, owns the explanation text a model writes; you keep no exclusive right in a
-phrase you merely highlight.
+You sign in with an email magic link or with a Google account. You are
+responsible for keeping your sign-in method secure. You may delete your account
+at any time, on the [account page](/account). Deletion removes your account,
+every reading session, every quiz attempt and your allowance counter. This cannot
+be undone.
+
+Deletion does not remove an explanation you triggered. An explanation is shared
+with other learners, and holds no personal data, so it can stay on the site after
+your account is gone. In the same way, a phrase you highlight, and the
+explanation mytetz writes for it, can stay visible to other visitors after you
+delete your account, including a visitor who has never signed in. You get no
+exclusive right in an explanation or in a phrase you highlight; mytetz may show
+each explanation to other learners and to the public.
+
+Deleting your account does not cancel a paid subscription. Cancel a subscription
+first, with "Manage subscription," before you delete your account. Your
+subscription record can stay in the database after your account is gone, because
+account deletion does not remove it today.
+
+mytetz can suspend or close an account that breaks these terms. mytetz gives no
+guarantee that the service runs without a break.
 
 ## Liability
 
-mytetz gives no warranty that an explanation is correct, complete or fit for a
-particular purpose, beyond what the law of your country makes mandatory. To the
-fullest extent the law allows, mytetz is not liable for a loss that follows from
-your reliance on a model-written explanation. Nothing in these terms limits a
-liability that the law does not allow a business to limit, and nothing in these
-terms removes a right that the law of your country gives you as a consumer.
+mytetz gives no warranty that an explanation is correct or complete, beyond what
+the law of your country makes mandatory. To the fullest extent the law allows,
+mytetz is not liable for a loss that follows from your reliance on a
+model-written explanation. Nothing in these terms limits a liability that the law
+does not allow a business to limit. Nothing in these terms removes a right that
+the law of your country gives you as a consumer.
 
 ## Governing law
 
 The law of the country where the operator of mytetz.com is established applies to
 these terms. If you are a consumer, the mandatory consumer-protection law of the
-country where you live stays in force regardless of this clause.
+country where you live stays in force. This clause does not change that.
 
 ## Changes to these terms
 
-mytetz may change these terms from time to time, for example to reflect a new
-feature, a new price or a change in the law. mytetz posts every change on this
-page, with a new "Last updated" date. A change that reduces your rights takes
-effect only for a subscription period that starts after the change is posted.
+mytetz may change these terms, for example for a new feature, a new price or a
+change in the law. mytetz posts every change on this page, with a new "Last
+updated" date. A change that reduces your rights takes effect only for a
+subscription period that starts after mytetz posts it. If you do not agree with a
+change, cancel your subscription before your next period starts.
 
 ## Contact
 

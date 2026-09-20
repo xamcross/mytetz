@@ -1,11 +1,15 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { provideRouter } from '@angular/router';
 import { TermsPageComponent } from './terms-page.component';
 
 describe('TermsPageComponent', () => {
   let fixture: ComponentFixture<TermsPageComponent>;
 
   beforeEach(() => {
-    TestBed.configureTestingModule({ imports: [TermsPageComponent] });
+    TestBed.configureTestingModule({
+      imports: [TermsPageComponent],
+      providers: [provideRouter([])],
+    });
     fixture = TestBed.createComponent(TermsPageComponent);
     fixture.detectChanges();
   });
