@@ -156,10 +156,17 @@ private const val LOGO_MARK_INNER_SVG = """<rect x="0" y="0" width="32" height="
  * `HeaderFooterParityTest` proves this function and every static guide page agree.
  * `frontend/src/app/ui/app-shell.component.spec.ts` proves the Angular side of the same list.
  *
- * Issue #143: the status dot `AppShellComponent` shows next to the account control is a live
- * health check the Angular app polls after it loads. A Ktor page or a static guide page has no
- * such check running, and one request per page view cannot stand in for it, so no dot renders
- * here. A dot that never changes states nothing true, and a false "ok" is worse than no dot.
+ * Issue #143, corrected on review: the status dot next to the account control can carry a real
+ * meaning on a public page after all. `GET /api/health` needs no sign-in and takes no session
+ * state (see `HealthRoutesTest`'s own cookie test), so the same one request `app.ts` sends once
+ * at start-up also works from a public page. The server always renders the "checking" state —
+ * the state `app.ts` itself starts in, before its own first answer arrives — because a Ktor page
+ * is a pure read (issue #45) and cannot know the backend's own health before the page ships.
+ * `frontend/public/site-header.js` sends `GET /api/health` once per page view, independently of
+ * its own `GET /api/account` call, and rewrites `#site-header-dot`'s class, `aria-label` and
+ * `title` from the answer, with the same four states and the same four labels
+ * `status-dot.component.ts` uses. A page with no JavaScript keeps the "checking" ring: an honest
+ * state for a page that never asked the question, and not a claim of health it cannot back up.
  */
 internal fun BODY.siteHeaderBar() {
     header(classes = "bar") {
@@ -189,6 +196,12 @@ internal fun BODY.siteHeaderBar() {
                 +"Sign in"
             }
             span(classes = "bar__count") { attributes["id"] = "site-header-count" }
+            span(classes = "dot dot--checking") {
+                attributes["id"] = "site-header-dot"
+                attributes["role"] = "img"
+                attributes["aria-label"] = "Backend: checking"
+                attributes["title"] = "Backend: checking"
+            }
         }
     }
 }

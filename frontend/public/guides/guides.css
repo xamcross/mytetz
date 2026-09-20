@@ -68,6 +68,7 @@
   --mt-ink: #12312a;
   --mt-prose: #1b3d36;
   --mt-muted: #4c6b64;
+  --mt-faint: #7ba49b;
 
   --mt-coral: #ff5d5d;
   --mt-coral-deep: #d63f3f;
@@ -81,6 +82,8 @@
   --mt-amber-deep: #f0c256;
   --mt-amber-bg: #fff8e6;
   --mt-amber-ink: #6b4c00;
+
+  --mt-err-ink: #b83232;
 
   --mt-r-card: 26px;
   --mt-r-panel: 22px;
@@ -200,16 +203,17 @@ a:hover {
   white-space: nowrap;
 }
 /* The allowance count site-header.js fills in next to the account link, in the same words
-   allowance-meter.component.ts renders. Empty until that script runs, and `:empty` then keeps an
-   empty span from adding its own gap to .bar__right. */
+   allowance-meter.component.ts renders. This span stays in the row even while it is empty — a
+   visitor with no account, or before the script's own answer arrives — because
+   AppShellComponent's own empty meter host does the same: it is an inline-flex element with no
+   content, and it still takes up one gap of .bar__right on each side. Hiding this span with
+   `display: none` would close that gap and move the account link and the dot out of line with
+   the application header (issue #143's own review). */
 .bar__count {
   font-size: 13px;
   font-weight: 700;
   color: var(--mt-muted);
   white-space: nowrap;
-}
-.bar__count:empty {
-  display: none;
 }
 /* Issue #143's own review: the period word ("today", "in your trial") follows
    allowance-meter.component.ts's own rule — hidden below 768px, because the full sentence ran
@@ -231,6 +235,53 @@ a:hover {
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;
+}
+/* The status dot, the same markup and the same four states as status-dot.component.ts. The
+   server always renders "checking": a Ktor page is a pure read (issue #45), so it cannot know
+   the backend's own health before the page ships. site-header.js reads GET /api/health once the
+   page loads and sets the true state — see that file's own header comment. */
+.dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  border: 2px solid var(--mt-surface);
+  outline: 2px solid var(--mt-border);
+  flex: none;
+}
+.dot--ok {
+  background: var(--mt-teal);
+}
+.dot--checking {
+  background: radial-gradient(circle, transparent 45%, var(--mt-faint) 46% 100%);
+}
+.dot--degraded {
+  background: var(--mt-amber);
+  border-radius: 0;
+  clip-path: polygon(50% 0%, 100% 100%, 0% 100%);
+}
+.dot--unreachable {
+  position: relative;
+  background: transparent;
+}
+.dot--unreachable::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 100%;
+  height: 2px;
+  background: var(--mt-err-ink);
+  transform: rotate(45deg);
+}
+.dot--unreachable::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 100%;
+  height: 2px;
+  background: var(--mt-err-ink);
+  transform: rotate(-45deg);
 }
 @media (max-width: 767px) {
   .bar {

@@ -16,6 +16,7 @@ import kotlinx.html.stream.createHTML
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 /**
  * Issue #143 and issue #144: one header and one footer for every page.
@@ -89,6 +90,16 @@ class HeaderFooterParityTest {
         return tag.groupValues[1].trim() to href
     }
 
+    /**
+     * The status dot's own tag, found by its fixed id. A Ktor page and a static guide page are
+     * both a pure read with no live health check of their own (see `siteHeaderBar`'s own KDoc),
+     * so the server can only ever render the "checking" state — the same evidence a browser with
+     * no JavaScript needs: this state, and never a claim of health the page has not confirmed.
+     */
+    private fun dotTag(html: String): String =
+        Regex("""<span\b[^>]*id="site-header-dot"[^>]*>""").find(html)?.value
+            ?: error("no #site-header-dot span found in: $html")
+
     private fun assertHeaderAndFooter(html: String, page: String) {
         assertEquals(expectedNavLinks, navLinks(html), "$page's header nav")
         assertEquals(expectedSignedOutAccountLink, accountLink(html), "$page's account control")
@@ -100,6 +111,12 @@ class HeaderFooterParityTest {
         )
         assertFalse("Topics" in headerHtml(html), "$page's header still names Topics")
         assertFalse("bar__cta" in html, "$page still carries the removed Start a topic button")
+
+        val dot = dotTag(html)
+        assertTrue("""class="dot dot--checking"""" in dot, "$page's dot must start in the checking state: $dot")
+        assertTrue("""aria-label="Backend: checking"""" in dot, "$page's dot must carry the checking label: $dot")
+        assertTrue("""title="Backend: checking"""" in dot, "$page's dot must carry the checking title: $dot")
+        assertTrue("""role="img"""" in dot, "$page's dot must carry role=img: $dot")
     }
 
     @Test

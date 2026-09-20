@@ -2,6 +2,7 @@ package com.mytetz.api
 
 import io.ktor.client.request.get
 import io.ktor.client.statement.bodyAsText
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.install
@@ -11,6 +12,7 @@ import io.ktor.server.routing.routing
 import io.ktor.server.testing.testApplication
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class HealthRoutesTest {
@@ -57,6 +59,24 @@ class HealthRoutesTest {
         // see it only while it was false. Both states must be on the wire.
         assertTrue(ready.contains("\"ready\":true"), "readiness missing when ready: $ready")
         assertTrue(booting.contains("\"ready\":false"), "readiness missing while booting: $booting")
+    }
+
+    /**
+     * Issue #143's own review: `frontend/public/site-header.js` calls `GET /api/health` from
+     * every public page, the same way it already calls `GET /api/account`. This route takes no
+     * `Principals` parameter at all — confirmed by reading `healthRoutes`'s own signature — so a
+     * visitor with no session gets no cookie from this call either.
+     */
+    @Test
+    fun `health sets no cookie for a visitor with no session`() = testApplication {
+        application {
+            install(ContentNegotiation) { json() }
+            routing { healthRoutes(mongoPing = { true }) }
+        }
+
+        val response = client.get("/api/health")
+
+        assertNull(response.headers[HttpHeaders.SetCookie], "GET /api/health minted a cookie for a visitor with no account")
     }
 
     @Test
