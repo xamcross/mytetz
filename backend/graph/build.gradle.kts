@@ -29,8 +29,22 @@ tasks.register<JavaExec>("runReviewDate") {
     classpath = sourceSets["main"].runtimeClasspath
 }
 
+// Issue #182's owner command (`scripts/MakeCaptureSignInLink.kt`) makes the sign-in link of the
+// listing-capture test learner. See that file's own KDoc for the exact commands.
+tasks.register<JavaExec>("makeCaptureSignInLink") {
+    group = "application"
+    description = "Owner command (issue #182): make the sign-in link of the listing-capture test learner."
+    mainClass.set("com.mytetz.graph.scripts.MakeCaptureSignInLinkKt")
+    classpath = sourceSets.getByName("main").runtimeClasspath
+    // The repository root, so the default link file lands in `build/capture/` at the root.
+    workingDir = rootProject.projectDir
+}
+
 dependencies {
     implementation(project(":backend:persistence"))
+    // Issue #182's command reuses MagicLinkService. :backend:account depends on :backend:persistence
+    // only, so this line adds no cycle (checked in the build files of both modules).
+    implementation(project(":backend:account"))
     implementation(project(":backend:llm"))
     // Issue #47's review-date command reads and writes Topic.reviewedAt. That field lives in
     // :backend:catalog. :backend:catalog does not depend on this module, so this one line adds no

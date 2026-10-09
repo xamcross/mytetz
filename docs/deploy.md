@@ -1142,3 +1142,42 @@ three topics after any deploy that turns this flag on.
 
 Once the three checks in step 4 pass, run the review-date command from issue #47 for these three
 topics, so each corrected page carries a "Last reviewed" date.
+
+## Listing capture (issue #182)
+
+This section is for the owner. It makes the screenshots and the demo video for the listing kit
+(`docs/marketing/listing-kit.md`). A test learner with the address `listing-capture@mytetz.com`
+takes them on the live site. **The owner runs both commands. An agent never runs them.** The first
+command writes to the production database.
+
+The first command inserts one sign-in token for the test address. It sends no mail. It refuses each
+other address. It writes the sign-in link to `build/capture/sign-in-link.txt` at the repository
+root, and `.gitignore` ignores that file. It never prints the link. It prints the file path and
+the expiry time.
+
+The second command opens the link, so the live server signs the test learner in. It then takes
+the screenshots, records the video, and deletes the test learner on `/account`. It makes at most
+eight model calls. It stops with a message when Cloudflare shows a challenge. The explanations stay,
+because they are shared.
+
+Run the two commands one after the other, within 15 minutes. The token expires after 15 minutes.
+Run the first command without `--write` to see a dry run that writes nothing.
+
+Command 1, the token and the link file:
+
+```
+MONGODB_URI="$(grep '^MONGODB_URI=' .env | cut -d= -f2- | tr -d '[:cntrl:]')" ./gradlew :backend:graph:makeCaptureSignInLink --args="--write"
+```
+
+Command 2, the capture (run it in the `frontend` folder):
+
+```
+CAPTURE_BASE_URL=https://mytetz.com npx playwright test -c capture/playwright.capture.config.ts
+```
+
+The capture writes `dashboard.png`, `topic.png`, `explanation.png`, `breadcrumb.png`,
+`test-me.png`, and `demo.webm` to `docs/marketing/images/`. Look at each image before you commit
+it. No image may show personal data.
+
+On Windows, give a file path in the form `C:/Users/...`. The command `--args="--write --out C:/Users/<you>/mytetz/build/capture/sign-in-link.txt"`
+writes the link file there. Then set `CAPTURE_LINK_FILE=C:/Users/<you>/mytetz/build/capture/sign-in-link.txt` for the capture.
