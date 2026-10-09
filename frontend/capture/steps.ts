@@ -103,13 +103,73 @@ export async function startReader(page: Page): Promise<void> {
   await expect(page.getByTestId('focus-body')).toBeVisible({ timeout: 60_000 });
 }
 
-/** Picks two plain words from the middle of the text that the reader shows. */
+/** Words that join a phrase badly. A phrase never runs across one of them. */
+const FILLER_WORDS = new Set(
+  (
+    'that this these those with from into than then them they their there what when where which while ' +
+    'have has had been were was will would could should about also each such some more most very ' +
+    'only other over under your yours does did not but and the for are can its our out any all too ' +
+    'like just because between through'
+  ).split(' '),
+);
+
+/**
+ * Chooses a drill phrase from `text`: two or three whole words with no punctuation inside, which
+ * occur one time in the text. It prefers the phrase nearest to the middle of the text. It gives
+ * back `null` when the text holds no such phrase.
+ *
+ * The model writes a new text for each request, so a fixed phrase is not always in the text
+ * (issue #191). This function reads the phrase from the text itself.
+ */
+export function choosePhrase(text: string): string | null {
+  // A run is a series of plain words that only single spaces separate. A comma, a full stop, a
+  // hyphen, or a filler word ends the run.
+  const runs: Array<{ words: string[]; end: number }> = [];
+  const wordPattern = /[A-Za-z]{4,}/g;
+  let current: { words: string[]; end: number } | null = null;
+  for (const match of text.matchAll(wordPattern)) {
+    const start = match.index ?? 0;
+    const word = match[0];
+    const end = start + word.length;
+    const before = start > 0 ? text[start - 1] : ' ';
+    const after = end < text.length ? text[end] : ' ';
+    const plain = !/[A-Za-z�'-]/.test(before) && !/[A-Za-z�'-]/.test(after);
+    if (!plain || FILLER_WORDS.has(word.toLowerCase())) {
+      if (current) runs.push(current);
+      current = null;
+      continue;
+    }
+    if (current && text.slice(current.end, start) === ' ') {
+      current.words.push(word);
+      current.end = end;
+    } else {
+      if (current) runs.push(current);
+      current = { words: [word], end };
+    }
+  }
+  if (current) runs.push(current);
+
+  const middle = text.length / 2;
+  let best: { phrase: string; distance: number } | null = null;
+  for (const run of runs) {
+    for (let size = 2; size <= 3; size += 1) {
+      for (let i = 0; i + size <= run.words.length; i += 1) {
+        const phrase = run.words.slice(i, i + size).join(' ');
+        if (text.split(phrase).length !== 2) continue;
+        const distance = Math.abs(text.indexOf(phrase) - middle);
+        if (best === null || distance < best.distance) best = { phrase, distance };
+      }
+    }
+  }
+  return best === null ? null : best.phrase;
+}
+
+/** Picks a drill phrase from the text that the reader shows now. */
 async function pickPhrase(page: Page): Promise<string> {
   const text = (await page.getByTestId('focus-body').textContent()) ?? '';
-  const words = text.split(/\s+/).filter((word) => /^[A-Za-z]{4,}$/.test(word));
-  if (words.length < 6) throw new Error('the text has too few plain words to pick a phrase');
-  const start = Math.floor(words.length / 3);
-  return words.slice(start, start + 2).join(' ');
+  const phrase = choosePhrase(text);
+  if (phrase === null) throw new Error('the text holds no phrase of two or three plain words');
+  return phrase;
 }
 
 /** Highlights a phrase with a real mouse drag, presses "Explain it", and waits for the stream end. */
