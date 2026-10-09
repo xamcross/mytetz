@@ -107,12 +107,12 @@ Not listed, because the product site did not load for the check (HTTP 403 for an
 | File | What it shows | Status |
 |---|---|---|
 | `images/logo-240.png` | The logo, 240 x 240 px, rendered from `frontend/public/icon.svg` | Done |
-| `images/dashboard.png` | The dashboard | Waits for the owner run |
-| `images/topic.png` | A topic page | Waits for the owner run |
-| `images/explanation.png` | A new explanation | Waits for the owner run |
-| `images/breadcrumb.png` | A second level, with the breadcrumb | Waits for the owner run |
-| `images/test-me.png` | The Test Me view | Waits for the owner run |
-| `images/demo.webm` | A silent video of 30 to 60 seconds | Waits for the owner run |
+| `images/dashboard.png` | The dashboard | Done, live run of 2026-10-09 |
+| `images/topic.png` | A topic page | Done, live run of 2026-10-09 |
+| `images/explanation.png` | A new explanation | Done, live run of 2026-10-09 |
+| `images/breadcrumb.png` | A second level, with the breadcrumb | Done, live run of 2026-10-09 |
+| `images/test-me.png` | The Test Me view | Done, live run of 2026-10-09 |
+| `images/demo.webm` | A silent video of 30 to 60 seconds | Done, live run of 2026-10-09 |
 
 The owner makes the screenshots and the video with the runbook "Listing capture (issue #182)" in `docs/deploy.md`. A test learner takes them on the live site. The owner checks that no image shows personal data before the commit.
 
