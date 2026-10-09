@@ -9,6 +9,9 @@ import { selectPhrase } from '../e2e/support';
  * No step prints a link or a cookie.
  */
 
+/** The one account that the capture may sign in and delete. */
+export const CAPTURE_EMAIL = 'listing-capture@mytetz.com';
+
 export const VIEWPORT = { width: 1270, height: 760 } as const;
 
 /** The most model calls that one run may make. The capture stops before it passes this number. */
@@ -64,6 +67,15 @@ export async function openSignInLink(page: Page, link: string): Promise<void> {
   const account = await page.request.get('/api/account');
   if (!account.ok()) {
     throw new Error(`the sign-in failed: /api/account answered ${account.status()}`);
+  }
+  // The delete step removes whichever account this link signs in. Check the address first.
+  // The server normalises an address with trim and lower case. The message never names the address.
+  const body = (await account.json()) as { email?: unknown };
+  const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
+  if (email !== CAPTURE_EMAIL) {
+    throw new Error(
+      `the link signs in an account other than ${CAPTURE_EMAIL}. The capture stops and deletes nothing.`,
+    );
   }
 }
 

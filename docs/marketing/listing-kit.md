@@ -12,11 +12,11 @@ Site: https://mytetz.com
 
 Each tagline has a maximum of 60 characters.
 
-1. Understand hard topics one sentence at a time (45)
-2. Highlight a phrase. Get an explanation that fits. (49)
-3. The same phrase, explained for your topic (41)
+1. Understand hard topics one sentence at a time (45). **Chosen by the owner on 2026-10-09.**
+2. Highlight a phrase. Get an explanation that fits. (49). Rejected on 2026-10-09.
+3. The same phrase, explained for your topic (41). Rejected on 2026-10-09.
 
-The owner picks one tagline. The decision goes in a comment on issue #182.
+The owner chose tagline 1 on 2026-10-09. Each listing uses this tagline.
 
 ## 3. Short description
 
@@ -86,7 +86,7 @@ Not listed, because the product site did not load for the check (HTTP 403 for an
 
 ## 8. Draft of the first maker comment
 
-> Hi, I am [maker name], the maker of mytetz. (The owner fills in the name before posting.)
+> Hi, I made mytetz.
 >
 > I made mytetz because I often get stuck on one phrase in a hard text. A general search gives the same answer for each reader. I wanted an explanation that fits the topic that I am reading.
 >
